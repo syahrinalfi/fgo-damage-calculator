@@ -191,7 +191,7 @@ Atlas Academy's own `np.md` and `critstars.md` cite `blogs.nrvnqsr.com` ("Kyte")
 - Exact OC-stage boundary rounding rule at exact bracket edges (§5.2) — narrowed from "does interpolation exist" (no) to "which side of an exact 100%-multiple boundary" (unconfirmed) for the 200/300/400% boundaries specifically. **The 100% boundary is now resolved** (§5.2 follow-up): increases landing at 99.xx% round up to 100%; decreases do not; the 200/300/400% boundaries do not share this behavior.
 - `NP_DOUBLE_BURST`/`NP_TRIPLE_BURST` constants' actual meaning (§5.4) — unconfirmed, low priority.
 - ~~Stars-carried-over cap and per-servant `criticalWeight` schema location~~ — **resolved (§6.3, follow-up pass)**: no carryover cap needed (mis-framed question); `criticalWeight` = `NiceServant.starAbsorb`.
-- Evade vs. Invincible NP-gain/star-gain consequence (§6.3) — still open, deferred to file 05/08.
+- ~~Evade vs. Invincible NP-gain/star-gain consequence~~ (§6.3) — **resolved (file 05 §6.4, follow-up pass)**: confirmed via direct in-game observation that both an Evaded and an Invincible-blocked hit still generate NP gauge and crit stars normally for the attacker — only the damage-formula output itself is zeroed by either buff.
 - Precise Enemy Rank (Bronze/Silver/Gold) effect on NP refund (file 00 §6, not addressed in this pass — no primary source located; deferred to file 08, since it is more naturally an enemy-data-model question than an NP-gain-formula one).
 
 ## 8. Sources
