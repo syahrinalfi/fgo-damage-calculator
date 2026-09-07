@@ -146,6 +146,8 @@ File 01 (§6.3–6.4) already established the *structural* model (distinct buff 
 ```
 `buffGroup` 600 matches the doc site's cited example exactly. `Count: 3` = 3 revives; `Value: 500` = revive to **50%** HP (confirms the per-mille scaling convention used everywhere else in this project — 1000 = 100%, matching `dropNp`/`atk`/etc.). `Turn: -1` = no outer turn-window ceiling on this particular instance — it lasts until the 3 revive charges are used or the buff is dispelled/overwritten by its group, whichever first.
 
+**Overkill has no separate bearing on activation (project owner's direct gameplay knowledge, this session)**: Guts triggers off whether the card that dealt the damage brought HP to 0-or-below at all — not off how far below 0 it landed. A hit that overkills a unit by a wide margin activates Guts exactly the same as a hit that lands it at precisely 0; there's no distinct "overkill bypasses Guts" or "overkill-scaled" behavior to model.
+
 ### 6.3 Invincible — Nero Bride's NP (`GET /nice/NA/servant/59`)
 
 ```json
@@ -211,3 +213,4 @@ Additionally, file 00 §6's "consume-once-but-multi-turn-window" pattern (a buff
 - Project owner's recollection, unconfirmed (session note, not a verified test) — Stun applied onto an already-Petrified target (Gorgon's Petrify vs. Plugsuit's Stun, both `buffGroup` 500) appeared to have no effect, tentatively suggesting reject-new over replace for the buffGroup collision open item; a Stun-from-servant-skill vs. Stun-from-Mystic-Code live test was proposed but not yet run, §3
 - Project owner's directive (session note) — ship the engine with a provisional AND default for multi-trait `ckSelfIndv`/`ckOpIndv` gates pending a real counterexample, §4
 - Project owner's direct gameplay knowledge (session finding, not a written source) — `Turn` decrements at the end of the round, after the enemy phase and before the player's next turn, confirming the previously convention-only assumption, §7
+- Project owner's direct gameplay knowledge (session finding, not a written source) — Guts activates off whether the killing card brought HP to 0-or-below at all, with no separate overkill-magnitude effect on activation, §6.2

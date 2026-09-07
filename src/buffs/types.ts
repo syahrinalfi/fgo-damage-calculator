@@ -10,10 +10,12 @@ type Trait = TraitModule.Trait;
  * `svals`/`svals2`/... entry for the current Overcharge stage (research/04 §5.2) is the
  * caller's responsibility, same "already-resolved input" convention used throughout
  * src/engine/. This evaluator only handles the plain-numeric buff types that resolve
- * through the summed buff-action algorithm; it does not model Evade/Invincible/Guts,
- * dispel, or the richer BuffScript conditions (HP-gated, opponent-buff-gated, etc.) — all
- * still-open items per research/05 §8. `buffGroup` unstacking (research/05 §3) is handled
- * separately, at buff-application time — see `applyBuff` in `./buffGroup.js`.
+ * through the summed buff-action algorithm; it does not model dispel or the richer
+ * BuffScript conditions (HP-gated, opponent-buff-gated, etc.) — both still-open items per
+ * research/05 §8. `buffGroup` unstacking (research/05 §3) is handled separately, at
+ * buff-application time, by `applyBuff` in `./buffGroup.js`; Evade/Invincible/
+ * `specialInvincible`'s hit-blocking priority (research/05 §6.3) by `resolveDefenseBlock`
+ * in `./defenseBlock.js`; and Guts (research/05 §6.2) by `resolveGuts` in `./guts.js`.
  */
 export interface ActiveBuffInstance {
   /** The buff's `NiceBuffType` — matched against a `BuffConstant`'s `plusTypes`/`minusTypes`. */
