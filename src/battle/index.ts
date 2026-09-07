@@ -17,3 +17,8 @@ export type { HitResolutionContext, HitResolutionResult } from "./hitResolution.
 export { resolveHit } from "./hitResolution.js";
 export type { TrackedBuff } from "./buffLifecycle.js";
 export { grantBuff, advanceTurnBuffs, consumeBuffUse } from "./buffLifecycle.js";
+export type { ServantInstance, EnemyInstance, BattleState } from "./battleState.js";
+export { servantToBattleUnit, enemyToBattleUnit } from "./battleState.js";
+export type { CardBagDrawResult } from "./cardBag.js";
+export { shuffleCards, drawCardBagHand } from "./cardBag.js";
+export { FRONT_LINE_SERVANT_COUNT, CARDS_PER_SERVANT_DECK, buildCombinedCardDeck } from "./cardDeck.js";
