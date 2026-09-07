@@ -1,4 +1,5 @@
 import type { Card } from "@atlasacademy/api-connector";
+import type { NpLevel } from "../account/types.js";
 import type { TrackedBuff } from "./buffLifecycle.js";
 import type { BattleUnit } from "./unit.js";
 import type { Wave } from "../quest/types.js";
@@ -18,6 +19,13 @@ export interface ServantInstance extends Omit<BattleUnit, "activeBuffs"> {
   readonly isFrontLine: boolean;
   /** This servant's 5-card deck composition (`Entity.cards`, research/03 §6.4/§6.5), in fixed slot order. */
   readonly cardTypes: readonly Card[];
+  /**
+   * Determines this servant's NP gauge accumulation cap (research/04 §5.2a, confirmed by
+   * the project owner): 100% at level 1, 200% at levels 2-4, 300% at level 5 — see
+   * `NP_GAUGE_CAP_BY_LEVEL` in `./turnLoop.js`. Distinct from the NP's own `gaugeCount`
+   * (minimum gauge required to cast at all, research/04 §5.3, almost universally 1 bar).
+   */
+  readonly npLevel: NpLevel;
   readonly currentHp: number;
   readonly maxHp: number;
   /** Raw gauge units; `FULL_TD_POINT` (10000, `src/engine/constants.ts`) equals 100%. */

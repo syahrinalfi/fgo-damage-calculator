@@ -12,6 +12,7 @@ function servant(servantId: number, isFrontLine: boolean, cardTypes: readonly Ca
     servantId,
     isFrontLine,
     cardTypes,
+    npLevel: 1,
     atk: 10000,
     className: "saber" as ServantInstance["className"],
     attribute: "human" as ServantInstance["attribute"],

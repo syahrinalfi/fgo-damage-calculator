@@ -17,6 +17,7 @@ function servant(overrides: Partial<ServantInstance> = {}): ServantInstance {
     attribute: "human" as ServantInstance["attribute"],
     traits: new Set([100]),
     cardTypes: [],
+    npLevel: 1,
     currentHp: 15000,
     maxHp: 15000,
     currentNpGauge: 0,
