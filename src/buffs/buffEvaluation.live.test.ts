@@ -18,8 +18,8 @@ describe("resolveBuffActionModifier (live Atlas Academy API)", () => {
     expect(atk.minusTypes).toContain(Buff.BuffType.DOWN_ATK);
 
     const buffedAtk: ActiveBuffInstance[] = [
-      { type: Buff.BuffType.UP_ATK, amount: 300, ckSelfIndv: [], ckOpIndv: [] },
-      { type: Buff.BuffType.DOWN_DEFENCE, amount: 9999, ckSelfIndv: [], ckOpIndv: [] },
+      { type: Buff.BuffType.UP_ATK, amount: 300, ckSelfIndv: [], ckOpIndv: [], buffGroup: 0 },
+      { type: Buff.BuffType.DOWN_DEFENCE, amount: 9999, ckSelfIndv: [], ckOpIndv: [], buffGroup: 0 },
     ];
     expect(resolveBuffActionModifier(atk, buffedAtk, NO_TRAITS)).toBeCloseTo(0.3, 10);
   });

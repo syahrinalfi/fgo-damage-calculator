@@ -11,8 +11,9 @@ type Trait = TraitModule.Trait;
  * caller's responsibility, same "already-resolved input" convention used throughout
  * src/engine/. This evaluator only handles the plain-numeric buff types that resolve
  * through the summed buff-action algorithm; it does not model Evade/Invincible/Guts,
- * buffGroup unstacking, dispel, or the richer BuffScript conditions (HP-gated,
- * opponent-buff-gated, etc.) — all still-open items per research/05 §8.
+ * dispel, or the richer BuffScript conditions (HP-gated, opponent-buff-gated, etc.) — all
+ * still-open items per research/05 §8. `buffGroup` unstacking (research/05 §3) is handled
+ * separately, at buff-application time — see `applyBuff` in `./buffGroup.js`.
  */
 export interface ActiveBuffInstance {
   /** The buff's `NiceBuffType` — matched against a `BuffConstant`'s `plusTypes`/`minusTypes`. */
@@ -23,6 +24,13 @@ export interface ActiveBuffInstance {
   ckSelfIndv: Trait[];
   /** Traits the *target of the buff's action* must have for it to apply (research/05 §4). */
   ckOpIndv: Trait[];
+  /**
+   * Unstacking group (research/05 §3). `0` means "no restriction" — always stackable,
+   * including alongside copies of itself. A non-zero value means at most one active
+   * instance of that group may exist on a unit at a time; see `applyBuff` in
+   * `./buffGroup.js` for the confirmed collision rule (reject-new).
+   */
+  buffGroup: number;
 }
 
 /**

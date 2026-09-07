@@ -109,7 +109,14 @@ function makeUnit(overrides: Partial<BattleUnit> = {}): BattleUnit {
 }
 
 function makeBuff(overrides: Partial<ActiveBuffInstance> = {}): ActiveBuffInstance {
-  return { type: "upAtk" as ActiveBuffInstance["type"], amount: 200, ckSelfIndv: [], ckOpIndv: [], ...overrides };
+  return {
+    type: "upAtk" as ActiveBuffInstance["type"],
+    amount: 200,
+    ckSelfIndv: [],
+    ckOpIndv: [],
+    buffGroup: 0,
+    ...overrides,
+  };
 }
 
 const BUSTER = "2" as Card;

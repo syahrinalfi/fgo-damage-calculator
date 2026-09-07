@@ -42,6 +42,7 @@ function makeInstance(overrides: Partial<ActiveBuffInstance> = {}): ActiveBuffIn
     amount: 200,
     ckSelfIndv: [],
     ckOpIndv: [],
+    buffGroup: 0,
     ...overrides,
   };
 }
