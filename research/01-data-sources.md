@@ -1,0 +1,146 @@
+# 01 — Data Sources: Atlas Academy API
+
+This file documents the structure of the [Atlas Academy API](https://api.atlasacademy.io) (the project's sole data source, per `00-project-overview.md` §3) and resolves the four **[Priority check for file 01]** open questions from that file. Everything here was verified by fetching the live OpenAPI schema (`https://api.atlasacademy.io/openapi.json`, spec version `6.0.0`/OAS 3.1) and the API's own docs pages, not from memory — field names quoted below are exact.
+
+## 1. API surface overview
+
+Base URL: `https://api.atlasacademy.io`. Interactive docs: [Swagger UI](https://api.atlasacademy.io/docs), [RapiDoc](https://api.atlasacademy.io/rapidoc), [Redoc](https://api.atlasacademy.io/redoc). Machine-readable schema: `https://api.atlasacademy.io/openapi.json`. Source: [atlasacademy/fgo-game-data-api](https://github.com/atlasacademy/fgo-game-data-api). Companion formula documentation: [atlasacademy/fgo-game-data-docs](https://github.com/atlasacademy/fgo-game-data-docs) (battle formulas — primary source for files 02–04).
+
+Three parallel data "shapes" exist for most entities, at `/{shape}/{region}/{entity}/...`:
+
+- **`raw`** — near-1:1 mirror of the game's own `Mst*` tables (e.g. `MstSvt`, `MstSkill`, `MstTreasureDevice`). Verbose, cross-referenced by internal IDs, closest to ground truth but hardest to consume directly.
+- **`nice`** — Atlas Academy's own **resolved, human/programmer-friendly** rebuild of the same data: ID cross-references are already joined into nested objects (e.g. a skill's functions/buffs are embedded, not just IDs), enums are named strings instead of magic numbers, and English field names replace the game's internal ones. **This is the format the project should build against**, per the existing "generic engine" decision in file 00 — it exposes exactly the function/buff/svals structure the engine is meant to mirror.
+- **`basic`** — a deliberately trimmed-down subset of `nice`, meant only for indexing/search UIs (name, rarity, class, etc.), not for calculation.
+
+`{region}` is a path segment, one of `JP | NA | CN | KR | TW` (confirmed via the `Region` enum in the OpenAPI schema). **Only JP and NA have documented static full-data export files** (`nice_servant.json`, `nice_equip.json`, etc. — see §2); CN/KR/TW exist as valid region values for on-demand endpoints but their data completeness is not established by this research pass and should be spot-checked before relying on them. This confirms file 00's region decision (§3, "Region is a user-switchable setting...") is buildable at least for JP + NA; CN/KR/TW support should be treated as best-effort/unverified until tested.
+
+### Key endpoint families (nice, the ones this project needs)
+
+| Domain | Endpoints |
+|---|---|
+| Servants | `GET /nice/{region}/servant/{id}`, `/nice/{region}/servant/search` |
+| Craft Essences | `GET /nice/{region}/equip/{id}`, `/nice/{region}/equip/search` |
+| Generic svt (servant/CE/enemy share one underlying table) | `GET /nice/{region}/svt/{id}`, `/nice/{region}/svt/search` |
+| Mystic Codes | `GET /nice/{region}/MC/{mc_id}` |
+| Command Codes | `GET /nice/{region}/CC/{cc_id}` |
+| Skills (standalone lookup) | `GET /nice/{region}/skill/{skill_id}`, `/nice/{region}/skill/search` |
+| Noble Phantasms (standalone lookup) | `GET /nice/{region}/NP/{np_id}`, `/nice/{region}/NP/search` |
+| Functions (standalone lookup) | `GET /nice/{region}/function/{func_id}`, `/nice/{region}/function/search` |
+| Buffs (standalone lookup) | `GET /nice/{region}/buff/{buff_id}`, `/nice/{region}/buff/search` |
+| Items (mats, QP, etc.) | `GET /nice/{region}/item/{item_id}` |
+| Events | `GET /nice/{region}/event/{event_id}` |
+| Wars (story/event chapter containers) | `GET /nice/{region}/war/{war_id}` |
+| **Quests (the actual enemy/wave data)** | `GET /nice/{region}/quest/{quest_id}` (metadata across phases), `GET /nice/{region}/quest/{quest_id}/{phase}` (**full enemy/wave data for one specific difficulty/phase**) |
+| AI | `GET /nice/{region}/ai/{ai_type}/{ai_id}`, `/nice/{region}/ai-act/{ai_act_id}` |
+| Enemy master (visual/name records for generic mobs) | `GET /nice/{region}/enemy-master/{master_id}` |
+| Data version | `GET /info` |
+| **Latest-quest indexing helper** | `GET /basic/{region}/quest/phase/latestEnemyData` — lists recently-added quests that have actual enemy data available (useful for discovering quest IDs without already knowing them) |
+
+Search endpoints (`/search`) generally accept filters (name, class, rarity, trait, etc.) and are the practical way to resolve a "find this servant/CE" step without hardcoding IDs; per the API's own guidance, prefer the static export files or `/basic` search for bulk/indexing use and only hit `/nice` per-entity for the specific records actually needed, since large `/nice` searches are slow.
+
+## 2. Static full-data exports (bulk ingestion path)
+
+For an app that needs the *whole* servant/CE roster locally (to avoid one API call per servant), Atlas Academy publishes pre-generated dumps, refreshed within an hour of game updates:
+
+- `https://api.atlasacademy.io/export/{NA|JP}/nice_servant.json` (+ `_lore` variant with profile text, + `_lang_en` for JP with English names)
+- `https://api.atlasacademy.io/export/{NA|JP}/nice_equip.json` (+ `_lore`, `_lang_en` variants)
+- `https://api.atlasacademy.io/export/{NA|JP}/nice_mystic_code.json`, `nice_command_code.json`, `nice_item.json`, `nice_event.json`, `nice_war.json`
+- `https://api.atlasacademy.io/export/JP/nice_enums.json` and `nice_trait.json` — **shared between regions**, i.e. one canonical enum/trait mapping regardless of which region's servant data you're using
+- Trimmed `basic_*` equivalents of all the above, for indexing/search UIs
+
+**This is the recommended ingestion strategy**: pull the full `nice_servant.json` / `nice_equip.json` / `nice_mystic_code.json` / `nice_command_code.json` dumps per region on a schedule (or on-demand with cache), rather than calling `/nice/{region}/servant/{id}` per servant. Quest/enemy data (§4 below) is *not* available as one of these bulk static dumps — it must be fetched per-quest via `/nice/{region}/quest/{quest_id}/{phase}`, since there is no practical "export every quest in the game" file.
+
+### Static constants (directly relevant to the damage/NP engine, files 02–04)
+
+Also published as static JSON, **shared across regions except where noted**, and directly answering several of file 00's open sourcing questions:
+
+| File | Answers |
+|---|---|
+| `NiceAttributeRelation.json` | The Man/Earth/Sky/Star/Beast attribute affinity triangle multiplier table (file 00 §6 "attribute triangle" question) |
+| `NiceClassAttackRate.json` | Per-class base "class attack rate" multiplier table |
+| `NiceClassRelation.json` | The 3-class-triangle advantage/disadvantage multiplier table |
+| `NiceCard.json` | Per-card-type (Quick/Arts/Buster/Extra) base multiplier / hit-count-role details |
+| `NiceConstant.json` | Misc engine-wide constants (likely includes things like base crit multiplier, star cap, gauge cap — needs a dedicated read-through in file 02/03/04, not exhaustively catalogued here) |
+| `NiceBuffList.ActionList.json` | Buff action metadata |
+| `NiceUserLevel.json` | **Master level → max Cost / max AP / friend-point-per-level table** — directly resolves the file 00 §6 open question "exact Master-level-to-max-Cost table" |
+| `NiceSvtGrailCost.json` | Grail (Palingenesis) QP cost table — not core to this project's scope but noted for completeness |
+
+The linked [`fgo-game-data-docs/battle`](https://github.com/atlasacademy/fgo-game-data-docs/tree/master/battle) directory is Atlas Academy's own write-up mapping these constants into the actual formulas (damage, NP gain, crit stars) — this is the primary source to read in full when writing files 02–04, not just the raw constant tables.
+
+## 3. Core "nice" object shapes relevant to the engine
+
+Top-level field lists (from the live schema), showing what's actually available per entity — full per-field semantics belong in the topic-specific files (02–08), this is an inventory:
+
+- **`NiceServant`**: `classId`/`className`, `attribute`, `traits` (full trait/individuality list), `cards` (card deck composition) + `hitsDistribution` + `cardDetails` (per-card-type **hit count and per-hit damage distribution**, resolving file 00 §4's "Hit count mechanics" sourcing need directly), `starAbsorb`/`starGen` (per-servant crit-star weight/generation), `atkBase`/`atkMax`/`hpBase`/`hpMax` **plus `atkGrowth`/`hpGrowth`** (explicit **per-level arrays**, not just min/max — resolves the file 00 §6 open question "does Atlas Academy expose a full per-level ATK/HP array, or only breakpoints?": **it exposes the full per-level array**), `growthCurve` (which curve-shape id applies), `skills` + `classPassive` + `extraPassive` + `appendPassive` (all skill categories, including the always-on passives file 00 §4 flags as needing default inclusion), `noblePhantasms` (list, not singleton — because of NP upgrades, see `strengthStatus` below), `bondGrowth` (bond-level XP thresholds), `bondEquip(s)` (the servant's own Bond CE reference).
+- **`NiceEquip`** (CE): same `atkBase/atkMax/atkGrowth`, `hpBase/hpMax/hpGrowth`, `skills` (a CE's effect is just a skill like any servant skill — same function/buff engine applies, confirming file 00's "generic engine" decision needs no CE-specific special-casing).
+- **`NiceSkill`** / **`NiceTd`** (NP): both carry `functions` (ordered list — this is exactly the "ordered list of independently-gated functions" structure file 00 §4 requires for Koyanskaya/Euryale-style kits, confirmed structurally, see §5 below), `coolDown` (per-skill-level array, for skills), `npGain`+`npDistribution` (NP-specific: gauge-charge value and per-hit damage distribution, for NPs), `strengthStatus` (see §6.5 below — the Rank-Up/Interlude versioning field), `individuality` (the skill/NP's own trait tags, separate from the servant's).
+- **`NiceFunction`**: `funcType` (133 distinct types, incl. drop/event-point ones, see §6.2), `funcTargetType` + `funcTargetTeam` (targeting — team scope is independent of target-type, both must be checked together), **`functvals`** (trait condition on the function itself — the exact field for Euryale/Koyanskaya-style conditional gating, see §5), `funcquestTvals` (a *quest-level* trait requirement — e.g. field/terrain-gated effects), `svals` (array of `Vals` objects, one per skill/NP level — the actual numeric payload), `funcGroup` (event/bond linkage metadata, see §6.2), `buffs` (the buff(s) this function applies, if it's a buff-granting function).
+- **`Vals`** (the `svals` payload object): confirmed fields include `Rate`, **`Turn`**, **`Count`**, `Value`, `Value2`, `UseRate`, `Target`, `Correction`, `ParamAdd`, `ParamMax`, plus many boolean-ish flags (`HideMiss`, `OnField`, `CheckDead`, `RatioHPHigh`, etc.). **`Turn` and `Count` are separate, independently-nullable fields on the same object** — this directly resolves the file 00 §6 open question about how count-based vs turn-based duration is encoded (see §6.4 below).
+- **`NiceBuff`**: `type` (`NiceBuffType`, 239 values), `vals`/`ckSelfIndv`/`ckOpIndv` (trait-based conditions: the buff's own individuality tags, a requirement on the buff-holder's traits, and a requirement on the *target's* traits, respectively — three distinct trait-check slots), `buffGroup` (stacking-group id, for the "same buff type, does it stack" question), `maxRate` (a cap field, relevant to file 00's "buff stacking caps" open concept), `script`/`originalScript` (a catch-all for buff-specific edge behavior not otherwise modeled by a typed field).
+- **`NiceMysticCode`**: `skills` (same generic skill/function/buff structure — Mystic Code skills are not a separate mechanic type).
+- **`NiceCommandCode`**: `skills` (again, same generic structure).
+
+**Structural conclusion for file 00's "generic engine" decision**: servant skills, CE skills, Mystic Code skills, Command Code skills, and enemy skills/NPs (§4) all bottom out in the exact same `NiceSkill`/`NiceTd` → `NiceFunction` → `NiceBuff` chain. There is no separate data shape per source — confirms the engine only needs to implement **one** function/buff evaluator, reused everywhere, exactly as file 00 §3 "Research scope" assumed.
+
+## 4. Quest / enemy data — resolving Priority Check #1 (enemy combat data)
+
+**Finding: YES, full enemy-side combat data is exposed.** `GET /nice/{region}/quest/{quest_id}/{phase}` returns a `NiceQuestPhase` object whose enemy data (nested `QuestEnemy` records, one per enemy unit per wave) includes:
+
+- `deck` / `deckId` (`DeckType` enum: `enemy | call | shift | change | transform | skillShift | missionTargetSkillShift | aiNpc | svtFollower` — see §6.4, this is also the reinforcement/multi-bar answer) and `roleType` (the enemy's role tag).
+- `lv`, `atk`, `hp`, `adjustAtk`, `adjustHp` (actual stat values for this specific quest instance, already resolved — not raw growth curves the caller has to interpolate).
+- `traits` (the enemy's own trait list, same `NiceTrait` type used everywhere else — directly answers file 00's "per-enemy trait/class/attribute config with data-driven defaults" decision: the defaults **are** the real per-quest data, not a guess).
+- `deathRate`, `criticalRate`, `recover`, `chargeTurn` (enemy-side battle-behavior stats).
+- `skills` (`EnemySkill`), `classPassive` (`EnemyPassive`, incl. `classPassive`/`addPassive`/`appendPassiveSkillIds` — enemies can have append skills too), `noblePhantasm` (`EnemyTd`) — **enemy skills and NPs are full `NiceSkill`/`NiceTd` objects**, meaning the exact same function/buff engine that computes a player servant's skill effects works unmodified for enemy skills/NPs (e.g. an enemy's self-applied DEF-up buff, or a boss's NP damage). This is what makes the per-enemy manual-buff-editing decision in file 00 §3 practical to also **auto-populate from real data** instead of only manual entry.
+- `ai` (`EnemyAi`: `aiId`, `actPriority`, `maxActNum`, `minActNum`) and, at the top level, `GET /nice/{region}/ai/{ai_type}/{ai_id}` / `/ai-act/{ai_act_id}` (`NiceAiAct`: `type`, `target`, `targetIndividuality`, `skillId`+`skillLv`, `noblePhantasmId`+`noblePhantasmLv`+`noblePhantasmOc`) — **this is a genuine AI action-priority/target-selection script**, not just a flavor field. It's enough to at least approximate "what will this enemy likely do this turn" (skill vs NP vs card, and rough targeting rule), though it is a priority/weight system rather than a fully deterministic turn-by-turn script — exact-certainty simulation of enemy behavior would need deeper modeling of how the game resolves ties/weights, which is out of scope for this research pass.
+- `serverMod` (`EnemyServerMod`: `tdRate`, `tdAttackRate`, `starRate` — server-side modifiers to the enemy's own NP-gain and crit-star rates, both attacking and defending).
+- `enemyScript` / `originalEnemyScript` (`EnemyScript`) — carries `raid`, `superBoss`, `hpBarType`, `leader` ("battle ends if this servant is defeated" flag, i.e. marks the actual kill-target among decoys), `changeAttri`, `call` ("summon these NPC IDs"), `shift` ("break bar switch to these NPC IDs") + `shiftPosition` + `shiftClear` — **this is the reinforcement/spawn/multi-bar mechanism**, detailed in §6.3.
+- `drops` (`EnemyDrop`: item/type/expected-count/variance per enemy) — incidentally, this is also relevant to the farming-optimizer's implicit "which quest to farm" framing, though drop-rate optimization itself is out of this project's stated scope.
+
+**Scope conclusion**: per file 00 §2's conditional non-goal, this resolves to **go full scope is technically supportable by the data** — enemy NP/skill definitions, deck composition, AI action-priority, and attack damage values (`atk` + card/NP data on the enemy's own kit) are all present. However, this research pass only confirms **data availability**, not implementation difficulty — the AI system is priority/weight-based rather than a flat deterministic script, so a genuinely accurate "what does the enemy do each turn" simulator is a nontrivial modeling effort on top of having the data. **Recommendation to revisit in file 09** (simulation/optimizer design): treat full enemy-attack simulation as in-scope-but-lower-priority-phase-2, since the data supports it, but don't let it block shipping the damage-output-only engine first — file 00's non-goal wording ("stay damage-output-only for now, revisit later... don't build it so rigidly that adding survivability later requires a rewrite") remains the right call operationally even though the *data* answer is yes.
+
+## 5. Multi-function skills/NPs — confirming the Koyanskaya/Euryale pattern
+
+File 00 §4 flagged two patterns needing confirmation: (a) a skill with unconditional + trait-gated functions in one activation, (b) an NP whose own damage function is itself trait-conditional. The schema confirms both are the **same mechanism**, not two different features:
+
+- `NiceSkill.functions` / `NiceTd.functions` is an **array** of `NiceFunction`. Nothing forces all entries to share a condition — each `NiceFunction` independently carries its own `functvals` (trait condition on the function's targets/their buffs) and `funcquestTvals` (quest-trait condition). So "one skill press, two functions, one unconditional and one gated" (Koyanskaya of Light) is just: a `functions` array with 2 entries, entry 1 has empty `functvals` (unconditional), entry 2 has `functvals` containing the Male trait.
+- Euryale's "NP damage itself scales vs Male" is the **same structure applied to an NP's own `functions` list**: the NP's primary damage function most likely has `functvals` set to the Male-trait check directly on the damage-dealing function itself (rather than needing a second, separate bonus-damage function) — **this still needs a live example checked against an actual servant's data to confirm which of the two encodings (one conditional function vs. base+bonus two-function split) Euryale specifically uses**; the schema supports either, so this is a "verify against one concrete example" task for file 02 rather than an open schema question.
+- This also resolves file 00 §6's question about exact field names: it's `functvals` (function-level trait gate) and `funcquestTvals` (quest-level trait gate), both arrays of `NiceTrait`, both siblings of `svals` on `NiceFunction` — not a separate "value table," confirming functions are gated at the function-entry level, not via an internal per-trait lookup table inside one function.
+
+## 6. Resolving the four priority checks
+
+### 6.1 Priority Check #1 — Enemy combat data
+Answered fully in §4: **yes**, available (deck, AI, skills, NP, traits, stats, server-mod rates). See §4's scope conclusion.
+
+### 6.2 Priority Check #2 — Active event + event-CE tagging
+**Finding: partially automatic — feasible, but requires a small join, not one field.**
+
+- `NiceEvent` (from `GET /nice/{region}/event/{event_id}`) has `startedAt` / `endedAt` / `finishedAt` (Unix timestamps). "Is event X currently active for region R" is a direct computation (`startedAt <= now <= endedAt`), **given the event ID** — but there is **no** `/nice/{region}/event/search` or "list current events" endpoint in the schema; only `/basic/{region}/event/search` exists (for name/id lookup) and `GET /nice|basic/{region}/event/{event_id}` (by known ID). So "which event(s) are active right now" requires either (a) periodically scanning a range of recent event IDs / using the `basic` search + each event's `startedAt`/`endedAt`, or (b) maintaining an externally-curated small list of "current event IDs" (e.g. from the Atlas Academy Discord/changelog or community trackers) rather than a single API call. This is a minor engineering task, not a blocker.
+- **CE-to-event linkage**: a CE's drop-rate-boosting effect is just a normal `NiceFunction` on one of its skills, with `funcType` one of the confirmed values `eventDropUp`, `eventDropRateUp`, `eventPointUp`, `eventPointRateUp` (there's also `qpDropUp`, `classDropUp`, `eventFortificationPointUp`, unrelated to CE event-tagging specifically). Critically, that function's `funcGroup` field (`NiceFuncGroup`, described in the schema itself as "some more details for event drop up, bond point up functions") **carries an explicit `eventId`** — so a CE can be programmatically identified as "this event's drop CE" by scanning owned CEs' skills for one of those `funcType`s and reading `funcGroup[].eventId`, then matching it against the currently-active event ID from the step above.
+- **Conclusion**: "Prefer Event CE" mode's auto-detection is **buildable without falling back to fully manual selection** — it just requires (a) a way to know which event ID is "current" (see caveat above — not a single clean endpoint, needs a small external list or ID-scan job) and (b) scanning the user's owned CE inventory for skills whose function `funcGroup.eventId` matches it. **File 00's non-goal/conditional wording should be updated**: instead of "if not reliably available, fall back to manual," the correct framing is "auto-detect via `funcGroup.eventId` once the current event ID is known; let the user override/manually pick if the auto-detected event ID is wrong or the event isn't in whatever curated 'current events' source the app uses." This is a refinement, not a scope flip — the manual-override path should still exist as a safety net.
+- Bond Point Up CE functions (the other decision in file 00 §1, "Bond Point calculation") use the **same `funcGroup` mechanism** ("bond point up functions" is explicitly named alongside "event drop up" in the field's own description) — meaning per-CE Bond%-Up values are also readable the same structured way (via `svals`/`funcGroup` on the CE's Bond-Up-type function), not something that needs separate sourcing per file 00 §6's open question about "exact %Up values per Bond CE."
+
+### 6.3 Priority Check #3 & #4 — Enemy Guts and multi-bar HP
+Answering both together since they turned out to share one mechanism (a "new enemy unit appears" transition), plus a second, separate mechanism specifically for Guts:
+
+- **Guts is a buff, not an enemy-record field.** The `NiceBuffType` enum (239 values) includes `guts`, `gutsRatio`, `upGutsHp`, `downGutsHp`, `gutsFunction`, `gutsBeforeFunction`, `multiGutsFunction`, `multiGutsBeforeFunction`, `shiftGuts`, `shiftGutsRatio`. This means an enemy's innate Guts is discoverable **automatically**: scan the enemy's `classPassive`/`addPassive` skills (or its NP/skill functions, if Guts is granted conditionally rather than passively) for a function whose `buffs[0].type` is one of the guts variants, then read the **revive count from that buff instance's `Vals.Count`** (or `Vals.Turn` if it's a turn-windowed variant — same `Count`-vs-`Turn` distinction as evade/invincible, §6.4) and the **revive HP amount/percentage from `Vals.Value`/`Value2`/`RatioHPHigh`-family fields** (exact field depends on which guts sub-type; needs per-instance confirmation against a live example when file 08 is written, but the mechanism itself is fully data-driven). **This resolves Priority Check #3 as "auto-default from data," not "user enters manually."**
+- **Multi-bar/segmented HP and reinforcement/spawn-on-death are the *same* underlying mechanism, both keyed off `EnemyScript`/`DeckType`.** `DeckType` (the enum on `QuestEnemy.deck`) includes `enemy | call | shift | change | transform | skillShift | missionTargetSkillShift | aiNpc | svtFollower`. `EnemyScript` carries `call` ("summon these NPC IDs" — reinforcement) and `shift` + `shiftPosition` + `shiftClear` ("break bar switch to these NPC IDs" + which position it takes over + which of its buffs get cleared on the switch) plus `hpBarType`. **Conclusion: Atlas Academy does not model multi-bar HP as "one enemy record with an array of HP segments."** Instead, each "bar" is encoded as a **separate, full `QuestEnemy` record** (its own stats/traits/defense/buffs, exactly as file 00 §4 anticipated needing) that the game transitions into via `shift` when the prior one's bar empties — i.e. the wave's enemy list already contains all the bar-phase records, linked by the `shift` NPC-ID reference, rather than the app needing to invent a nested "bars" array itself. **This resolves Priority Check #4**: the data model doesn't need a bespoke "multi-bar" structure — the engine's existing "wave = list of independent enemy unit records" design (already decided in file 00 §3) already covers it, as long as the simulator also implements the `shift`-triggered swap-to-next-record transition (and, separately, `call`-triggered reinforcement spawn) as simulation events. **Both are auto-derivable from real quest data — no manual per-quest entry needed for quests the API has data for.** (Caveat: per `NiceQuestPhase.phasesWithEnemies`, not every quest phase has enemy data available from Rayshift — for a phase with no captured enemy data, the app would still need a manual-entry fallback; this is a data-*coverage* gap, not a schema/scope gap.)
+
+### 6.4 Bonus finding — Count-based vs turn-based Evade/Invincible (file 00 §6 open question, resolved as a side effect of the above)
+`NiceBuffType` cleanly separates the two mechanics file 00 flagged: `avoidance`/`avoidState` (Evade) vs `invincible`/`specialInvincible` (Invincible) as distinct types, and `pierceInvincible`/`pierceSpecialInvincible`/`breakAvoidance` as the attacker-side piercing-capability buff types (confirming file 00's "two independent checks" model: a defender buff type vs. an attacker capability, checked separately). The count-vs-turn distinction is resolved by the `Vals` object structure itself (§3): **`Turn` and `Count` are two separate, independently-nullable integer fields on the same `svals`/`Vals` entry** — a turn-based buff instance has `Turn` set and `Count` null/absent, a count-based one has `Count` set (and, per file 00's description, may or may not also carry a `Turn` as an outer expiry ceiling); the engine should read both fields per buff instance rather than assuming a buff is "one type" structurally — the *type* (count vs turn behavior) is really "which of these two fields is populated," confirming file 00's instinct that this must be read per-instance, not hardcoded per buff-type.
+
+## 7. Open items carried forward (not resolved by this file)
+
+- Exact semantics of several `Vals` fields relevant to Guts (`RatioHPHigh` and neighboring HP-ratio fields) and to conditional/triggered buffs (file 00 §4's Aesc-style pattern) need a live-example read-through — deferred to file 05 (buffs) / file 08 (enemy mechanics), since this file's job was schema/availability, not full semantic decoding of every field.
+- Whether `NiceTd.functions`' trait-gating for a specific real NP (Euryale cited) uses one conditional function or a base+bonus two-function split — deferred to file 02, needs one concrete live lookup (`GET /nice/{region}/servant/{euryale_id}`) to confirm empirically rather than inferred from the schema alone.
+- CN/KR/TW data completeness is unverified (only JP/NA have documented static export files) — should be spot-checked before the account-data region switcher (file 00 §3) claims support for those regions.
+- The exact rule for resolving "which event is currently active" without a dedicated search-by-date endpoint (§6.2) needs a concrete implementation decision (curated ID list vs. ID-range scan vs. community source) — deferred to file 09 (this is an app-architecture decision, not a data-modeling one).
+- `NiceConstant.json`'s full contents were not individually catalogued in this pass (noted as existing in §2) — full read-through deferred to files 02–04 where each constant will actually be consumed.
+
+## 8. Sources
+
+- https://api.atlasacademy.io/ (export file index)
+- https://api.atlasacademy.io/docs (Swagger UI, endpoint list)
+- https://api.atlasacademy.io/openapi.json (authoritative schema — primary source for all field names cited above)
+- https://github.com/atlasacademy/fgo-game-data-api (API source + CHANGELOG)
+- https://github.com/atlasacademy/fgo-game-data-docs/tree/master/battle (battle formula documentation — for files 02–04)
+- https://github.com/atlasacademy/fgo-docs (referenced from within the schema itself for buff-stacking and buff-bounds semantics — `NiceBuff.buffGroup` and `NiceBuff.maxRate` docstrings)
