@@ -38,3 +38,19 @@ export const CRITICAL_TD_POINT_RATE = 2.0;
 
 /** Attacking-formula Overkill multiplier, applied after the first floor (NiceConstant.OVER_KILL_NP_RATE = 1500). */
 export const OVER_KILL_NP_RATE = 1.5;
+
+/**
+ * Star-drop-chance formula constants (research/03-card-and-hit-mechanics.md §5.1), same
+ * divided-decimal convention — confirmed against the raw NiceConstant.json values
+ * (200/1000/300) directly, resolving what had looked like a unit mismatch in that
+ * research file's own quoted (already-divided) numbers.
+ */
+
+/** Flat crit-generation bonus on a landed critical hit (NiceConstant.CRITICAL_STAR_RATE = 200). */
+export const CRITICAL_STAR_RATE = 0.2;
+
+/** Star-drop multiplier on an Overkill hit — no change (NiceConstant.OVER_KILL_STAR_RATE = 1000). */
+export const OVER_KILL_STAR_RATE = 1.0;
+
+/** Flat star-drop bonus on an Overkill hit (NiceConstant.OVER_KILL_STAR_ADD = 300). */
+export const OVER_KILL_STAR_ADD = 0.3;
