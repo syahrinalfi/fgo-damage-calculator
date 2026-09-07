@@ -29,4 +29,8 @@ describe("resolveBuffAction", () => {
   it("skips the floor check under the upper-only limit, letting the total go negative", () => {
     expect(resolveBuffAction(makeInput({ minusTotal: 50, limit: "upper" }))).toBe(-50);
   });
+
+  it("skips both checks under the none limit", () => {
+    expect(resolveBuffAction(makeInput({ minusTotal: 500, maxRate: 100, limit: "none" }))).toBe(-500);
+  });
 });

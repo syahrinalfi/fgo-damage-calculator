@@ -129,6 +129,18 @@ export class GameDataClient {
   attributeConstant(): ReturnType<ApiConnector["attributeConstant"]> {
     return this.connector.attributeConstant();
   }
+
+  /**
+   * Per-buff-action registry (`NiceBuffList.ActionList.json`) — for each `BuffAction`
+   * (e.g. `atk`, `criticalPoint`, `dropNp`), which `BuffType`s are its plus/minus
+   * contributors and the action's own `baseParam`/`baseValue`/`limit`/`maxRate`
+   * (research/05-buffs-and-debuffs.md §2). This is the live, official source for the
+   * type-to-action mapping the buff-evaluation layer (src/buffs/) is built from, rather
+   * than a hand-maintained table of the 239 NiceBuffType values.
+   */
+  buffConstant(): ReturnType<ApiConnector["buffConstant"]> {
+    return this.connector.buffConstant();
+  }
 }
 
 const clients = new Map<SupportedRegion, GameDataClient>();

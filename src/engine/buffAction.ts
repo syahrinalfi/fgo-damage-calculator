@@ -6,8 +6,13 @@
  * mechanism the whole engine reuses for every "sum of active buffs of this type" lookup
  * (atk, defence, cardMod, powerMod's sub-parts, ...) rather than a per-term bespoke
  * calculation — confirming the project's "generic engine" decision (research/00 §3).
+ *
+ * `"none"` is a fourth mode the live `NiceBuffList.ActionList.json` export actually uses
+ * for some actions (neither the floor-at-0 nor the ceiling-at-maxRate check applies) —
+ * added when wiring the buff-evaluation layer to that export's real `BuffConstant.limit`
+ * values, which are not restricted to normal/lower/upper.
  */
-export type BuffActionLimit = "normal" | "lower" | "upper";
+export type BuffActionLimit = "normal" | "lower" | "upper" | "none";
 
 export interface BuffActionInput {
   /** The action's starting value before any buff contribution (usually 0). */
