@@ -1,7 +1,6 @@
 import { Region } from "@atlasacademy/api-connector";
 
 export { Region };
-
 /**
  * Only JP and NA have documented static full-data export files and are
  * treated as supported; CN/KR/TW are valid API regions but their data

@@ -15,12 +15,11 @@ import {
   type Enemy,
   type Servant as ServantModule,
 } from "@atlasacademy/api-connector";
+import type { SupportedRegion } from "./region.js";
 
 // EnemyMaster isn't re-exported from the package root and the package's `exports`
 // field blocks deep subpath imports, so its type is derived from the connector method.
 type EnemyMaster = Awaited<ReturnType<ApiConnector["enemyMaster"]>>;
-
-import { Region, type SupportedRegion } from "./region.js";
 
 export type NiceServant = ServantModule.Servant;
 export type NiceServantWithLore = ServantModule.ServantWithLore;
@@ -143,5 +142,3 @@ export function getGameDataClient(region: SupportedRegion): GameDataClient {
   }
   return client;
 }
-
-export { Region };
