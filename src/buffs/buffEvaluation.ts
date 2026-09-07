@@ -10,7 +10,7 @@ import type { ActiveBuffInstance, BuffTraitContext } from "./types.js";
  * list (no gate at all) trivially passes either way, and every live example found so far
  * carries at most one trait.
  */
-function traitGatePasses(required: readonly { id: number }[], have: ReadonlySet<number>): boolean {
+export function traitGatePasses(required: readonly { id: number }[], have: ReadonlySet<number>): boolean {
   return required.every((trait) => have.has(trait.id));
 }
 

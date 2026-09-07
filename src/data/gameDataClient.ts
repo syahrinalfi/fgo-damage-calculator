@@ -141,6 +141,11 @@ export class GameDataClient {
   buffConstant(): ReturnType<ApiConnector["buffConstant"]> {
     return this.connector.buffConstant();
   }
+
+  /** Per-card-type-and-position damage/NP-gauge/star-chance constants (`NiceCard.json`). */
+  cardConstant(): ReturnType<ApiConnector["cardConstant"]> {
+    return this.connector.cardConstant();
+  }
 }
 
 const clients = new Map<SupportedRegion, GameDataClient>();
