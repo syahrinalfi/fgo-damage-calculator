@@ -13,3 +13,7 @@ export type { AttackingNpGainResolutionContext, DefendingNpGainResolutionContext
 export { resolveAttackingNpGainInput, resolveDefendingNpGainInput } from "./npGainInput.js";
 export type { StarDropResolutionContext } from "./starDropInput.js";
 export { resolveStarDropInput } from "./starDropInput.js";
+export type { HitResolutionContext, HitResolutionResult } from "./hitResolution.js";
+export { resolveHit } from "./hitResolution.js";
+export type { TrackedBuff } from "./buffLifecycle.js";
+export { grantBuff, advanceTurnBuffs, consumeBuffUse } from "./buffLifecycle.js";

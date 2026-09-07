@@ -14,14 +14,15 @@ import type { ActiveBuffInstance } from "./types.js";
  *   completely untouched (not replaced, not refreshed, not extended).
  *
  * `activeBuffs` is assumed to already be filtered down to genuinely-active instances (per
- * `BattleUnit`'s own convention — this project doesn't yet model turn-by-turn expiry, so
- * "active" is whatever the caller has already decided); this function only adjudicates the
- * buffGroup collision, not whether an instance has expired.
+ * `BattleUnit`'s own convention); this function only adjudicates the buffGroup collision,
+ * not whether an instance has expired — see `./buffLifecycle.js`'s `TrackedBuff` for the
+ * turn-by-turn expiry layer built on top of this.
+ *
+ * Generic over `T extends ActiveBuffInstance` so a caller tracking extra per-instance state
+ * (e.g. `TrackedBuff`'s `turnsRemaining`/`usesRemaining`) gets that state preserved through
+ * the call, rather than having to re-cast the widened `ActiveBuffInstance[]` result back.
  */
-export function applyBuff(
-  activeBuffs: readonly ActiveBuffInstance[],
-  newBuff: ActiveBuffInstance,
-): readonly ActiveBuffInstance[] {
+export function applyBuff<T extends ActiveBuffInstance>(activeBuffs: readonly T[], newBuff: T): readonly T[] {
   if (newBuff.buffGroup !== 0 && activeBuffs.some((buff) => buff.buffGroup === newBuff.buffGroup)) {
     return activeBuffs;
   }

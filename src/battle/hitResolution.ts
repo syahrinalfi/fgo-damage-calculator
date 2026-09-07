@@ -1,0 +1,122 @@
+import type { Card } from "@atlasacademy/api-connector";
+import { resolveDefenseBlock, resolveGuts, type DefenseBlockResult, type GutsResult } from "../buffs/index.js";
+import { calculateHitDamage, type ExtraCardChainType } from "../engine/damage.js";
+import { calculateAttackingNpGain } from "../engine/npGain.js";
+import { calculateStarDropChance } from "../engine/starDrop.js";
+import { resolveDamageInput } from "./damageInput.js";
+import type { BattleConstants } from "./gameConstants.js";
+import { resolveAttackingNpGainInput } from "./npGainInput.js";
+import { resolveStarDropInput } from "./starDropInput.js";
+import type { BattleUnit } from "./unit.js";
+
+/**
+ * Everything `resolveHit` needs beyond the two units, their current HP, and the shared
+ * constants bundle — the per-hit context none of `resolveDamageInput`/
+ * `resolveAttackingNpGainInput`/`resolveStarDropInput` can derive on their own. `isCrit`
+ * is shared across all three underlying formulas (research/02-04 all key off the same
+ * crit/non-crit hit), unlike `isOverkill`, which this function derives itself from the
+ * resolved damage vs. `defenderHp` (research/02: Overkill is "dealt more damage than the
+ * target's remaining HP" — not something the caller can know ahead of the damage roll).
+ * `npEnemyServerMod`/`starEnemyServerMod` are deliberately distinct fields, not one shared
+ * `enemyServerMod` — research/04 §2 confirms `tdRate`/`tdAttackRate` and the star-drop
+ * server rate are separate server-supplied stats, not the same number reused.
+ */
+export interface HitResolutionContext {
+  card: { type: Card; position: number };
+  isCrit: boolean;
+  npDamageMultiplier: number;
+  randomModifier: number;
+  extraCardChainType: ExtraCardChainType;
+  isSuperEffective: boolean;
+  superEffectiveModifier: number;
+  isNP: boolean;
+  isBusterChain: boolean;
+  offensiveNPRate: number;
+  npEnemyServerMod: number;
+  baseStarRate: number;
+  starEnemyServerMod: number;
+}
+
+/**
+ * Resolves one hit end to end: this is the first real integration point tying the
+ * Evade/Invincible/`specialInvincible` priority check (`resolveDefenseBlock`,
+ * research/05 §6.3) and Guts (`resolveGuts`, §6.2) into the damage/NP-gain/star-drop
+ * pipeline (research/02-04) that `resolveDamageInput`/`resolveAttackingNpGainInput`/
+ * `resolveStarDropInput` already wire to real unit data — research/09 §2's per-hit
+ * pipeline steps 3a-3e, minus chain/hand/skill-effect bookkeeping (steps 1-2 and 4-5),
+ * which need the full `Action`/turn-loop model this function doesn't attempt yet.
+ *
+ * Per research/05 §6.4: a blocked hit's damage is gated to 0, but NP gain and star-drop
+ * chance still resolve normally — only `damage`/`hpAfterDamage` are affected by `defense`.
+ */
+export interface HitResolutionResult {
+  defense: DefenseBlockResult;
+  /** 0 if `defense.blocked`, otherwise the full research/02 formula output. */
+  damage: number;
+  /** Raw attacking NP-gauge gain (`FULL_TD_POINT` units, research/04 §1) — resolves normally even if blocked. */
+  npGain: number;
+  /** Star-drop probability (research/03 §5.1) — resolves normally even if blocked. */
+  starDropChance: number;
+  /** Whether this hit dealt more damage than the defender's remaining HP (always false if blocked). */
+  isOverkill: boolean;
+  /** `defenderHp - damage`, before any Guts revival — may be zero or negative. */
+  hpAfterDamage: number;
+  guts: GutsResult;
+  /** Guts' revive HP if it triggered, otherwise `hpAfterDamage` floored at 0. */
+  defenderHpFinal: number;
+  /** True only if HP reached 0-or-below and no Guts instance revived the defender. */
+  defeated: boolean;
+}
+
+export function resolveHit(
+  attacker: BattleUnit,
+  defender: BattleUnit,
+  defenderHp: number,
+  defenderMaxHp: number,
+  constants: BattleConstants,
+  context: HitResolutionContext,
+): HitResolutionResult {
+  const traitContext = { holderTraits: attacker.traits, targetTraits: defender.traits };
+  const defenderContext = { holderTraits: defender.traits, targetTraits: attacker.traits };
+
+  const defense = resolveDefenseBlock(defender.activeBuffs, defenderContext, attacker.activeBuffs, traitContext);
+
+  const damageInput = resolveDamageInput(attacker, defender, constants, {
+    card: context.card,
+    npDamageMultiplier: context.npDamageMultiplier,
+    randomModifier: context.randomModifier,
+    isCrit: context.isCrit,
+    extraCardChainType: context.extraCardChainType,
+    isSuperEffective: context.isSuperEffective,
+    superEffectiveModifier: context.superEffectiveModifier,
+    isNP: context.isNP,
+    isBusterChain: context.isBusterChain,
+  });
+  const damage = defense.blocked ? 0 : calculateHitDamage(damageInput);
+  const isOverkill = damage > defenderHp;
+  const hpAfterDamage = defenderHp - damage;
+
+  const npGainInput = resolveAttackingNpGainInput(attacker, defender, constants, {
+    card: context.card,
+    offensiveNPRate: context.offensiveNPRate,
+    enemyServerMod: context.npEnemyServerMod,
+    isCrit: context.isCrit,
+    isOverkill,
+  });
+  const npGain = calculateAttackingNpGain(npGainInput);
+
+  const starDropInput = resolveStarDropInput(attacker, defender, constants, {
+    card: context.card,
+    baseStarRate: context.baseStarRate,
+    serverRate: context.starEnemyServerMod,
+    isCrit: context.isCrit,
+    isOverkill,
+  });
+  const starDropChance = calculateStarDropChance(starDropInput);
+
+  const guts = resolveGuts(hpAfterDamage, defenderMaxHp, defender.activeBuffs, defenderContext);
+  const defenderHpFinal = guts.triggered ? guts.hpAfter : Math.max(hpAfterDamage, 0);
+  const defeated = hpAfterDamage <= 0 && !guts.triggered;
+
+  return { defense, damage, npGain, starDropChance, isOverkill, hpAfterDamage, guts, defenderHpFinal, defeated };
+}

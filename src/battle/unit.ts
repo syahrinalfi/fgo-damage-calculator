@@ -4,9 +4,11 @@ import type { ActiveBuffInstance } from "../buffs/types.js";
 /**
  * One combatant's already-resolved static stats plus its currently-active buffs — the
  * shared shape both `resolveDamageInput` and the NP-gain/star-drop resolvers key off of.
- * This project does not model turn-by-turn buff application/expiry (research/05 §7's
- * three-axis duration model is still open) — `activeBuffs` is whatever the caller has
- * already decided is active for the hit being resolved.
+ * `activeBuffs` is whatever the caller has already decided is active for the hit being
+ * resolved; turn-by-turn buff application/expiry (research/05 §7's three-axis duration
+ * model, now confirmed) is a separate persistent-state concern layered on top of this —
+ * see `TrackedBuff`/`grantBuff`/`advanceTurnBuffs`/`consumeBuffUse` in `./buffLifecycle.js`
+ * — not something `BattleUnit` itself needs to track.
  */
 export interface BattleUnit {
   /** Total ATK for the hit being resolved (already includes fous/ascension/level). */
