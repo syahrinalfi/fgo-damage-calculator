@@ -6,7 +6,7 @@ import type { BattleConstants } from "../battle/gameConstants.js";
 import { FRONT_LINE_SERVANT_COUNT } from "../battle/cardDeck.js";
 import type { Wave } from "../quest/types.js";
 import { buildInitialBattleState, type PartyMemberSpec } from "./battleStateBuilder.js";
-import { enumerateCeAssignments, enumerateServantSubsets } from "./candidateGeneration.js";
+import { enumerateCeAssignments, enumeratePartyFormations } from "./candidateGeneration.js";
 import { buildCardOrderCandidates } from "./cardOrderCandidates.js";
 import { damageDealtAtSlot } from "./objectives.js";
 import { buildOrderChangeCandidates, type OrderChangeSwap } from "./orderChangeCandidates.js";
@@ -20,9 +20,9 @@ export interface ServantCandidate {
 }
 
 export interface QuestOptimizerOptions {
-  /** User-shortlisted pool (research/09 §4's "candidate servant subset, ≤6, user-shortlisted") — every `FRONT_LINE_SERVANT_COUNT`-sized combination of this is tried. */
+  /** User-shortlisted pool (research/09 §4's "candidate servant subset, ≤6, user-shortlisted") — every `FRONT_LINE_SERVANT_COUNT`-sized (plus up to `maxBenchCount` benched) combination of this is tried (`enumeratePartyFormations`, `./candidateGeneration.js`). */
   readonly shortlist: readonly ServantCandidate[];
-  /** Owned CE copies eligible to equip — every no-reuse assignment of this pool to the 3 front-line slots is tried (`enumerateCeAssignments`), including leaving a slot bare. */
+  /** Owned CE copies eligible to equip — every no-reuse assignment of this pool to every fielded slot (front-line plus any benched sub-members) is tried (`enumerateCeAssignments`), including leaving a slot bare. */
   readonly cePool: readonly EquippedCraftEssence[];
   readonly waves: readonly Wave[];
   readonly costBudget: number;
@@ -59,6 +59,17 @@ export interface QuestOptimizerOptions {
    * this option existed.
    */
   readonly resolveOrderChangeOptions?: (initialState: BattleState) => readonly OrderChangeSwap[];
+  /**
+   * Maximum benched sub-members to field alongside the exactly-`FRONT_LINE_SERVANT_COUNT`
+   * front-line servants (research/00 §4's "up to 3 sub-members") — every party size from
+   * `FRONT_LINE_SERVANT_COUNT` up to `FRONT_LINE_SERVANT_COUNT + maxBenchCount` is tried
+   * (`enumeratePartyFormations`, `./candidateGeneration.js`). Defaults to `0` — exactly the
+   * front-line-only search this project had before this option existed. A fielded bench slot
+   * still draws from `cePool` and counts toward `costBudget` the same as a front-line slot
+   * (research/09 §1's "the party actually fielded," not a front-line-only bookkeeping split)
+   * — meaningful once `resolveOrderChangeOptions` can swap a bench member in mid-turn.
+   */
+  readonly maxBenchCount?: number;
   /** Which of `initialState.enemies` the default `damageDealtAtSlot` objective targets and every combination's `playCard` `Action`s attack — defaults to `0` (the first/only enemy). */
   readonly targetEnemySlotIndex?: number;
   /** Overrides the default `damageDealtAtSlot(targetEnemySlotIndex)` objective. */
@@ -68,7 +79,7 @@ export interface QuestOptimizerOptions {
   readonly randomFn?: () => number;
 }
 
-/** One servant-subset × CE-assignment party candidate, together with its best found card-play-order line. */
+/** One party-formation × CE-assignment party candidate (front-line plus any benched sub-members), together with its best found card-play-order line. */
 export interface QuestOptimizerCandidate {
   readonly party: readonly PartyMemberSpec[];
   readonly initialState: BattleState;
@@ -93,31 +104,45 @@ export interface QuestOptimizerCandidate {
  * not worth simulating at all — filtered before `buildCardOrderCandidates` even runs) or the
  * quest's first wave has no enemies to target at all.
  *
- * **Scope, deliberately not attempted here**: only exactly-3-front-line parties (no bench/
- * sub-member axis — `FRONT_LINE_SERVANT_COUNT`, this project's only fully-modeled party
- * shape); and only a single turn's line per party (no multi-turn horizon — the ST Burst
- * Finder's own multi-turn specialization, §5, is a distinct future increment on top of this
- * same engine, not something this function's single-turn scoring loop attempts). All 5 of
- * research/09 §4's search-space axes are now searchable: servant subset/CE assignment always,
- * card-order always, skill-usage plan when `resolveSkillOptions` is supplied
- * (`./skillUsageCandidates.js`), and Order-Change-timing when `resolveOrderChangeOptions` is
- * supplied (`./orderChangeCandidates.js`) — both remain opt-in, so omitting either searches
- * exactly what the search covered before that option existed.
+ * **Scope, deliberately not attempted here**: only a single turn's line per party (no
+ * multi-turn horizon — the ST Burst Finder's own multi-turn specialization, §5, is a distinct
+ * future increment on top of this same engine, not something this function's single-turn
+ * scoring loop attempts). All 5 of research/09 §4's search-space axes are now searchable:
+ * servant subset/CE assignment always (now including the bench axis via
+ * `enumeratePartyFormations`, opt-in through `maxBenchCount`), card-order always, skill-usage
+ * plan when `resolveSkillOptions` is supplied (`./skillUsageCandidates.js`), and
+ * Order-Change-timing when `resolveOrderChangeOptions` is supplied
+ * (`./orderChangeCandidates.js`) — all 3 optional axes remain opt-in, so omitting any of them
+ * searches exactly what the search covered before that option existed.
  */
 export function optimizeQuest(options: QuestOptimizerOptions): readonly QuestOptimizerCandidate[] {
   const targetSlot = options.targetEnemySlotIndex ?? 0;
   const scoreFn = options.scoreFn ?? damageDealtAtSlot(targetSlot);
   const randomFn = options.randomFn ?? Math.random;
 
-  const subsets = enumerateServantSubsets(options.shortlist, FRONT_LINE_SERVANT_COUNT);
-  const ceAssignments = enumerateCeAssignments(options.cePool, FRONT_LINE_SERVANT_COUNT);
+  const formations = enumeratePartyFormations(options.shortlist, FRONT_LINE_SERVANT_COUNT, options.maxBenchCount ?? 0);
+
+  // `enumerateCeAssignments` only depends on the fielded slot *count*, not which specific
+  // servants fill it — many formations of the same total size (front-line + bench) share the
+  // same count, so this is cached per size rather than recomputed per formation.
+  const ceAssignmentsBySlotCount = new Map<number, readonly (readonly (EquippedCraftEssence | undefined)[])[]>();
+  const ceAssignmentsForSlotCount = (slotCount: number): readonly (readonly (EquippedCraftEssence | undefined)[])[] => {
+    const cached = ceAssignmentsBySlotCount.get(slotCount);
+    if (cached !== undefined) return cached;
+    const computed = enumerateCeAssignments(options.cePool, slotCount);
+    ceAssignmentsBySlotCount.set(slotCount, computed);
+    return computed;
+  };
 
   const results: QuestOptimizerCandidate[] = [];
-  for (const subset of subsets) {
+  for (const formation of formations) {
+    const fielded = [...formation.frontLine, ...formation.bench];
+    const ceAssignments = ceAssignmentsForSlotCount(fielded.length);
     for (const ceAssignment of ceAssignments) {
-      const party: PartyMemberSpec[] = subset.map((candidate, index) => {
+      const party: PartyMemberSpec[] = fielded.map((member, index) => {
         const equippedCe = ceAssignment[index];
-        const base: PartyMemberSpec = { niceServant: candidate.niceServant, build: candidate.build, isFrontLine: true };
+        const isFrontLine = index < formation.frontLine.length;
+        const base: PartyMemberSpec = { niceServant: member.niceServant, build: member.build, isFrontLine };
         return equippedCe === undefined ? base : { ...base, equippedCe };
       });
 

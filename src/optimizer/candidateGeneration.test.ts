@@ -3,6 +3,7 @@ import {
   enumerateCeAssignments,
   enumerateOrderChangeTimings,
   enumerateOrderedSelections,
+  enumeratePartyFormations,
   enumerateServantSubsets,
   enumerateSkillUsageSubsets,
 } from "./candidateGeneration.js";
@@ -131,5 +132,47 @@ describe("enumerateOrderChangeTimings", () => {
 
   it("returns 1 + 2n choices for n swap options", () => {
     expect(enumerateOrderChangeTimings(["a", "b", "c"])).toHaveLength(7);
+  });
+});
+
+describe("enumeratePartyFormations", () => {
+  it("degenerates to front-line-only enumerateServantSubsets when maxBenchCount is 0", () => {
+    const result = enumeratePartyFormations(["a", "b", "c", "d"], 3, 0);
+    expect(result).toEqual([
+      { frontLine: ["a", "b", "c"], bench: [] },
+      { frontLine: ["a", "b", "d"], bench: [] },
+      { frontLine: ["a", "c", "d"], bench: [] },
+      { frontLine: ["b", "c", "d"], bench: [] },
+    ]);
+  });
+
+  it("includes every party size from frontLineCount up to frontLineCount + maxBenchCount", () => {
+    const result = enumeratePartyFormations(["a", "b", "c", "d"], 3, 1);
+    // size-3 formations (bench empty) + size-4 formations (1 benched)
+    const sizes = result.map((f) => f.frontLine.length + f.bench.length);
+    expect(sizes).toContain(3);
+    expect(sizes).toContain(4);
+    expect(sizes.every((size) => size <= 4)).toBe(true);
+  });
+
+  it("caps the max party size at maxBenchCount even with a larger shortlist", () => {
+    const result = enumeratePartyFormations(["a", "b", "c", "d", "e", "f"], 3, 1);
+    expect(result.every((f) => f.frontLine.length + f.bench.length <= 4)).toBe(true);
+  });
+
+  it("caps the max party size at shortlist.length when it is smaller than frontLineCount + maxBenchCount", () => {
+    const result = enumeratePartyFormations(["a", "b", "c"], 3, 3);
+    expect(result).toEqual([{ frontLine: ["a", "b", "c"], bench: [] }]);
+  });
+
+  it("every bench member is exactly the party subset minus the chosen front line", () => {
+    const result = enumeratePartyFormations(["a", "b", "c", "d"], 3, 1);
+    const fourMember = result.find((f) => f.frontLine.length + f.bench.length === 4 && f.frontLine.includes("d") === false);
+    expect(fourMember).toBeDefined();
+    expect(new Set([...(fourMember?.frontLine ?? []), ...(fourMember?.bench ?? [])])).toEqual(new Set(["a", "b", "c", "d"]));
+  });
+
+  it("returns no formations when the shortlist is smaller than frontLineCount", () => {
+    expect(enumeratePartyFormations(["a", "b"], 3, 3)).toEqual([]);
   });
 });

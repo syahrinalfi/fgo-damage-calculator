@@ -243,4 +243,60 @@ describe("optimizeQuest", () => {
       withoutOption.map((r) => ({ score: r.best.score, actions: r.best.actions })),
     );
   });
+
+  it("defaults maxBenchCount to 0, producing exactly the same results as before the option existed", () => {
+    const options = {
+      shortlist: [candidate(1), candidate(2), candidate(3), candidate(4)],
+      cePool: [],
+      waves: [wave()],
+      costBudget: 1000,
+      constants: CONSTANTS,
+      resolveHitContext,
+      randomFn: () => 0,
+    } as const;
+    const withoutOption = optimizeQuest(options);
+    const withExplicitZero = optimizeQuest({ ...options, maxBenchCount: 0 });
+    expect(withExplicitZero).toEqual(withoutOption);
+    // C(4,3) = 4 front-line-only combinations, no bench.
+    expect(withoutOption).toHaveLength(4);
+    expect(withoutOption.every((r) => r.party.every((m) => m.isFrontLine))).toBe(true);
+  });
+
+  it("fields benched sub-members when maxBenchCount > 0, each still tagged isFrontLine: false", () => {
+    const results = optimizeQuest({
+      shortlist: [candidate(1), candidate(2), candidate(3), candidate(4)],
+      cePool: [],
+      waves: [wave()],
+      costBudget: 1000,
+      constants: CONSTANTS,
+      resolveHitContext,
+      maxBenchCount: 1,
+      randomFn: () => 0,
+    });
+    // C(4,3) size-3 (no bench) + C(4,4)*C(4,3) size-4 (1 benched) = 4 + 4 = 8.
+    expect(results).toHaveLength(8);
+    const withBench = results.filter((r) => r.party.length === 4);
+    expect(withBench).toHaveLength(4);
+    for (const result of withBench) {
+      const benched = result.party.filter((m) => !m.isFrontLine);
+      expect(benched).toHaveLength(1);
+      expect(result.party.filter((m) => m.isFrontLine)).toHaveLength(3);
+    }
+  });
+
+  it("assigns CEs to benched slots too, not just front-line", () => {
+    const ce: CraftEssence.CraftEssence = { atkGrowth: [0, 0, 300], hpGrowth: [0, 0, 150], cost: 12 } as unknown as CraftEssence.CraftEssence;
+    const results = optimizeQuest({
+      shortlist: [candidate(1), candidate(2), candidate(3), candidate(4)],
+      cePool: [{ data: ce, level: 3 }],
+      waves: [wave()],
+      costBudget: 1000,
+      constants: CONSTANTS,
+      resolveHitContext,
+      maxBenchCount: 1,
+      randomFn: () => 0,
+    });
+    const ceOnBench = results.some((r) => r.party.some((m) => !m.isFrontLine && m.equippedCe !== undefined));
+    expect(ceOnBench).toBe(true);
+  });
 });

@@ -7,8 +7,9 @@ export {
   enumerateOrderedSelections,
   enumerateSkillUsageSubsets,
   enumerateOrderChangeTimings,
+  enumeratePartyFormations,
 } from "./candidateGeneration.js";
-export type { OrderChangeChoice } from "./candidateGeneration.js";
+export type { OrderChangeChoice, PartyFormation } from "./candidateGeneration.js";
 export { buildCardOrderCandidates } from "./cardOrderCandidates.js";
 export type { SkillActivation } from "./skillUsageCandidates.js";
 export { buildSkillAndCardOrderCandidates } from "./skillUsageCandidates.js";

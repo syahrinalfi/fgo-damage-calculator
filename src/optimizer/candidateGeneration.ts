@@ -173,3 +173,42 @@ export function enumerateOrderChangeTimings<T>(swapOptions: readonly T[]): reado
   }
   return results;
 }
+
+/** One party formation: which shortlist members are front-line vs. benched sub-members (research/00 §4). */
+export interface PartyFormation<T> {
+  readonly frontLine: readonly T[];
+  readonly bench: readonly T[];
+}
+
+/**
+ * Every way to form a party from `shortlist` with exactly `frontLineCount` front-line
+ * servants plus 0 to `maxBenchCount` benched sub-members (research/00 §4's "up to 3
+ * sub-members") — research/09 §4's "candidate servant subset, ≤6, user-shortlisted" axis in
+ * full, superseding a caller re-calling `enumerateServantSubsets` itself per party size: for
+ * every total party size from `frontLineCount` to `min(shortlist.length, frontLineCount +
+ * maxBenchCount)`, every `enumerateServantSubsets(shortlist, partySize)` combination is
+ * further split into every way to choose which `frontLineCount` of that combination are
+ * front-line, the remainder becoming bench. `maxBenchCount: 0` degenerates to exactly
+ * `enumerateServantSubsets(shortlist, frontLineCount)` with an always-empty `bench` — this
+ * project's own search behavior before this function existed.
+ *
+ * A benched member still needs its own CE assignment (`enumerateCeAssignments`, sized to
+ * `frontLine.length + bench.length` fielded slots, not just `frontLineCount`) — a benched
+ * servant's stats matter the instant an Order Change (`enumerateOrderChangeTimings` above)
+ * swaps it in mid-turn, so its CE can't be skipped as "doesn't matter while benched" the way
+ * its per-turn state advancement is (research/07 §4).
+ */
+export function enumeratePartyFormations<T>(shortlist: readonly T[], frontLineCount: number, maxBenchCount: number): readonly PartyFormation<T>[] {
+  const results: PartyFormation<T>[] = [];
+  const maxPartySize = Math.min(shortlist.length, frontLineCount + maxBenchCount);
+  for (let partySize = frontLineCount; partySize <= maxPartySize; partySize++) {
+    for (const partySubset of enumerateServantSubsets(shortlist, partySize)) {
+      for (const frontLine of enumerateServantSubsets(partySubset, frontLineCount)) {
+        const frontLineSet = new Set<T>(frontLine);
+        const bench = partySubset.filter((member) => !frontLineSet.has(member));
+        results.push({ frontLine, bench });
+      }
+    }
+  }
+  return results;
+}
