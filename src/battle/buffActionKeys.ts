@@ -34,6 +34,16 @@ export const BUFF_ACTION_KEYS = {
   COMMAND_STAR_ATK: "commandStarAtk",
   COMMAND_STAR_DEF: "commandStarDef",
   CRITICAL_POINT: "criticalPoint",
+  /**
+   * `upResistInstantdeath` only (live `NiceBuffList.ActionList.json` fetch this session:
+   * `plusTypes: ["upResistInstantdeath"], minusTypes: []`) — the target-side resistance
+   * `instantDeath` (research/08 §2) rolls against. A separate `nonresistInstantdeath`
+   * action (`upNonresistInstantdeath`) also exists in the live data but isn't modeled: it
+   * reads as an attacker-side "ignore target resistance" buff, and no source pins down how
+   * it combines with `resistInstantdeath` (subtract? floor at 0? which side's trait gates
+   * apply to which?) — left as a flagged-open gap rather than guessed.
+   */
+  RESIST_INSTANT_DEATH: "resistInstantdeath",
 } as const;
 
 /**

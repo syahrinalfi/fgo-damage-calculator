@@ -87,6 +87,7 @@ const BUFF_CONSTANTS = {
   [BUFF_ACTION_KEYS.COMMAND_STAR_ATK]: percentAction("upCommandstar", "downCommandstar"),
   [BUFF_ACTION_KEYS.COMMAND_STAR_DEF]: percentAction("upDefenceCommandstar", "downDefenceCommandstar"),
   [BUFF_ACTION_KEYS.CRITICAL_POINT]: percentAction("upCriticalpoint", "downCriticalpoint", 1000),
+  [BUFF_ACTION_KEYS.RESIST_INSTANT_DEATH]: percentAction("upResistInstantdeath", "__unused_downResistInstantdeath"),
 } as unknown as Buff.BuffConstantMap;
 
 const CARD_CONSTANTS = {
@@ -774,6 +775,19 @@ describe("resolveAction — castNp", () => {
     );
     expect(result.enemies.find((e) => e.npcId === 9001)?.currentHp).toBe(0);
     expect(result.enemies.find((e) => e.npcId === 9002)?.currentHp).toBe(0);
+  });
+
+  it("instantDeath folds the target's resistInstantdeath buff into the roll (research/08 §2)", () => {
+    const withEffects: Action = { ...action, effects: [instantDeathEffect({ deathRate: 600, targetType: "enemyOne" })] };
+    const resistedEnemy = enemy({ npcId: 9001, activeBuffs: [trackedBuff({ type: "upResistInstantdeath" as Buff.BuffType, amount: 500 })] });
+
+    // Without the resist buff, a 0.4 roll beats the raw 60% chance (0.4 < 0.6) and the enemy dies.
+    const withoutResist = resolveAction(state({ enemies: [enemy({ npcId: 9001 })] }), withEffects, CONSTANTS, () => 0.4);
+    expect(withoutResist.enemies.find((e) => e.npcId === 9001)?.currentHp).toBe(0);
+
+    // A +50% resist buff halves the effective chance to 30%; the same 0.4 roll now survives.
+    const withResist = resolveAction(state({ enemies: [resistedEnemy] }), withEffects, CONSTANTS, () => 0.4);
+    expect(withResist.enemies.find((e) => e.npcId === 9001)?.currentHp).toBeGreaterThan(0);
   });
 
   it("omitting effects entirely resolves the same as an empty array (defaults to [])", () => {

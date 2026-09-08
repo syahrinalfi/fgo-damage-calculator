@@ -307,16 +307,19 @@ export interface LossHpPercentEffect {
  * overcharge.js`, the same convention this project already uses for NP damage's own OC-stage
  * selection) — `1000` = 100%, rolled once per targeted enemy against `randomFn()`.
  *
- * **Two mechanics this effect deliberately does NOT model, both flagged rather than guessed
- * at**: (1) **death resistance/immunity** — research/08-enemy-mechanics.md §2 already
- * documents the actual mechanism (`QuestEnemy.deathRate`/`NiceServant.instantDeathChance`, a
- * per-mille "susceptibility" multiplier, plus `upResistInstantdeath`/`upNonresistInstantdeath`
- * buff-types stacking on top the same additive way as any other numeric buff) — this
- * `deathRate` field is a *different* number from `InstantDeathEffect.deathRate` above (that
- * one is the skill/NP's own base chance; the enemy-side one is a separate multiplier this
- * effect doesn't fold in), so every roll here is still against the raw `deathRate` alone,
- * with no target-side reduction applied — a real, sourced gap now, not an unsourced one; (2)
- * **Guts interaction** — `resolveHit`'s card/NP damage path already wires `resolveGuts`
+ * **Resistance is folded in at apply time, not modeled in this interface**: `turnLoop.ts`'s
+ * `applyInstantDeathEffect` reduces `deathRate` by the target's `resistInstantdeath` buff
+ * total (`BUFF_ACTION_KEYS.RESIST_INSTANT_DEATH`, research/08 §2) before rolling — this
+ * field itself stays the skill/NP's own raw, unreduced base chance. `QuestEnemy.deathRate`/
+ * `NiceServant.instantDeathChance` (a separate per-mille "base susceptibility" the API
+ * exposes per enemy/servant record, distinct from both this field and the resist buff) is
+ * still NOT folded in — no source pins down how a third multiplier combines with the other
+ * two, so it's left as a flagged-open gap. Likewise `nonresistInstantdeath` (the attacker-
+ * side "ignore target resistance" counterpart buff) is not modeled — see
+ * `BUFF_ACTION_KEYS.RESIST_INSTANT_DEATH`'s doc comment (`./buffActionKeys.ts`).
+ *
+ * **One mechanic this effect deliberately does NOT model**: **Guts interaction** —
+ * `resolveHit`'s card/NP damage path already wires `resolveGuts`
  * (`../buffs/guts.js`) for ordinary lethal damage, but this effect bypasses that entirely
  * (a plain `currentHp = 0` on success, not routed through `resolveGuts`) since `resolveGuts`
  * needs a `BuffTraitContext` (attacker/defender trait sets) this effect's flat, caller-

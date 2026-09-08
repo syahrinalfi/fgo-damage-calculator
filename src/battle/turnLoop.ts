@@ -10,12 +10,14 @@ import {
 import { advanceTurnBuffs, consumeBuffUse, grantBuff, removeBuffsByTrait } from "./buffLifecycle.js";
 import type { Action, CommandSealEffect } from "./action.js";
 import { enemyToBattleUnit, servantToBattleUnit, type BattleState, type EnemyInstance, type ServantInstance } from "./battleState.js";
+import { BUFF_ACTION_KEYS } from "./buffActionKeys.js";
 import { buildCombinedCardDeck } from "./cardDeck.js";
 import { drawCardBagHand } from "./cardBag.js";
 import { allocateCritStars, critChanceForStars, rollIsCrit } from "./critStarLottery.js";
 import { classifyChain, extraCardChainTypeFrom, isArtsChainFrom, isBusterChainFrom, isMightyChainFrom, isQuickChainFrom, type ChainClassification } from "./chainDetection.js";
 import type { BattleConstants } from "./gameConstants.js";
 import { resolveHit, type HitResolutionContext } from "./hitResolution.js";
+import { resolveUnitActionModifier } from "./modifiers.js";
 import type {
   BuffGrantEffect,
   DelayNpTurnEffect,
@@ -417,7 +419,7 @@ function resolveCastNp(
   nextState = { ...nextState, servants, consecutiveNpChainCount: nextState.consecutiveNpChainCount + 1 };
 
   for (const effect of action.effects ?? []) {
-    nextState = applySkillEffect(nextState, servant.servantId, effect, undefined, action.targetNpcId, randomFn);
+    nextState = applySkillEffect(nextState, servant.servantId, effect, undefined, action.targetNpcId, constants, randomFn);
   }
 
   return nextState;
@@ -703,8 +705,34 @@ function applyRemoveBuffEffect(
  * to `0` on success (no `resolveGuts` check — see the effect's own doc comment for why).
  * Enemy-only, matching `RemoveBuffEffect`'s `enemyOne`/`enemyAll` handling above.
  */
-function applyInstantDeathEffect(state: BattleState, effect: InstantDeathEffect, targetNpcId: number | undefined, randomFn: () => number): BattleState {
-  const kills = (enemy: EnemyInstance): EnemyInstance => (randomFn() < effect.deathRate / 1000 ? { ...enemy, currentHp: 0 } : enemy);
+/**
+ * Folds the target's `resistInstantdeath` buff total (`BUFF_ACTION_KEYS.RESIST_INSTANT_DEATH`,
+ * research/08 §2) into `effect.deathRate` before rolling — a target-side reduction of the
+ * already-OC-resolved death chance, clamped so a large resist buff can zero the roll out but
+ * never flip it negative. `nonresistInstantdeath` (the attacker-side "ignore resistance"
+ * counterpart) is deliberately not folded in here — see `BUFF_ACTION_KEYS.RESIST_INSTANT_DEATH`'s
+ * doc comment for why.
+ */
+function applyInstantDeathEffect(
+  state: BattleState,
+  effect: InstantDeathEffect,
+  targetNpcId: number | undefined,
+  actingServantId: number | undefined,
+  constants: BattleConstants,
+  randomFn: () => number,
+): BattleState {
+  const attackerTraits = actingServantId === undefined ? new Set<number>() : servantToBattleUnit(findServant(state, actingServantId)).traits;
+
+  const kills = (enemy: EnemyInstance): EnemyInstance => {
+    const resist = resolveUnitActionModifier(
+      constants.buff,
+      BUFF_ACTION_KEYS.RESIST_INSTANT_DEATH,
+      enemy.activeBuffs,
+      { holderTraits: enemyToBattleUnit(enemy).traits, targetTraits: attackerTraits },
+    );
+    const finalChance = Math.max(0, (effect.deathRate / 1000) * (1 - resist));
+    return randomFn() < finalChance ? { ...enemy, currentHp: 0 } : enemy;
+  };
 
   if (effect.targetType === "enemyOne") {
     if (targetNpcId === undefined) {
@@ -737,6 +765,7 @@ function applySkillEffect(
   effect: SkillEffect,
   targetServantId: number | undefined,
   targetNpcId: number | undefined,
+  constants: BattleConstants,
   randomFn: () => number,
 ): BattleState {
   switch (effect.kind) {
@@ -765,7 +794,7 @@ function applySkillEffect(
     case "lossHpPercent":
       return { ...state, servants: applyLossHpPercentEffect(state.servants, actingServantId, effect, targetServantId) };
     case "instantDeath":
-      return applyInstantDeathEffect(state, effect, targetNpcId, randomFn);
+      return applyInstantDeathEffect(state, effect, targetNpcId, actingServantId, constants, randomFn);
     case "forceInstantDeath":
       return { ...state, servants: applyForceInstantDeathEffect(state.servants, actingServantId, effect, targetServantId) };
     case "delayNpTurn":
@@ -784,7 +813,7 @@ function applySkillEffect(
  * Throws if the targeted skill slot is still on cooldown, rather than silently allowing a
  * skill to be used twice before it's ready.
  */
-function resolveUseSkill(state: BattleState, action: Extract<Action, { type: "useSkill" }>, randomFn: () => number): BattleState {
+function resolveUseSkill(state: BattleState, action: Extract<Action, { type: "useSkill" }>, constants: BattleConstants, randomFn: () => number): BattleState {
   const actingServant = findServantAny(state, action.servantId);
   const cooldownIndex = action.skillSlot - 1;
   // `skillSlot` is a `1 | 2 | 3` literal, so `cooldownIndex` is always in-bounds for the 3-tuple — `noUncheckedIndexedAccess` can't see that through a variable index.
@@ -795,7 +824,7 @@ function resolveUseSkill(state: BattleState, action: Extract<Action, { type: "us
 
   let nextState = state;
   for (const effect of action.effects) {
-    nextState = applySkillEffect(nextState, actingServant.servantId, effect, action.targetServantId, action.targetNpcId, randomFn);
+    nextState = applySkillEffect(nextState, actingServant.servantId, effect, action.targetServantId, action.targetNpcId, constants, randomFn);
   }
   const servants = nextState.servants.map((s): ServantInstance => {
     if (s.servantId !== actingServant.servantId) {
@@ -816,7 +845,12 @@ function resolveUseSkill(state: BattleState, action: Extract<Action, { type: "us
  * targeting throws here (via `applySkillEffect`'s shared checks) rather than silently doing
  * nothing.
  */
-function resolveUseMysticCodeSkill(state: BattleState, action: Extract<Action, { type: "useMysticCodeSkill" }>, randomFn: () => number): BattleState {
+function resolveUseMysticCodeSkill(
+  state: BattleState,
+  action: Extract<Action, { type: "useMysticCodeSkill" }>,
+  constants: BattleConstants,
+  randomFn: () => number,
+): BattleState {
   const cooldownIndex = action.slot - 1;
   // `slot` is a `1 | 2 | 3` literal, so `cooldownIndex` is always in-bounds for the 3-tuple — `noUncheckedIndexedAccess` can't see that through a variable index.
   const remainingCooldown = state.mysticCodeSkillCooldowns[cooldownIndex] as number;
@@ -826,7 +860,7 @@ function resolveUseMysticCodeSkill(state: BattleState, action: Extract<Action, {
 
   let nextState = state;
   for (const effect of action.effects) {
-    nextState = applySkillEffect(nextState, undefined, effect, action.targetServantId, action.targetNpcId, randomFn);
+    nextState = applySkillEffect(nextState, undefined, effect, action.targetServantId, action.targetNpcId, constants, randomFn);
   }
 
   const mysticCodeSkillCooldowns = [...state.mysticCodeSkillCooldowns] as [number, number, number];
@@ -914,9 +948,9 @@ export function resolveAction(
     case "useCommandSeal":
       return resolveUseCommandSeal(state, action);
     case "useSkill":
-      return resolveUseSkill(state, action, randomFn);
+      return resolveUseSkill(state, action, constants, randomFn);
     case "useMysticCodeSkill":
-      return resolveUseMysticCodeSkill(state, action, randomFn);
+      return resolveUseMysticCodeSkill(state, action, constants, randomFn);
     case "orderChange":
       return resolveOrderChange(state, action);
     default: {
