@@ -4,6 +4,7 @@ import {
   EXTRA_ATTACK_RATE_GRAND,
   EXTRA_ATTACK_RATE_SINGLE,
   CHAINBONUS_BUSTER_RATE,
+  CHAINBONUS_MIGHTY_ATK_RATE,
 } from "./constants.js";
 
 /**
@@ -74,6 +75,14 @@ export interface DamageInput {
   selfDmgCutAdd: number;
   /** Term 17 — whether this hit completes a 3-Buster chain (adds `servantAtk * 0.20`). */
   isBusterChain: boolean;
+  /**
+   * Term 17 — whether this hit is one of a Mighty Chain's 3 cards (one of each Buster/
+   * Arts/Quick color, research/06 §7.4 — adds `servantAtk * CHAINBONUS_MIGHTY_ATK_RATE`,
+   * the same flat-additive-to-ATK shape as `isBusterChain`, confirmed by the project owner
+   * against their own gameplay knowledge). Mutually exclusive with `isBusterChain` — a
+   * chain is never both uniformly Buster and one-of-each-color at once.
+   */
+  isMightyChain: boolean;
 }
 
 function extraCardModifier(type: ExtraCardChainType): number {
@@ -107,6 +116,7 @@ export function calculateHitDamage(input: DamageInput): number {
   );
   const superEffectiveTerm = 1 + (input.superEffectiveModifier - 1) * (input.isSuperEffective ? 1 : 0);
   const busterChainMod = input.isBusterChain ? CHAINBONUS_BUSTER_RATE : 0;
+  const mightyChainMod = input.isMightyChain ? CHAINBONUS_MIGHTY_ATK_RATE : 0;
 
   const damage =
     input.servantAtk *
@@ -125,7 +135,8 @@ export function calculateHitDamage(input: DamageInput): number {
       superEffectiveTerm +
     input.dmgPlusAdd +
     input.selfDmgCutAdd +
-    input.servantAtk * busterChainMod;
+    input.servantAtk * busterChainMod +
+    input.servantAtk * mightyChainMod;
 
   return Math.floor(Math.max(damage, 0));
 }

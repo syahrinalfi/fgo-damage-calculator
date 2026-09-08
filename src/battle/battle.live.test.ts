@@ -41,6 +41,7 @@ describe("battle module (live Atlas Academy API)", () => {
       superEffectiveModifier: 1,
       isNP: false,
       isBusterChain: false,
+      isMightyChain: false,
     };
 
     const input = resolveDamageInput(attacker, defender, constants, context);

@@ -1,5 +1,6 @@
 import type { Card } from "@atlasacademy/api-connector";
 import type { StarDropInput } from "../engine/starDrop.js";
+import { CHAINBONUS_MIGHTY_STARRATE } from "../engine/constants.js";
 import { BUFF_ACTION_KEYS } from "./buffActionKeys.js";
 import { resolveCardTerm } from "./cardTerm.js";
 import type { BattleConstants } from "./gameConstants.js";
@@ -22,6 +23,8 @@ export interface StarDropResolutionContext {
   serverRate: number;
   isCrit: boolean;
   isOverkill: boolean;
+  /** Whether this hit is one of a Mighty Chain's 3 cards (research/06 §7.4, `CHAINBONUS_MIGHTY_STARRATE`) — added to `starDropMod` alongside any buff-sourced star-drop-up. */
+  isMightyChain: boolean;
 }
 
 /**
@@ -55,12 +58,9 @@ export function resolveStarDropInput(
     cardStarValue: cardTerm.criticalAdjust,
     cardMod,
     serverRate: context.serverRate,
-    starDropMod: resolveUnitActionModifier(
-      constants.buff,
-      BUFF_ACTION_KEYS.CRITICAL_POINT,
-      attacker.activeBuffs,
-      traitContext,
-    ),
+    starDropMod:
+      resolveUnitActionModifier(constants.buff, BUFF_ACTION_KEYS.CRITICAL_POINT, attacker.activeBuffs, traitContext) +
+      (context.isMightyChain ? CHAINBONUS_MIGHTY_STARRATE : 0),
     enemyStarDropMod: resolveUnitActionModifier(
       constants.buff,
       BUFF_ACTION_KEYS.CRITICAL_POINT,

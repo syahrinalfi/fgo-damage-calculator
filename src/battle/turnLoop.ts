@@ -1,13 +1,19 @@
 import { Card, type Buff } from "@atlasacademy/api-connector";
 import type { NpLevel } from "../account/types.js";
-import { CHAINBONUS_ARTS_RATE, CHAINBONUS_QUICK_CRIT_RATE, CHAINBONUS_QUICK_STARS, FULL_TD_POINT } from "../engine/constants.js";
+import {
+  CHAINBONUS_ARTS_RATE,
+  CHAINBONUS_MIGHTY_CRIT_RATE,
+  CHAINBONUS_QUICK_CRIT_RATE,
+  CHAINBONUS_QUICK_STARS,
+  FULL_TD_POINT,
+} from "../engine/constants.js";
 import { advanceTurnBuffs, consumeBuffUse, grantBuff, removeBuffsByTrait } from "./buffLifecycle.js";
 import type { Action, CommandSealEffect } from "./action.js";
 import { enemyToBattleUnit, servantToBattleUnit, type BattleState, type EnemyInstance, type ServantInstance } from "./battleState.js";
 import { buildCombinedCardDeck } from "./cardDeck.js";
 import { drawCardBagHand } from "./cardBag.js";
 import { allocateCritStars, critChanceForStars, rollIsCrit } from "./critStarLottery.js";
-import { classifyChain, extraCardChainTypeFrom, isArtsChainFrom, isBusterChainFrom, isQuickChainFrom, type ChainClassification } from "./chainDetection.js";
+import { classifyChain, extraCardChainTypeFrom, isArtsChainFrom, isBusterChainFrom, isMightyChainFrom, isQuickChainFrom, type ChainClassification } from "./chainDetection.js";
 import type { BattleConstants } from "./gameConstants.js";
 import { resolveHit, type HitResolutionContext } from "./hitResolution.js";
 import type { BuffGrantEffect, GainHpEffect, GainHpPercentEffect, GainNpEffect, RemoveBuffEffect, RevivalEffect, SkillEffect, SkillTargetType } from "./skillEffect.js";
@@ -200,11 +206,12 @@ function applyHit(
  * silently accept wrong-looking input" convention `buildCombinedCardDeck`/`drawCardBagHand`
  * already use.
  *
- * `HitResolutionContext.isCrit`/`isBusterChain`/`extraCardChainType` are derived here rather
- * than caller-supplied (research/09 §7's "next increment", now built): `isCrit` from this
- * hand slot's `state.handCardStars` allocation (`critChanceForStars`/`rollIsCrit`,
- * `./critStarLottery.js`), the other two from classifying `action.chainCards`
- * (`classifyChain`/`isBusterChainFrom`/`extraCardChainTypeFrom`, `./chainDetection.js`).
+ * `HitResolutionContext.isCrit`/`isBusterChain`/`isMightyChain`/`extraCardChainType` are
+ * derived here rather than caller-supplied (research/09 §7's "next increment", now built):
+ * `isCrit` from this hand slot's `state.handCardStars` allocation plus any
+ * `state.activeCritChanceBonus` (`critChanceForStars`/`rollIsCrit`, `./critStarLottery.js`),
+ * the other three from classifying `action.chainCards` (`classifyChain`/`isBusterChainFrom`/
+ * `isMightyChainFrom`/`extraCardChainTypeFrom`, `./chainDetection.js`).
  *
  * Removes the played card from the hand (played cards aren't returned to the bag — the bag
  * only tracks not-yet-*dealt* cards, research/03 §6.5) and resets `consecutiveNpChainCount`
@@ -250,6 +257,7 @@ function resolvePlayCard(
     ...action.context,
     isCrit,
     isBusterChain: isBusterChainFrom(classification),
+    isMightyChain: isMightyChainFrom(classification),
     extraCardChainType: extraCardChainTypeFrom(classification),
     chainLeadCardType,
   };
@@ -290,6 +298,15 @@ function resolvePlayCard(
  * co-occur with, the `isQuickChainFrom` branch (e.g. a uniform Quick-Quick-Quick chain gets
  * both the stars-next-turn bonus and this one). Adds to `state.critChanceBonusCarried`, not
  * `activeCritChanceBonus` — see that field's doc comment on `BattleState`.
+ *
+ * **Mighty Chain** (`CHAINBONUS_MIGHTY_CRIT_RATE`, `isMightyChainFrom`): a one-of-each-color
+ * (QAB) chain's own +20% crit chance (research/06 §7.4), also carried via
+ * `critChanceBonusCarried`. Explicitly additive with the Quick-lead branch above, not
+ * mutually exclusive — research/06 §7.4 notes the two "can stack if the chain also happens
+ * to start with Quick." Mighty Chain's other two bonuses (ATK +50%, applied per-hit via
+ * `DamageInput.isMightyChain` instead of here; NP Gain Up / Critical Star Drop Rate Up,
+ * unmodeled — no confirmed numeric value in any source checked, research/06 §7.5) are not
+ * this function's concern.
  */
 function applyChainCompletionBonus(
   state: BattleState,
@@ -311,6 +328,11 @@ function applyChainCompletionBonus(
   if ((chainCards[0] as (typeof chainCards)[number]).type === Card.QUICK) {
     nextState = { ...nextState, critChanceBonusCarried: nextState.critChanceBonusCarried + CHAINBONUS_QUICK_CRIT_RATE };
   }
+  if (isMightyChainFrom(classification)) {
+    // research/06 §7.4: Mighty Chain's own +20% crit chance is separate from, and stacks
+    // with, the Quick-lead bonus above if the Mighty Chain also happens to start with Quick.
+    nextState = { ...nextState, critChanceBonusCarried: nextState.critChanceBonusCarried + CHAINBONUS_MIGHTY_CRIT_RATE };
+  }
   return nextState;
 }
 
@@ -329,7 +351,8 @@ function applyChainCompletionBonus(
  * "keep the remainder" carryover. This overrides whatever gauge `applyHit` just added from
  * this same NP's own hits (irrelevant for the caster, since it's zeroed immediately after).
  *
- * `isCrit`/`isBusterChain`/`extraCardChainType` are hardcoded `false`/`false`/`"none"`, and
+ * `isCrit`/`isBusterChain`/`isMightyChain`/`extraCardChainType` are hardcoded
+ * `false`/`false`/`false`/`"none"`, and
  * `chainLeadCardType` is set to this NP's own `context.card.type` (a deliberate no-op — an
  * NP's own `NiceCard.json` entry is itself an all-zero stub, so this lookup always yields a
  * zero `firstCardBonus` regardless), rather than derived from the crit-star lottery/chain
@@ -348,6 +371,7 @@ function resolveCastNp(state: BattleState, action: Extract<Action, { type: "cast
     ...action.context,
     isCrit: false,
     isBusterChain: false,
+    isMightyChain: false,
     extraCardChainType: "none",
     chainLeadCardType: action.context.card.type,
   };

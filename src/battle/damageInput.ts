@@ -34,6 +34,8 @@ export interface DamageResolutionContext {
   superEffectiveModifier: number;
   isNP: boolean;
   isBusterChain: boolean;
+  /** Whether this hit is one of a Mighty Chain's 3 cards (research/06 §7.4, `CHAINBONUS_MIGHTY_ATK_RATE`) — see `DamageInput.isMightyChain`. */
+  isMightyChain: boolean;
 }
 
 /**
@@ -124,5 +126,6 @@ export function resolveDamageInput(
       defenderContext,
     ),
     isBusterChain: context.isBusterChain,
+    isMightyChain: context.isMightyChain,
   };
 }

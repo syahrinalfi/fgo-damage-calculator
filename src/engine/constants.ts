@@ -65,6 +65,62 @@ export const CHAINBONUS_QUICK_STARS = 20;
 export const CHAINBONUS_QUICK_CRIT_RATE = 0.2;
 
 /**
+ * Mighty Chain's ATK bonus (research/06 §7.4: "ATK +50%" for all 3 played cards of a
+ * one-of-each-color QAB chain, official/primary for the mechanic's existence, 2022-07-31
+ * 7th-Anniversary battle-system overhaul) — modeled as the same flat-additive-to-`servantAtk`
+ * damage-formula shape as `CHAINBONUS_BUSTER_RATE`, rather than a multiplicative ATK-up buff.
+ * Research/06 §7.4 itself only states "ATK +50%" without specifying the mechanism; the
+ * project owner confirmed via their own gameplay knowledge that it behaves the same way as
+ * the flat first-card-bonus/Buster-chain shape (this project's memory notes gameplay
+ * recollections as authoritative, cross-checked where possible against sources — see
+ * `src/battle/chainDetection.ts`'s `isMightyChainFrom` and `src/engine/damage.ts`'s
+ * `isMightyChain` for where this is applied). See `CHAINBONUS_MIGHTY_CRIT_RATE`/
+ * `CHAINBONUS_MIGHTY_NPGAIN_RATE`/`CHAINBONUS_MIGHTY_STARRATE` below for Mighty Chain's
+ * other 3 bonuses — all 4 are now modeled.
+ */
+export const CHAINBONUS_MIGHTY_ATK_RATE = 0.5;
+
+/**
+ * Mighty Chain's critical-chance bonus (research/06 §7.4: "Critical Chance +20% (for all
+ * cards, same shape as the post-update Quick first-card-bonus, §7.2)") — same hand-wide,
+ * next-turn-carried mechanism as `CHAINBONUS_QUICK_CRIT_RATE`
+ * (`BattleState.critChanceBonusCarried`/`activeCritChanceBonus`), but a separate, additive
+ * bonus: research/06 §7.4 explicitly notes "these can stack if the chain also happens to
+ * start with Quick" — a Quick-led Mighty Chain earns both bonuses at once.
+ */
+export const CHAINBONUS_MIGHTY_CRIT_RATE = 0.2;
+
+/**
+ * Mighty Chain's "NP Gain Up" bonus (research/06 §7.4 flagged this as an unconfirmed
+ * percentage per §7.5; the project owner supplied the figure from an FGO wiki source —
+ * **+100%** NP gain rate for all 3 played cards). Modeled as an addition to the attacking
+ * NP-gain formula's existing `npChargeRateMod` term (`AttackingNpGainInput`,
+ * `src/engine/npGain.ts`) — the same multiplicative "NP gain up" mechanism an ordinary
+ * buff-action (`DROP_NP`) already uses, rather than the flat-additive-to-ATK shape
+ * `CHAINBONUS_MIGHTY_ATK_RATE` uses, since "NP gain rate +100%" reads as a rate modifier
+ * (matching how buff-sourced NP-gain-up already works) rather than a flat gauge grant.
+ * Single-source (one wiki page, not independently cross-corroborated in this pass) —
+ * flag for a second source if this becomes load-bearing for optimizer output.
+ */
+export const CHAINBONUS_MIGHTY_NPGAIN_RATE = 1.0;
+
+/**
+ * Mighty Chain's "Critical Star Drop Rate Up" bonus (research/06 §7.4/§7.5 — the last of
+ * its 4 bonuses to have a confirmed value; the project owner supplied the figure directly:
+ * **+20%** critical-star generation rate). Distinct from the already-implemented Quick-lead
+ * `firstCardBonus`/`criticalAdd` term (`StarDropResolutionContext.chainLeadCardType`,
+ * `src/battle/starDropInput.ts`) — that one only fires when Quick specifically leads the
+ * chain; this one fires for the whole chain whenever it's a Mighty Chain, regardless of
+ * which color happens to lead. Modeled as an addition to the star-drop formula's existing
+ * `starDropMod` term (`StarDropInput`, `src/engine/starDrop.ts`) — the same buff-action
+ * (`CRITICAL_POINT`) mechanism an ordinary "star drop up" effect already uses, matching how
+ * `CHAINBONUS_MIGHTY_NPGAIN_RATE` reuses the analogous `npChargeRateMod` term. Single-source
+ * (project-owner-supplied, not independently cross-corroborated in this pass) — flag for a
+ * second source if this becomes load-bearing for optimizer output.
+ */
+export const CHAINBONUS_MIGHTY_STARRATE = 0.2;
+
+/**
  * NP-gain formula constants (research/04-np-gauge-and-refund.md §1, §5.1), same divided-
  * decimal convention as the damage constants above.
  */

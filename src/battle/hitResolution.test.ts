@@ -116,6 +116,7 @@ const CONTEXT: HitResolutionContext = {
   superEffectiveModifier: 1,
   isNP: false,
   isBusterChain: false,
+  isMightyChain: false,
   offensiveNPRate: 500,
   npEnemyServerMod: 1,
   baseStarRate: 500,
@@ -140,6 +141,7 @@ describe("resolveHit", () => {
         superEffectiveModifier: CONTEXT.superEffectiveModifier,
         isNP: CONTEXT.isNP,
         isBusterChain: CONTEXT.isBusterChain,
+        isMightyChain: CONTEXT.isMightyChain,
       }),
     );
 
@@ -191,6 +193,7 @@ describe("resolveHit", () => {
         superEffectiveModifier: CONTEXT.superEffectiveModifier,
         isNP: CONTEXT.isNP,
         isBusterChain: CONTEXT.isBusterChain,
+        isMightyChain: CONTEXT.isMightyChain,
       }),
     );
 

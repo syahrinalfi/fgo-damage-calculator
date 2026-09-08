@@ -1,6 +1,6 @@
 import { Card } from "@atlasacademy/api-connector";
 import { describe, expect, it } from "vitest";
-import { classifyChain, extraCardChainTypeFrom, isBusterChainFrom } from "./chainDetection.js";
+import { classifyChain, extraCardChainTypeFrom, isBusterChainFrom, isMightyChainFrom } from "./chainDetection.js";
 
 function card(type: Card, servantId: number): { type: Card; servantId: number } {
   return { type, servantId };
@@ -62,6 +62,15 @@ describe("isBusterChainFrom", () => {
     expect(isBusterChainFrom({ chainType: "artsChain", isBraveChain: false })).toBe(false);
     expect(isBusterChainFrom({ chainType: "mightyChain", isBraveChain: false })).toBe(false);
     expect(isBusterChainFrom({ chainType: "none", isBraveChain: true })).toBe(false);
+  });
+});
+
+describe("isMightyChainFrom", () => {
+  it("is true only for a mightyChain classification", () => {
+    expect(isMightyChainFrom({ chainType: "mightyChain", isBraveChain: false })).toBe(true);
+    expect(isMightyChainFrom({ chainType: "busterChain", isBraveChain: false })).toBe(false);
+    expect(isMightyChainFrom({ chainType: "quickChain", isBraveChain: false })).toBe(false);
+    expect(isMightyChainFrom({ chainType: "none", isBraveChain: true })).toBe(false);
   });
 });
 

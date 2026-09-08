@@ -87,6 +87,11 @@ export function isQuickChainFrom(classification: ChainClassification): boolean {
   return classification.chainType === "quickChain";
 }
 
+/** Whether this chain qualifies for Mighty Chain's bonuses (research/06 §7.4, `CHAINBONUS_MIGHTY_ATK_RATE`/`CHAINBONUS_MIGHTY_CRIT_RATE`) — true only for a one-of-each-color (QAB) chain. */
+export function isMightyChainFrom(classification: ChainClassification): boolean {
+  return classification.chainType === "mightyChain";
+}
+
 /**
  * The Extra Attack multiplier a would-be 4th card gets after this chain (research/06 §7.3,
  * `DamageInput.extraCardChainType`/`EXTRA_ATTACK_RATE_SINGLE`/`EXTRA_ATTACK_RATE_GRAND`):

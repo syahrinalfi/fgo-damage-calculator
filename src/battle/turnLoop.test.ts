@@ -421,8 +421,12 @@ describe("resolveAction — playCard", () => {
 
   it("derives isBusterChain from chainCards, boosting damage over a non-Buster chain", () => {
     const busterChain: Action = { ...action, chainCards: [{ type: BUSTER, servantId: 1 }, { type: BUSTER, servantId: 2 }, { type: BUSTER, servantId: 3 }] };
+    // `action`'s own DEFAULT_CHAIN_CARDS is one-of-each-color (a Mighty Chain, whose own
+    // +50% ATK bonus is larger than Buster chain's +20%) — a mixed, non-uniform,
+    // non-Mighty chain (classifyChain's "none") is the true zero-chain-bonus baseline here.
+    const baselineAction: Action = { ...action, chainCards: [{ type: BUSTER, servantId: 1 }, { type: BUSTER, servantId: 2 }, { type: ARTS, servantId: 3 }] };
     const busterResult = resolveAction(state(), busterChain, CONSTANTS);
-    const baselineResult = resolveAction(state(), action, CONSTANTS);
+    const baselineResult = resolveAction(state(), baselineAction, CONSTANTS);
     const busterHp = busterResult.enemies.find((e) => e.npcId === 9001)?.currentHp ?? 0;
     const baselineHp = baselineResult.enemies.find((e) => e.npcId === 9001)?.currentHp ?? 0;
     expect(busterHp).toBeLessThan(baselineHp);
@@ -496,14 +500,16 @@ describe("resolveAction — playCard", () => {
     expect(result.starsCarried).toBe(5);
   });
 
-  it("adds CHAINBONUS_QUICK_CRIT_RATE to critChanceBonusCarried when Quick leads a chain, even a non-uniform (Mighty) one", () => {
-    const quickLedMightyChain: Action = {
+  it("adds CHAINBONUS_QUICK_CRIT_RATE to critChanceBonusCarried when Quick leads a chain, even a non-uniform, non-Mighty one", () => {
+    // Quick leads, but this isn't a uniform Quick chain (isQuickChainFrom) nor a Mighty
+    // Chain (only 2 distinct colors) — isolates the Quick-lead bonus from both.
+    const quickLedChain: Action = {
       ...action,
       context: { ...CARD_CONTEXT, card: { type: BUSTER, position: 1 } },
-      chainCards: [{ type: QUICK, servantId: 1 }, { type: ARTS, servantId: 2 }, { type: BUSTER, servantId: 1 }],
+      chainCards: [{ type: QUICK, servantId: 2 }, { type: QUICK, servantId: 3 }, { type: BUSTER, servantId: 1 }],
       chainPosition: 3,
     };
-    const result = resolveAction(state(), quickLedMightyChain, CONSTANTS);
+    const result = resolveAction(state(), quickLedChain, CONSTANTS);
     expect(result.critChanceBonusCarried).toBeCloseTo(0.2);
     // Not a uniform Quick chain, so the separate stars-next-turn bonus must not also fire.
     expect(result.starsCarried).toBe(0);
@@ -525,7 +531,7 @@ describe("resolveAction — playCard", () => {
     const quickLeadCompleting: Action = {
       ...action,
       context: { ...CARD_CONTEXT, card: { type: BUSTER, position: 1 } },
-      chainCards: [{ type: QUICK, servantId: 1 }, { type: ARTS, servantId: 2 }, { type: BUSTER, servantId: 1 }],
+      chainCards: [{ type: QUICK, servantId: 2 }, { type: QUICK, servantId: 3 }, { type: BUSTER, servantId: 1 }],
       chainPosition: 3,
     };
     const result = resolveAction(state(), quickLeadCompleting, CONSTANTS);
@@ -565,6 +571,55 @@ describe("resolveAction — playCard", () => {
     const artsLedHp = artsLedResult.enemies.find((e) => e.npcId === 9001)?.currentHp ?? 0;
     // Buster's own addAtk (+30%, non-zero) beats Arts' own addAtk (0) as the chain's lead bonus.
     expect(busterLedHp).toBeLessThan(artsLedHp);
+  });
+
+  it("derives isMightyChain from a one-of-each-color chain, dealing more damage than the same card played outside a Mighty Chain", () => {
+    const mightyAction: Action = {
+      ...action,
+      chainCards: [{ type: BUSTER, servantId: 1 }, { type: ARTS, servantId: 2 }, { type: QUICK, servantId: 3 }],
+      chainPosition: 1,
+    };
+    // A mixed, non-uniform, non-Mighty chain (classifyChain's "none") — no chain bonus fires
+    // at all, giving a clean zero-bonus baseline for the Mighty-Chain ATK term.
+    const nonMightyAction: Action = { ...action, chainCards: [{ type: BUSTER, servantId: 1 }, { type: BUSTER, servantId: 2 }, { type: ARTS, servantId: 3 }], chainPosition: 1 };
+    const mightyHp = resolveAction(state(), mightyAction, CONSTANTS).enemies.find((e) => e.npcId === 9001)?.currentHp ?? 0;
+    const nonMightyHp = resolveAction(state(), nonMightyAction, CONSTANTS).enemies.find((e) => e.npcId === 9001)?.currentHp ?? 0;
+    expect(mightyHp).toBeLessThan(nonMightyHp);
+  });
+
+  it("derives isMightyChain to also boost NP gain (CHAINBONUS_MIGHTY_NPGAIN_RATE) over the same card played outside a Mighty Chain", () => {
+    const mightyAction: Action = {
+      ...action,
+      chainCards: [{ type: BUSTER, servantId: 1 }, { type: ARTS, servantId: 2 }, { type: QUICK, servantId: 3 }],
+      chainPosition: 1,
+    };
+    const nonMightyAction: Action = { ...action, chainCards: [{ type: BUSTER, servantId: 1 }, { type: BUSTER, servantId: 2 }, { type: ARTS, servantId: 3 }], chainPosition: 1 };
+    const mightyGauge = resolveAction(state(), mightyAction, CONSTANTS).servants.find((s) => s.servantId === 1)?.currentNpGauge ?? 0;
+    const nonMightyGauge = resolveAction(state(), nonMightyAction, CONSTANTS).servants.find((s) => s.servantId === 1)?.currentNpGauge ?? 0;
+    expect(mightyGauge).toBeGreaterThan(nonMightyGauge);
+  });
+
+  it("adds CHAINBONUS_MIGHTY_CRIT_RATE to critChanceBonusCarried when a Mighty Chain completes", () => {
+    const mightyCompleting: Action = {
+      ...action,
+      chainCards: [{ type: ARTS, servantId: 2 }, { type: QUICK, servantId: 3 }, { type: BUSTER, servantId: 1 }],
+      chainPosition: 3,
+    };
+    const result = resolveAction(state(), mightyCompleting, CONSTANTS);
+    expect(result.critChanceBonusCarried).toBeCloseTo(0.2);
+  });
+
+  it("stacks the Mighty-Chain and Quick-lead crit-chance bonuses when a Mighty Chain also starts with Quick", () => {
+    // Plays the default BUSTER card (servantId 1), which sits at chainCards[2] here — the
+    // chain's lead (chainCards[0]) is Quick, so both the Quick-lead and Mighty-Chain
+    // crit-chance bonuses should fire when this, the chain's last card, completes it.
+    const quickLedMighty: Action = {
+      ...action,
+      chainCards: [{ type: QUICK, servantId: 2 }, { type: ARTS, servantId: 3 }, { type: BUSTER, servantId: 1 }],
+      chainPosition: 3,
+    };
+    const result = resolveAction(state(), quickLedMighty, CONSTANTS);
+    expect(result.critChanceBonusCarried).toBeCloseTo(0.4);
   });
 });
 

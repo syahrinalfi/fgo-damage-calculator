@@ -27,6 +27,7 @@ function makeInput(overrides: Partial<DamageInput> = {}): DamageInput {
     dmgPlusAdd: 0,
     selfDmgCutAdd: 0,
     isBusterChain: false,
+    isMightyChain: false,
     ...overrides,
   };
 }
@@ -54,6 +55,10 @@ describe("calculateHitDamage", () => {
 
   it("adds the flat Buster-chain bonus (term 17) on top of the per-card formula", () => {
     expect(calculateHitDamage(makeInput({ isBusterChain: true }))).toBe(860);
+  });
+
+  it("adds the flat Mighty-Chain ATK bonus (term 17) on top of the per-card formula", () => {
+    expect(calculateHitDamage(makeInput({ isMightyChain: true }))).toBe(1460);
   });
 
   it("applies the super-effective bonus only when isSuperEffective is true (term 14)", () => {

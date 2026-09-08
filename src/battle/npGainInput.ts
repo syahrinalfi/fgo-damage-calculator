@@ -1,5 +1,6 @@
 import type { Card } from "@atlasacademy/api-connector";
 import type { AttackingNpGainInput, DefendingNpGainInput } from "../engine/npGain.js";
+import { CHAINBONUS_MIGHTY_NPGAIN_RATE } from "../engine/constants.js";
 import { BUFF_ACTION_KEYS } from "./buffActionKeys.js";
 import { resolveCardTerm } from "./cardTerm.js";
 import type { BattleConstants } from "./gameConstants.js";
@@ -23,6 +24,8 @@ export interface AttackingNpGainResolutionContext {
   enemyServerMod: number;
   isCrit: boolean;
   isOverkill: boolean;
+  /** Whether this hit is one of a Mighty Chain's 3 cards (research/06 §7.4, `CHAINBONUS_MIGHTY_NPGAIN_RATE`) — added to `npChargeRateMod` alongside any buff-sourced NP-gain-up. */
+  isMightyChain: boolean;
 }
 
 /**
@@ -56,12 +59,9 @@ export function resolveAttackingNpGainInput(
     cardNpValue: cardTerm.npGaugeAdjust,
     cardMod,
     enemyServerMod: context.enemyServerMod,
-    npChargeRateMod: resolveUnitActionModifier(
-      constants.buff,
-      BUFF_ACTION_KEYS.DROP_NP,
-      attacker.activeBuffs,
-      traitContext,
-    ),
+    npChargeRateMod:
+      resolveUnitActionModifier(constants.buff, BUFF_ACTION_KEYS.DROP_NP, attacker.activeBuffs, traitContext) +
+      (context.isMightyChain ? CHAINBONUS_MIGHTY_NPGAIN_RATE : 0),
     isCrit: context.isCrit,
     isOverkill: context.isOverkill,
   };

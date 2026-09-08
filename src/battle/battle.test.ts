@@ -215,6 +215,7 @@ describe("resolveDamageInput", () => {
     superEffectiveModifier: 1,
     isNP: false,
     isBusterChain: false,
+    isMightyChain: false,
   };
 
   it("assembles a DamageInput matching manual calculation with no active buffs", () => {
@@ -301,6 +302,7 @@ describe("resolveAttackingNpGainInput / resolveDefendingNpGainInput", () => {
       enemyServerMod: 1,
       isCrit: false,
       isOverkill: false,
+      isMightyChain: false,
     });
 
     expect(input.offensiveNPRate).toBe(69);
@@ -308,6 +310,22 @@ describe("resolveAttackingNpGainInput / resolveDefendingNpGainInput", () => {
     expect(input.cardNpValue).toBeCloseTo(3.0, 10);
     expect(input.cardMod).toBeCloseTo(0.2, 10);
     expect(input.npChargeRateMod).toBe(0);
+  });
+
+  it("adds CHAINBONUS_MIGHTY_NPGAIN_RATE to npChargeRateMod when isMightyChain, on top of any buff-sourced NP-gain-up", () => {
+    const attacker = makeUnit({
+      activeBuffs: [makeBuff({ type: "upDropnp" as ActiveBuffInstance["type"], amount: 200 })],
+    });
+    const input = resolveAttackingNpGainInput(attacker, makeUnit(), CONSTANTS, {
+      card: { type: ARTS, position: 1 },
+      chainLeadCardType: ARTS,
+      offensiveNPRate: 69,
+      enemyServerMod: 1,
+      isCrit: false,
+      isOverkill: false,
+      isMightyChain: true,
+    });
+    expect(input.npChargeRateMod).toBeCloseTo(1.2, 10);
   });
 
   it("takes firstCardBonus from chainLeadCardType's own position-1 addTdGauge, not this card's own type/position", () => {
@@ -323,6 +341,7 @@ describe("resolveAttackingNpGainInput / resolveDefendingNpGainInput", () => {
       enemyServerMod: 1,
       isCrit: false,
       isOverkill: false,
+      isMightyChain: false,
     });
     expect(input.firstCardBonus).toBeCloseTo(1.0, 10);
   });
@@ -357,6 +376,7 @@ describe("resolveStarDropInput", () => {
       serverRate: 0,
       isCrit: false,
       isOverkill: false,
+      isMightyChain: false,
     });
 
     expect(input.baseStarRate).toBe(0.06);
@@ -379,6 +399,7 @@ describe("resolveStarDropInput", () => {
       serverRate: 0,
       isCrit: false,
       isOverkill: false,
+      isMightyChain: false,
     });
     expect(input.firstCardBonus).toBeCloseTo(0.05, 10);
   });
@@ -397,8 +418,25 @@ describe("resolveStarDropInput", () => {
       serverRate: 0,
       isCrit: false,
       isOverkill: false,
+      isMightyChain: false,
     });
     expect(input.starDropMod).toBeCloseTo(0.05, 10);
     expect(input.enemyStarDropMod).toBeCloseTo(-0.02, 10);
+  });
+
+  it("adds CHAINBONUS_MIGHTY_STARRATE to starDropMod when isMightyChain, on top of any buff-sourced criticalPoint", () => {
+    const attacker = makeUnit({
+      activeBuffs: [makeBuff({ type: "upCriticalpoint" as ActiveBuffInstance["type"], amount: 50 })],
+    });
+    const input = resolveStarDropInput(attacker, makeUnit(), CONSTANTS, {
+      card: { type: BUSTER, position: 1 },
+      chainLeadCardType: BUSTER,
+      baseStarRate: 0.06,
+      serverRate: 0,
+      isCrit: false,
+      isOverkill: false,
+      isMightyChain: true,
+    });
+    expect(input.starDropMod).toBeCloseTo(0.25, 10);
   });
 });

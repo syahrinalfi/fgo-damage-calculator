@@ -33,6 +33,16 @@ export interface HitResolutionContext {
   superEffectiveModifier: number;
   isNP: boolean;
   isBusterChain: boolean;
+  /**
+   * Whether this hit is one of a Mighty Chain's 3 cards (research/06 §7.4) — feeds
+   * `DamageInput.isMightyChain` (`../engine/damage.js`, the +50% ATK term),
+   * `AttackingNpGainInput.npChargeRateMod` (`../engine/npGain.js`, via
+   * `CHAINBONUS_MIGHTY_NPGAIN_RATE`, the +100% NP-gain-rate term), and
+   * `StarDropInput.starDropMod` (`../engine/starDrop.js`, via `CHAINBONUS_MIGHTY_STARRATE`,
+   * the +20% critical-star-generation-rate term) — all 3 of Mighty Chain's confirmed
+   * per-hit bonuses.
+   */
+  isMightyChain: boolean;
   offensiveNPRate: number;
   npEnemyServerMod: number;
   baseStarRate: number;
@@ -94,6 +104,7 @@ export function resolveHit(
     superEffectiveModifier: context.superEffectiveModifier,
     isNP: context.isNP,
     isBusterChain: context.isBusterChain,
+    isMightyChain: context.isMightyChain,
   });
   const damage = defense.blocked ? 0 : calculateHitDamage(damageInput);
   const isOverkill = damage > defenderHp;
@@ -106,6 +117,7 @@ export function resolveHit(
     enemyServerMod: context.npEnemyServerMod,
     isCrit: context.isCrit,
     isOverkill,
+    isMightyChain: context.isMightyChain,
   });
   const npGain = calculateAttackingNpGain(npGainInput);
 
@@ -116,6 +128,7 @@ export function resolveHit(
     serverRate: context.starEnemyServerMod,
     isCrit: context.isCrit,
     isOverkill,
+    isMightyChain: context.isMightyChain,
   });
   const starDropChance = calculateStarDropChance(starDropInput);
 
