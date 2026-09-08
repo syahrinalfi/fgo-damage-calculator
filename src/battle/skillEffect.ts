@@ -250,6 +250,38 @@ export interface ShortenSkillEffect {
   readonly targetType: SkillTargetType;
 }
 
+/**
+ * One already-resolved flat critical-star loss a `useSkill`/`useMysticCodeSkill` `Action`
+ * applies — models the API's `lossStar` `FuncType` (research/09 §7 bulk long-tail pass: 7
+ * live instances, all `funcTargetType: "self"`). The exact mirror of `GainStarEffect`:
+ * critical stars are a Master-wide resource, so `rawAmount` is simply subtracted from
+ * `BattleState.starsCarried` directly, floored at `0` (a negative star pool makes no sense),
+ * with the same one-turn-delayed consumption lifecycle (research/04 §6.2/§6.3).
+ */
+export interface LossStarEffect {
+  readonly kind: "lossStar";
+  readonly rawAmount: number;
+}
+
+/**
+ * One already-resolved percentage-of-`maxHp` self-damage a `useSkill`/`useMysticCodeSkill`
+ * `Action` applies — models the API's `lossHp` `FuncType` (research/09 §7 bulk long-tail
+ * pass: 11 live NP instances, 10 of 11 `funcTargetType: "self"`, `rawPercent` following the
+ * same per-mille convention `GainHpPercentEffect`/`LossHpSafeEffect` already use, e.g.
+ * `1000` → 100% of `maxHp`). **Unlike `LossHpSafeEffect`, this is not "safe"** — floored at
+ * `0`, not `1`, so this can bring a servant's `currentHp` to exactly `0` (a real, if rare,
+ * "this NP can kill its own caster" mechanic, distinct from `lossHpSafe`'s guaranteed-
+ * survival cost). The one live `enemy`-targeted example found carries `rawPercent: 0` (a
+ * template/no-op artifact, not a real "true damage vs. an enemy's max HP" mechanic) — ally-
+ * only (`SkillTargetType`) accordingly, matching `lossHpSafe`'s and every other HP/NP-gauge
+ * effect's targeting shape.
+ */
+export interface LossHpPercentEffect {
+  readonly kind: "lossHpPercent";
+  readonly rawPercent: number;
+  readonly targetType: SkillTargetType;
+}
+
 /** One already-resolved skill/NP effect a `useSkill`/`useMysticCodeSkill` `Action` can carry (research/09 §7's still-limited scope). */
 export type SkillEffect =
   | BuffGrantEffect
@@ -261,4 +293,6 @@ export type SkillEffect =
   | GainStarEffect
   | LossNpEffect
   | LossHpSafeEffect
-  | ShortenSkillEffect;
+  | ShortenSkillEffect
+  | LossStarEffect
+  | LossHpPercentEffect;

@@ -21,6 +21,7 @@ import type {
   GainHpEffect,
   GainHpPercentEffect,
   GainNpEffect,
+  LossHpPercentEffect,
   LossHpSafeEffect,
   LossNpEffect,
   RemoveBuffEffect,
@@ -568,6 +569,19 @@ function applyLossHpSafeEffect(
   );
 }
 
+/** Applies one `LossHpPercentEffect` (`./skillEffect.js`) to every servant `resolveAllyTargets` resolves it to — subtracts `rawPercent / 1000` of that servant's own `maxHp`, rounded, floored at `0` (unlike `applyLossHpSafeEffect`'s `1`-floor, this can bring a servant to exactly `0`). */
+function applyLossHpPercentEffect(
+  servants: readonly ServantInstance[],
+  actingServantId: number | undefined,
+  effect: LossHpPercentEffect,
+  targetServantId: number | undefined,
+): readonly ServantInstance[] {
+  const targetIds = new Set(resolveAllyTargets(servants, effect.targetType, actingServantId, targetServantId));
+  return servants.map((s) =>
+    targetIds.has(s.servantId) ? { ...s, currentHp: Math.max(s.currentHp - Math.round((s.maxHp * effect.rawPercent) / 1000), 0) } : s,
+  );
+}
+
 /** Applies one `ShortenSkillEffect` (`./skillEffect.js`) to every servant `resolveAllyTargets` resolves it to — subtracts `rawTurns` from all 3 `skillCooldowns` entries at once, each floored at `0` (the same per-slot flooring shape `decrementCooldowns` above uses, generalized from "always -1" to an arbitrary `rawTurns`). */
 function applyShortenSkillEffect(
   servants: readonly ServantInstance[],
@@ -672,6 +686,10 @@ function applySkillEffect(
       return { ...state, servants: applyLossHpSafeEffect(state.servants, actingServantId, effect, targetServantId) };
     case "shortenSkill":
       return { ...state, servants: applyShortenSkillEffect(state.servants, actingServantId, effect, targetServantId) };
+    case "lossStar":
+      return { ...state, starsCarried: Math.max(state.starsCarried - effect.rawAmount, 0) };
+    case "lossHpPercent":
+      return { ...state, servants: applyLossHpPercentEffect(state.servants, actingServantId, effect, targetServantId) };
   }
 }
 
