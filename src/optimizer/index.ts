@@ -1,5 +1,7 @@
 export type { ActionSequenceCandidate, ActionSequenceResult, SequenceScoreFn } from "./turnSearch.js";
 export { simulateActionSequence, searchBestActionSequence } from "./turnSearch.js";
+export type { PerTurnCandidateBuilder, MultiTurnResult } from "./multiTurnSearch.js";
+export { searchMultiTurnActionSequences } from "./multiTurnSearch.js";
 export { damageDealtAtSlot, negativeRemainingHpAtSlot } from "./objectives.js";
 export {
   enumerateServantSubsets,
