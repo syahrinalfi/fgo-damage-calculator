@@ -178,5 +178,87 @@ export interface GainStarEffect {
   readonly rawAmount: number;
 }
 
+/**
+ * One already-resolved NP-gauge drain a `useSkill`/`useMysticCodeSkill` `Action` applies —
+ * models the API's `lossNp` `FuncType` (research/09 §7 follow-up pass: 50 live instances
+ * across playable servants' `skills[]`). `rawAmount` is a raw gauge-unit subtraction, the
+ * exact mirror of `GainNpEffect.rawAmount` (`FULL_TD_POINT` convention, e.g. `10000` for
+ * -100%) — subtracted from the target's `currentNpGauge`, floored at `0` rather than
+ * `gainNp`'s `NP_GAUGE_CAP_BY_LEVEL` ceiling.
+ *
+ * **Ally-only, unlike the live data's own distribution.** The live frequency pull found
+ * `lossNp` is actually *majority enemy-targeted* (37 of 50 live instances use `enemy`/
+ * `enemyAll` — an NP-drain debuff cast on foes) with only 13 self/`ptOne` instances (a
+ * self-inflicted cost for a powerful skill, e.g. "Crimson Hero Legend EX"). This effect
+ * only models the ally-side minority: `EnemyInstance` (`./battleState.js`) has no
+ * `currentNpGauge` field at all yet — enemy NP-gauge tracking isn't part of this project's
+ * state model — so an enemy-targeted `lossNp` has nowhere to write its result and is out of
+ * scope until that's added. Flagged here rather than silently ignored: a caller building an
+ * `Action` for an enemy-targeted NP-drain skill can't be served by this effect yet.
+ */
+export interface LossNpEffect {
+  readonly kind: "lossNp";
+  readonly rawAmount: number;
+  readonly targetType: SkillTargetType;
+}
+
+/**
+ * One already-resolved "safe" (non-lethal) self-damage a `useSkill`/`useMysticCodeSkill`
+ * `Action` applies — models the API's `lossHpSafe` `FuncType` (research/09 §7 follow-up
+ * pass: 29 live instances, `Value` constant across all 10 skill levels in every example
+ * surveyed, e.g. `500` — unlike most other per-level `svals`, this one doesn't scale with
+ * skill level at all). `rawPercent` follows the same per-mille convention
+ * `GainHpPercentEffect.rawPercent` already established: `500` → 50% of the target's own
+ * `maxHp`, rounded and subtracted from `currentHp`. "Safe" means exactly what
+ * `lossHpSafe`'s name states and what every live example's `funcPopupText`/usage pattern
+ * implies (a self-cost `Vals` for an otherwise-beneficial skill, never a lethal effect): the
+ * target's `currentHp` is floored at `1`, never `0` or below — the one deliberate
+ * distinction from `GainHpEffect`/`GainHpPercentEffect`'s own "not specially guarded"
+ * standing (research/09 §7).
+ *
+ * Ally-only (`SkillTargetType`) — matches 27 of 29 live instances (`self`/`ptOne`/`ptAll`);
+ * the 2 remaining live instances use `ptOther` ("every front-line ally except the caster"),
+ * a `FuncTargetType` this project doesn't model at all (no existing `SkillTargetType`
+ * variant covers it) — out of scope for the same reason `RemoveBuffEffect`'s doc comment
+ * already flags unsupported `FuncTargetType`s elsewhere in this file.
+ */
+export interface LossHpSafeEffect {
+  readonly kind: "lossHpSafe";
+  readonly rawPercent: number;
+  readonly targetType: SkillTargetType;
+}
+
+/**
+ * One already-resolved skill-cooldown reduction a `useSkill`/`useMysticCodeSkill` `Action`
+ * applies — models the API's `shortenSkill` `FuncType` (research/09 §7 follow-up pass: 30
+ * live instances). `rawTurns` is a flat turn count (e.g. `1`, `2` — small integers in every
+ * live example, never a per-mille rate) subtracted from **every one of the target's 3
+ * `skillCooldowns` entries** (`ServantInstance.skillCooldowns`, `./battleState.js`), each
+ * floored at `0` — no live example carries a `functvals`/target-skill-slot specifier, so a
+ * `shortenSkill` effect reduces a servant's whole kit at once rather than one chosen skill
+ * slot (matching the well-known in-game "reduce your own skills' cooldowns by N" wording,
+ * as opposed to a narrower "reduce this one skill's cooldown" effect this project has no
+ * live example of).
+ *
+ * Ally-only (`SkillTargetType`) — matches 28 of 30 live instances (`self`/`ptOne`/`ptAll`);
+ * the 2 remaining live instances use `ptOther`, out of scope for the same reason
+ * `LossHpSafeEffect` above flags it.
+ */
+export interface ShortenSkillEffect {
+  readonly kind: "shortenSkill";
+  readonly rawTurns: number;
+  readonly targetType: SkillTargetType;
+}
+
 /** One already-resolved skill/NP effect a `useSkill`/`useMysticCodeSkill` `Action` can carry (research/09 §7's still-limited scope). */
-export type SkillEffect = BuffGrantEffect | RemoveBuffEffect | GainNpEffect | GainHpEffect | GainHpPercentEffect | RevivalEffect | GainStarEffect;
+export type SkillEffect =
+  | BuffGrantEffect
+  | RemoveBuffEffect
+  | GainNpEffect
+  | GainHpEffect
+  | GainHpPercentEffect
+  | RevivalEffect
+  | GainStarEffect
+  | LossNpEffect
+  | LossHpSafeEffect
+  | ShortenSkillEffect;

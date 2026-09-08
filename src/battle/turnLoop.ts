@@ -16,7 +16,19 @@ import { allocateCritStars, critChanceForStars, rollIsCrit } from "./critStarLot
 import { classifyChain, extraCardChainTypeFrom, isArtsChainFrom, isBusterChainFrom, isMightyChainFrom, isQuickChainFrom, type ChainClassification } from "./chainDetection.js";
 import type { BattleConstants } from "./gameConstants.js";
 import { resolveHit, type HitResolutionContext } from "./hitResolution.js";
-import type { BuffGrantEffect, GainHpEffect, GainHpPercentEffect, GainNpEffect, RemoveBuffEffect, RevivalEffect, SkillEffect, SkillTargetType } from "./skillEffect.js";
+import type {
+  BuffGrantEffect,
+  GainHpEffect,
+  GainHpPercentEffect,
+  GainNpEffect,
+  LossHpSafeEffect,
+  LossNpEffect,
+  RemoveBuffEffect,
+  RevivalEffect,
+  ShortenSkillEffect,
+  SkillEffect,
+  SkillTargetType,
+} from "./skillEffect.js";
 
 /**
  * NP gauge's passive accumulation ceiling by NP level (research/04 §5.2a, confirmed by the
@@ -532,6 +544,46 @@ function applyGainHpPercentEffect(
   );
 }
 
+/** Applies one `LossNpEffect` (`./skillEffect.js`) to every servant `resolveAllyTargets` resolves it to, flooring each at `0` (the mirror of `applyGainNpEffect`'s `NP_GAUGE_CAP_BY_LEVEL` ceiling). */
+function applyLossNpEffect(
+  servants: readonly ServantInstance[],
+  actingServantId: number | undefined,
+  effect: LossNpEffect,
+  targetServantId: number | undefined,
+): readonly ServantInstance[] {
+  const targetIds = new Set(resolveAllyTargets(servants, effect.targetType, actingServantId, targetServantId));
+  return servants.map((s) => (targetIds.has(s.servantId) ? { ...s, currentNpGauge: Math.max(s.currentNpGauge - effect.rawAmount, 0) } : s));
+}
+
+/** Applies one `LossHpSafeEffect` (`./skillEffect.js`) to every servant `resolveAllyTargets` resolves it to — subtracts `rawPercent / 1000` of that servant's own `maxHp`, rounded, floored at `1` (never lethal, matching the `FuncType`'s "safe" naming). */
+function applyLossHpSafeEffect(
+  servants: readonly ServantInstance[],
+  actingServantId: number | undefined,
+  effect: LossHpSafeEffect,
+  targetServantId: number | undefined,
+): readonly ServantInstance[] {
+  const targetIds = new Set(resolveAllyTargets(servants, effect.targetType, actingServantId, targetServantId));
+  return servants.map((s) =>
+    targetIds.has(s.servantId) ? { ...s, currentHp: Math.max(s.currentHp - Math.round((s.maxHp * effect.rawPercent) / 1000), 1) } : s,
+  );
+}
+
+/** Applies one `ShortenSkillEffect` (`./skillEffect.js`) to every servant `resolveAllyTargets` resolves it to — subtracts `rawTurns` from all 3 `skillCooldowns` entries at once, each floored at `0` (the same per-slot flooring shape `decrementCooldowns` above uses, generalized from "always -1" to an arbitrary `rawTurns`). */
+function applyShortenSkillEffect(
+  servants: readonly ServantInstance[],
+  actingServantId: number | undefined,
+  effect: ShortenSkillEffect,
+  targetServantId: number | undefined,
+): readonly ServantInstance[] {
+  const targetIds = new Set(resolveAllyTargets(servants, effect.targetType, actingServantId, targetServantId));
+  const shortened = ([slot1, slot2, slot3]: readonly [number, number, number]): readonly [number, number, number] => [
+    Math.max(slot1 - effect.rawTurns, 0),
+    Math.max(slot2 - effect.rawTurns, 0),
+    Math.max(slot3 - effect.rawTurns, 0),
+  ];
+  return servants.map((s) => (targetIds.has(s.servantId) ? { ...s, skillCooldowns: shortened(s.skillCooldowns) } : s));
+}
+
 /**
  * Applies one `RevivalEffect` (`./skillEffect.js`) to every servant `resolveAllyTargets`
  * resolves it to — only a target already at `currentHp <= 0` is revived (to full `maxHp`
@@ -614,6 +666,12 @@ function applySkillEffect(
       return applyRemoveBuffEffect(state, actingServantId, effect, targetServantId, targetNpcId);
     case "gainStar":
       return { ...state, starsCarried: state.starsCarried + effect.rawAmount };
+    case "lossNp":
+      return { ...state, servants: applyLossNpEffect(state.servants, actingServantId, effect, targetServantId) };
+    case "lossHpSafe":
+      return { ...state, servants: applyLossHpSafeEffect(state.servants, actingServantId, effect, targetServantId) };
+    case "shortenSkill":
+      return { ...state, servants: applyShortenSkillEffect(state.servants, actingServantId, effect, targetServantId) };
   }
 }
 

@@ -6,7 +6,18 @@ import type { BattleState, EnemyInstance, HandCard, ServantInstance } from "./ba
 import { BUFF_ACTION_KEYS } from "./buffActionKeys.js";
 import type { TrackedBuff } from "./buffLifecycle.js";
 import type { BattleConstants } from "./gameConstants.js";
-import type { BuffGrantEffect, GainHpEffect, GainHpPercentEffect, GainNpEffect, GainStarEffect, RemoveBuffEffect, RevivalEffect } from "./skillEffect.js";
+import type {
+  BuffGrantEffect,
+  GainHpEffect,
+  GainHpPercentEffect,
+  GainNpEffect,
+  GainStarEffect,
+  LossHpSafeEffect,
+  LossNpEffect,
+  RemoveBuffEffect,
+  RevivalEffect,
+  ShortenSkillEffect,
+} from "./skillEffect.js";
 import { resolveAction } from "./turnLoop.js";
 
 const BUSTER = "2" as Card;
@@ -217,6 +228,33 @@ function gainStarEffect(overrides: Partial<GainStarEffect> = {}): GainStarEffect
   return {
     kind: "gainStar",
     rawAmount: 10,
+    ...overrides,
+  };
+}
+
+function lossNpEffect(overrides: Partial<LossNpEffect> = {}): LossNpEffect {
+  return {
+    kind: "lossNp",
+    rawAmount: 3000,
+    targetType: "self",
+    ...overrides,
+  };
+}
+
+function lossHpSafeEffect(overrides: Partial<LossHpSafeEffect> = {}): LossHpSafeEffect {
+  return {
+    kind: "lossHpSafe",
+    rawPercent: 500,
+    targetType: "self",
+    ...overrides,
+  };
+}
+
+function shortenSkillEffect(overrides: Partial<ShortenSkillEffect> = {}): ShortenSkillEffect {
+  return {
+    kind: "shortenSkill",
+    rawTurns: 1,
+    targetType: "self",
     ...overrides,
   };
 }
@@ -932,6 +970,36 @@ describe("resolveAction — useSkill", () => {
     const action: Action = { type: "useSkill", servantId: 1, skillSlot: 3, effects: [gainStarEffect({ rawAmount: 12 })], cooldownTurns: 5 };
     const result = resolveAction(state({ starsCarried: 3 }), action, CONSTANTS);
     expect(result.starsCarried).toBe(15);
+  });
+
+  it("lossNp subtracts rawAmount from the target's currentNpGauge, floored at 0", () => {
+    const action: Action = { type: "useSkill", servantId: 1, skillSlot: 3, effects: [lossNpEffect({ rawAmount: 3000 })], cooldownTurns: 5 };
+    const result = resolveAction(
+      state({ servants: [servant({ servantId: 1, currentNpGauge: 2000 }), servant({ servantId: 2 }), servant({ servantId: 3 })] }),
+      action,
+      CONSTANTS,
+    );
+    expect(result.servants.find((s) => s.servantId === 1)?.currentNpGauge).toBe(0);
+  });
+
+  it("lossHpSafe subtracts rawPercent/1000 of maxHp from currentHp, floored at 1 (never lethal)", () => {
+    const action: Action = { type: "useSkill", servantId: 1, skillSlot: 3, effects: [lossHpSafeEffect({ rawPercent: 900 })], cooldownTurns: 5 };
+    const result = resolveAction(
+      state({ servants: [servant({ servantId: 1, currentHp: 5000, maxHp: 10000 }), servant({ servantId: 2 }), servant({ servantId: 3 })] }),
+      action,
+      CONSTANTS,
+    );
+    expect(result.servants.find((s) => s.servantId === 1)?.currentHp).toBe(1);
+  });
+
+  it("shortenSkill subtracts rawTurns from all 3 skillCooldowns entries, each floored at 0", () => {
+    const action: Action = { type: "useSkill", servantId: 1, skillSlot: 3, effects: [shortenSkillEffect({ rawTurns: 2, targetType: "ptOne" })], cooldownTurns: 5, targetServantId: 2 };
+    const result = resolveAction(
+      state({ servants: [servant({ servantId: 1 }), servant({ servantId: 2, skillCooldowns: [3, 1, 0] }), servant({ servantId: 3 })] }),
+      action,
+      CONSTANTS,
+    );
+    expect(result.servants.find((s) => s.servantId === 2)?.skillCooldowns).toEqual([1, 0, 0]);
   });
 });
 
