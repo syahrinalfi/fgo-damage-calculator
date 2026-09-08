@@ -1,13 +1,17 @@
-import { Func, type Buff, type DataVal, type Skill } from "@atlasacademy/api-connector";
+import { Func, type Buff, type DataVal, type NoblePhantasm, type Skill } from "@atlasacademy/api-connector";
+import type { NpLevel } from "../account/types.js";
 import type { ActiveBuffInstance } from "../buffs/types.js";
+import type { OverchargeStage } from "../engine/overcharge.js";
 import type {
   BuffGrantEffect,
   BuffRemovalTargetType,
   DelayNpTurnEffect,
+  ForceInstantDeathEffect,
   GainHpEffect,
   GainHpPercentEffect,
   GainNpEffect,
   GainStarEffect,
+  InstantDeathEffect,
   LossHpPercentEffect,
   LossHpSafeEffect,
   LossNpEffect,
@@ -29,16 +33,15 @@ import type {
  * §4) — the first, `buildServantInstance`, resolves a servant's *stats*; this resolves a
  * servant's *skills* into playable `Action.useSkill.effects`.
  *
- * **Scope: skill-level-indexed `FuncType`s only — NP-only, Overcharge-indexed `FuncType`s
- * are deliberately excluded.** `instantDeath`/`forceInstantDeath` never appear on skill
- * `functions[]` in this project's own live-data survey (research/09 §7: "64 live **NP**
- * instances", "9 live **NP** instances") — they're structurally NP-only, and their `svals`
- * quintet (`svals`/`svals2`/.../`svals5`) is indexed by **Overcharge stage**, not skill
- * level, the opposite convention from every skill `FuncType` here (`svals[level - 1]`,
- * research/01 §6.3-6.4). Building a parallel NP-function interpreter (Overcharge-indexed,
- * feeding `castNp.effects`) is a separate, still-unbuilt follow-up — `castNp`'s existing
- * `InstantDeathEffect`/`ForceInstantDeathEffect` path is still hand-constructed by the
- * caller, same as before this pass.
+ * **Two entry points, one shared per-`FuncType` resolver (`resolveFunc` below).**
+ * `resolveSkillEffects` handles `NiceSkill.functions[]`, indexed by skill level
+ * (`svals[level - 1]`, research/01 §6.3-6.4) — everything except `instantDeath`/
+ * `forceInstantDeath`, which never appear on skill `functions[]` in this project's own
+ * live-data survey (research/09 §7: "64 live **NP** instances", "9 live **NP** instances" —
+ * structurally NP-only). `resolveNpEffects` handles `NiceNp.functions[]` instead, double-
+ * indexed by **Overcharge stage** (which of `svals`/`svals2`/.../`svals5`) *then* NP level
+ * (the entry within that array) — see that function's own doc comment for the full shape —
+ * and is where `instantDeath`/`forceInstantDeath` actually get resolved.
  *
  * Every unmapped `Func` — an out-of-scope `FuncType`, or a supported `FuncType` whose
  * `funcTargetType` this project doesn't model for it (e.g. `ptOther`, flagged throughout
@@ -192,6 +195,22 @@ function resolveFunc(func: Func.Func, svals: DataVal.DataVal): readonly SkillEff
       const effect: DelayNpTurnEffect = { kind: "delayNpTurn", rawTurns: svals.Value, targetType: target };
       return [effect];
     }
+    case Func.FuncType.INSTANT_DEATH: {
+      // The percentage lives in Rate, not Value (InstantDeathEffect's doc comment) — every
+      // live example this project surveyed is enemy-only ({enemy, enemyAll}).
+      const target = enemyTargetType(func.funcTargetType);
+      if (target === null || svals.Rate === undefined) return [];
+      const effect: InstantDeathEffect = { kind: "instantDeath", deathRate: svals.Rate, targetType: target };
+      return [effect];
+    }
+    case Func.FuncType.FORCE_INSTANT_DEATH: {
+      // No numeric field — force means unconditional (ForceInstantDeathEffect's doc
+      // comment); every live example is ally-side (self-sacrifice NP cost).
+      const target = allyTargetType(func.funcTargetType);
+      if (target === null) return [];
+      const effect: ForceInstantDeathEffect = { kind: "forceInstantDeath", targetType: target };
+      return [effect];
+    }
     default:
       return [];
   }
@@ -208,6 +227,69 @@ export function resolveSkillEffects(skill: Pick<Skill.Skill, "functions">, skill
   const unmodeled: Func.FuncType[] = [];
   for (const func of skill.functions) {
     const svals = func.svals[skillLevel - 1];
+    if (svals === undefined) {
+      unmodeled.push(func.funcType);
+      continue;
+    }
+    const resolved = resolveFunc(func, svals);
+    if (resolved.length === 0) {
+      unmodeled.push(func.funcType);
+    } else {
+      effects.push(...resolved);
+    }
+  }
+  return { effects, unmodeled };
+}
+
+/** Picks the `svals`/`svals2`/.../`svals5` field matching `stage` (`overchargeStage()`, `../engine/overcharge.js`) — stage 1 is `svals` itself, not `svals1` (there is no such field). */
+function selectOverchargeSvals(func: Func.Func, stage: OverchargeStage): readonly DataVal.DataVal[] | undefined {
+  switch (stage) {
+    case 1:
+      return func.svals;
+    case 2:
+      return func.svals2;
+    case 3:
+      return func.svals3;
+    case 4:
+      return func.svals4;
+    case 5:
+      return func.svals5;
+  }
+}
+
+/**
+ * The NP-function counterpart to `resolveSkillEffects` above (research/09 §4/§7's own
+ * "still-unbuilt follow-up") — resolves every `Func` in a `NiceNp.functions[]` into the
+ * `SkillEffect[]` a `castNp` `Action`'s `effects` field carries (research/09 §1's "this NP's
+ * own already-level/Overcharge-resolved non-damage effects beyond its core damage" — the
+ * NP's core damage itself is handled by the dedicated damage engine, never a `SkillEffect`).
+ *
+ * **Double-indexed, unlike `resolveSkillEffects`'s single `svals[level - 1]`**: which of the
+ * 5 top-level `svals`/`svals2`/.../`svals5` fields applies is picked by **Overcharge stage**
+ * (`overchargeStage()`, `../engine/overcharge.js`, from the caster's actual NP gauge% at cast
+ * time) via `selectOverchargeSvals` above; *within* that chosen array, the entry is picked by
+ * **NP level** (`npLevel - 1`) — this project's own live-data finding for `instantDeath`
+ * (`skillEffect.ts`'s `InstantDeathEffect` doc comment: "5 arrays vary by Overcharge stage
+ * while staying constant across NP level within each array") confirms this shape rather than
+ * assuming it, though most other NP `FuncType`s (e.g. `damageNp`'s own multiplier, not
+ * modeled by this file at all) are expected to vary meaningfully *by* NP level within each
+ * stage's array — `instantDeath`'s "constant across NP level" is that specific `FuncType`'s
+ * own value, not evidence the array itself isn't NP-level-indexed.
+ *
+ * Reuses `resolveFunc` (the same per-`FuncType` switch `resolveSkillEffects` uses) — this now
+ * additionally covers `instantDeath`/`forceInstantDeath`, the two `FuncType`s this project's
+ * own live-data survey (research/09 §7) found are structurally **NP-only** (0 live skill-side
+ * instances of either), which is exactly why they were excluded from the skill-level path
+ * above. A `Func` whose Overcharge-stage array is entirely absent (e.g. `svals3` undefined)
+ * or whose NP-level entry is missing is flagged into `unmodeled`, same convention as
+ * `resolveSkillEffects`.
+ */
+export function resolveNpEffects(np: Pick<NoblePhantasm.NoblePhantasm, "functions">, npLevel: NpLevel, stage: OverchargeStage): FuncInterpretationResult {
+  const effects: SkillEffect[] = [];
+  const unmodeled: Func.FuncType[] = [];
+  for (const func of np.functions) {
+    const svalsArray = selectOverchargeSvals(func, stage);
+    const svals = svalsArray?.[npLevel - 1];
     if (svals === undefined) {
       unmodeled.push(func.funcType);
       continue;

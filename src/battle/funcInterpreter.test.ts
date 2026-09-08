@@ -1,6 +1,6 @@
-import { Func, type Buff, type Skill, type Trait } from "@atlasacademy/api-connector";
+import { Func, type Buff, type DataVal, type NoblePhantasm, type Skill, type Trait } from "@atlasacademy/api-connector";
 import { describe, expect, it } from "vitest";
-import { resolveSkillEffects } from "./funcInterpreter.js";
+import { resolveNpEffects, resolveSkillEffects } from "./funcInterpreter.js";
 
 function trait(id: number): Trait.Trait {
   return { id, name: `trait${id}` } as unknown as Trait.Trait;
@@ -35,6 +35,15 @@ function buff(overrides: Partial<Buff.Buff> = {}): Buff.Buff {
 
 function skill(functions: readonly Func.Func[]): Pick<Skill.Skill, "functions"> {
   return { functions: [...functions] };
+}
+
+function np(functions: readonly Func.Func[]): Pick<NoblePhantasm.NoblePhantasm, "functions"> {
+  return { functions: [...functions] };
+}
+
+/** Builds a per-NP-level array (5 entries) for one Overcharge-stage `svalsN` field — `values[i]` is that field's entry for NP level `i + 1`. */
+function ocLevelArray(values: readonly Partial<DataVal.DataVal>[]): DataVal.DataVal[] {
+  return values.map((v) => v as DataVal.DataVal);
 }
 
 describe("resolveSkillEffects — addState/addStateShort", () => {
@@ -192,5 +201,82 @@ describe("resolveSkillEffects — out-of-scope funcTypes and malformed input", (
     const result = resolveSkillEffects(skill([gainNpFunc, damageFunc]), 1);
     expect(result.effects).toEqual([{ kind: "gainNp", rawAmount: 1000, targetType: "self" }]);
     expect(result.unmodeled).toEqual([Func.FuncType.DAMAGE]);
+  });
+});
+
+describe("resolveNpEffects — instantDeath/forceInstantDeath (NP-only, Overcharge-indexed)", () => {
+  it("picks the Overcharge-stage array first, then the NP-level entry within it, reading Rate not Value", () => {
+    const f = func({
+      funcType: Func.FuncType.INSTANT_DEATH,
+      funcTargetType: Func.FuncTargetType.ENEMY,
+      svals: ocLevelArray([{ Rate: 600 }, { Rate: 600 }, { Rate: 600 }, { Rate: 600 }, { Rate: 600 }]),
+      svals2: ocLevelArray([{ Rate: 700 }, { Rate: 700 }, { Rate: 700 }, { Rate: 700 }, { Rate: 700 }]),
+      svals3: ocLevelArray([{ Rate: 800 }, { Rate: 800 }, { Rate: 800 }, { Rate: 800 }, { Rate: 800 }]),
+    } as Partial<Func.Func>);
+    const result = resolveNpEffects(np([f]), 2, 3);
+    expect(result.unmodeled).toEqual([]);
+    expect(result.effects).toEqual([{ kind: "instantDeath", deathRate: 800, targetType: "enemyOne" }]);
+  });
+
+  it("resolves enemyAll instantDeath at stage 1 (plain svals, not svals1)", () => {
+    const f = func({
+      funcType: Func.FuncType.INSTANT_DEATH,
+      funcTargetType: Func.FuncTargetType.ENEMY_ALL,
+      svals: ocLevelArray([{ Rate: 500 }]),
+    } as Partial<Func.Func>);
+    expect(resolveNpEffects(np([f]), 1, 1).effects).toEqual([{ kind: "instantDeath", deathRate: 500, targetType: "enemyAll" }]);
+  });
+
+  it("flags instantDeath as unmodeled when the requested stage's svalsN array is entirely absent", () => {
+    const f = func({
+      funcType: Func.FuncType.INSTANT_DEATH,
+      funcTargetType: Func.FuncTargetType.ENEMY,
+      svals: ocLevelArray([{ Rate: 500 }]),
+      // no svals2 — stage 2 requested below
+    } as Partial<Func.Func>);
+    const result = resolveNpEffects(np([f]), 1, 2);
+    expect(result.effects).toEqual([]);
+    expect(result.unmodeled).toEqual([Func.FuncType.INSTANT_DEATH]);
+  });
+
+  it("flags instantDeath as unmodeled when a self-targeted (unsupported) funcTargetType is used", () => {
+    const f = func({
+      funcType: Func.FuncType.INSTANT_DEATH,
+      funcTargetType: Func.FuncTargetType.SELF,
+      svals: ocLevelArray([{ Rate: 500 }]),
+    } as Partial<Func.Func>);
+    expect(resolveNpEffects(np([f]), 1, 1).unmodeled).toEqual([Func.FuncType.INSTANT_DEATH]);
+  });
+
+  it("resolves forceInstantDeath with no numeric field, ally-only", () => {
+    const f = func({
+      funcType: Func.FuncType.FORCE_INSTANT_DEATH,
+      funcTargetType: Func.FuncTargetType.SELF,
+      svals: ocLevelArray([{ Rate: 5000 }]),
+    } as Partial<Func.Func>);
+    expect(resolveNpEffects(np([f]), 1, 1).effects).toEqual([{ kind: "forceInstantDeath", targetType: "self" }]);
+  });
+});
+
+describe("resolveNpEffects — shared FuncType handling with resolveSkillEffects", () => {
+  it("also resolves an ordinary skill-shared FuncType (gainNp) via the same OC+NP-level double index", () => {
+    const f = func({
+      funcType: Func.FuncType.GAIN_NP,
+      funcTargetType: Func.FuncTargetType.SELF,
+      svals: ocLevelArray([{ Value: 1000 }, { Value: 2000 }]),
+      svals2: ocLevelArray([{ Value: 1500 }, { Value: 2500 }]),
+    } as Partial<Func.Func>);
+    expect(resolveNpEffects(np([f]), 2, 2).effects).toEqual([{ kind: "gainNp", rawAmount: 2500, targetType: "self" }]);
+  });
+
+  it("flags a func as unmodeled when the NP-level entry within the selected stage array is missing", () => {
+    const f = func({
+      funcType: Func.FuncType.GAIN_NP,
+      funcTargetType: Func.FuncTargetType.SELF,
+      svals: ocLevelArray([{ Value: 1000 }]),
+    } as Partial<Func.Func>);
+    const result = resolveNpEffects(np([f]), 3, 1);
+    expect(result.effects).toEqual([]);
+    expect(result.unmodeled).toEqual([Func.FuncType.GAIN_NP]);
   });
 });
