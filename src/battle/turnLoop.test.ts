@@ -1,13 +1,12 @@
 import type { Buff, Card, CardDetail } from "@atlasacademy/api-connector";
 import { describe, expect, it } from "vitest";
 import type { ActiveBuffInstance } from "../buffs/types.js";
-import type { Action } from "./action.js";
+import type { Action, DerivedHitContext } from "./action.js";
 import type { BattleState, EnemyInstance, HandCard, ServantInstance } from "./battleState.js";
 import { BUFF_ACTION_KEYS } from "./buffActionKeys.js";
 import type { TrackedBuff } from "./buffLifecycle.js";
 import type { BattleConstants } from "./gameConstants.js";
-import type { HitResolutionContext } from "./hitResolution.js";
-import type { BuffGrantEffect, GainHpEffect, GainNpEffect, RemoveBuffEffect } from "./skillEffect.js";
+import type { BuffGrantEffect, GainHpEffect, GainHpPercentEffect, GainNpEffect, RemoveBuffEffect } from "./skillEffect.js";
 import { resolveAction } from "./turnLoop.js";
 
 const BUSTER = "2" as Card;
@@ -140,6 +139,7 @@ function state(overrides: Partial<BattleState> = {}): BattleState {
     handCards: FIVE_CARD_HAND,
     cardBag: [],
     starsCarried: 0,
+    handCardStars: [0, 0, 0, 0, 0],
     fieldTraits: new Set(),
     costSpent: 0,
     costBudget: 100,
@@ -188,25 +188,44 @@ function gainHpEffect(overrides: Partial<GainHpEffect> = {}): GainHpEffect {
   };
 }
 
+function gainHpPercentEffect(overrides: Partial<GainHpPercentEffect> = {}): GainHpPercentEffect {
+  return {
+    kind: "gainHpPercent",
+    rawPercent: 300,
+    targetType: "self",
+    ...overrides,
+  };
+}
+
 const END_TURN: Action = { type: "endTurn" };
 
-const CARD_CONTEXT: HitResolutionContext = {
+const CARD_CONTEXT: DerivedHitContext = {
   card: { type: BUSTER, position: 1 },
-  isCrit: false,
   npDamageMultiplier: 1,
   randomModifier: 1,
-  extraCardChainType: "none",
   isSuperEffective: false,
   superEffectiveModifier: 1,
   isNP: false,
-  isBusterChain: false,
   offensiveNPRate: 500,
   npEnemyServerMod: 1,
   baseStarRate: 500,
   starEnemyServerMod: 0,
 };
 
-const NP_CONTEXT: HitResolutionContext = { ...CARD_CONTEXT, card: { type: "5" as Card, position: 1 }, isNP: true };
+const NP_CONTEXT: DerivedHitContext = { ...CARD_CONTEXT, card: { type: "5" as Card, position: 1 }, isNP: true };
+
+/**
+ * A Mighty Chain (one of each color) across 3 *different* servants — the default `playCard`
+ * test action's chain. Not a Brave Chain (different servants), so `extraCardChainTypeFrom`
+ * still resolves to `"none"` despite the Mighty classification, keeping this baseline's
+ * derived `isBusterChain`/`extraCardChainType` identical to the pre-derivation manual
+ * defaults (`false`/`"none"`) most of these tests were written against.
+ */
+const DEFAULT_CHAIN_CARDS: readonly { readonly type: Card; readonly servantId: number }[] = [
+  { type: BUSTER, servantId: 1 },
+  { type: ARTS, servantId: 2 },
+  { type: QUICK, servantId: 3 },
+];
 
 describe("resolveAction — endTurn", () => {
   it("decrements every front-line servant's skill cooldowns, floored at 0", () => {
@@ -251,10 +270,11 @@ describe("resolveAction — endTurn", () => {
   });
 
   it("deals from a non-empty bag without reshuffling", () => {
+    // A fixed randomFn (rather than a throwing one) since `resolveEndTurn` now also calls
+    // `allocateCritStars`, which legitimately rolls randomness for the crit-star slot-bonus
+    // shuffle (unrelated to the bag/hand draw this test is actually about).
     const bag = handCardsFor(FIVE_CARD_DECK.slice(0, 5).concat(FIVE_CARD_DECK.slice(0, 5)));
-    const result = resolveAction(state({ cardBag: bag }), END_TURN, CONSTANTS, () => {
-      throw new Error("should not reshuffle");
-    });
+    const result = resolveAction(state({ cardBag: bag }), END_TURN, CONSTANTS, () => 0);
     expect(result.handCards).toEqual(bag.slice(0, 5));
     expect(result.cardBag).toEqual(bag.slice(5));
   });
@@ -269,10 +289,21 @@ describe("resolveAction — endTurn", () => {
     const result = resolveAction(state({ mysticCodeSkillCooldowns: [2, 0, 5] }), END_TURN, CONSTANTS);
     expect(result.mysticCodeSkillCooldowns).toEqual([1, 0, 4]);
   });
+
+  it("allocates starsCarried across the freshly-drawn hand via the crit-star lottery, one entry per hand slot", () => {
+    const result = resolveAction(state({ starsCarried: 9 }), END_TURN, CONSTANTS, () => 0);
+    expect(result.handCardStars).toHaveLength(5);
+    expect(result.handCardStars.reduce((sum, s) => sum + s, 0)).toBe(9);
+  });
+
+  it("resets starsCarried to 0 after allocating it, so it isn't re-rolled onto a later turn's hand too", () => {
+    const result = resolveAction(state({ starsCarried: 9 }), END_TURN, CONSTANTS, () => 0);
+    expect(result.starsCarried).toBe(0);
+  });
 });
 
 describe("resolveAction — playCard", () => {
-  const action: Action = { type: "playCard", servantId: 1, handCardIndex: 0, targetNpcId: 9001, context: CARD_CONTEXT };
+  const action: Action = { type: "playCard", servantId: 1, handCardIndex: 0, targetNpcId: 9001, context: CARD_CONTEXT, chainCards: DEFAULT_CHAIN_CARDS };
 
   it("deals damage, reduces the target's HP, and grants the acting servant NP gauge", () => {
     const result = resolveAction(state(), action, CONSTANTS);
@@ -339,6 +370,35 @@ describe("resolveAction — playCard", () => {
   it("throws when the hand card at handCardIndex belongs to a different servant", () => {
     const mixedHand = [handCardsFor([BUSTER], 2)[0] as HandCard, ...FIVE_CARD_HAND.slice(1)];
     expect(() => resolveAction(state({ handCards: mixedHand }), action, CONSTANTS)).toThrow(RangeError);
+  });
+
+  it("throws when chainCards doesn't include the card actually being played", () => {
+    const wrongChain: Action = { ...action, chainCards: [{ type: ARTS, servantId: 2 }, { type: QUICK, servantId: 3 }, { type: ARTS, servantId: 1 }] };
+    expect(() => resolveAction(state(), wrongChain, CONSTANTS)).toThrow(RangeError);
+  });
+
+  it("derives isCrit from the played slot's handCardStars allocation instead of taking it from context", () => {
+    const critState = state({ handCardStars: [10, 0, 0, 0, 0] });
+    const nonCritState = state({ handCardStars: [0, 0, 0, 0, 0] });
+    const critResult = resolveAction(critState, action, CONSTANTS, () => 0.5);
+    const nonCritResult = resolveAction(nonCritState, action, CONSTANTS, () => 0.5);
+    const critHp = critResult.enemies.find((e) => e.npcId === 9001)?.currentHp ?? 0;
+    const nonCritHp = nonCritResult.enemies.find((e) => e.npcId === 9001)?.currentHp ?? 0;
+    expect(critHp).toBeLessThan(nonCritHp);
+  });
+
+  it("removes the played slot's handCardStars entry alongside the hand card", () => {
+    const result = resolveAction(state({ handCardStars: [7, 1, 2, 3, 4] }), action, CONSTANTS);
+    expect(result.handCardStars).toEqual([1, 2, 3, 4]);
+  });
+
+  it("derives isBusterChain from chainCards, boosting damage over a non-Buster chain", () => {
+    const busterChain: Action = { ...action, chainCards: [{ type: BUSTER, servantId: 1 }, { type: BUSTER, servantId: 2 }, { type: BUSTER, servantId: 3 }] };
+    const busterResult = resolveAction(state(), busterChain, CONSTANTS);
+    const baselineResult = resolveAction(state(), action, CONSTANTS);
+    const busterHp = busterResult.enemies.find((e) => e.npcId === 9001)?.currentHp ?? 0;
+    const baselineHp = baselineResult.enemies.find((e) => e.npcId === 9001)?.currentHp ?? 0;
+    expect(busterHp).toBeLessThan(baselineHp);
   });
 });
 
@@ -568,6 +628,37 @@ describe("resolveAction — useSkill", () => {
     );
     expect(result.servants.find((s) => s.servantId === 1)?.currentHp).toBe(15000);
     expect(result.servants.find((s) => s.servantId === 4)?.currentHp).toBe(1000);
+  });
+
+  it("gainHpPercent heals rawPercent/1000 of the target's own maxHp, rounded", () => {
+    const action: Action = { type: "useSkill", servantId: 1, skillSlot: 3, effects: [gainHpPercentEffect({ rawPercent: 300 })], cooldownTurns: 5 };
+    const result = resolveAction(
+      state({ servants: [servant({ servantId: 1, currentHp: 5000, maxHp: 10000 }), servant({ servantId: 2 }), servant({ servantId: 3 })] }),
+      action,
+      CONSTANTS,
+    );
+    expect(result.servants.find((s) => s.servantId === 1)?.currentHp).toBe(8000);
+  });
+
+  it("gainHpPercent caps at maxHp (no overheal)", () => {
+    const action: Action = { type: "useSkill", servantId: 1, skillSlot: 3, effects: [gainHpPercentEffect({ rawPercent: 1000 })], cooldownTurns: 5 };
+    const result = resolveAction(
+      state({ servants: [servant({ servantId: 1, currentHp: 9000, maxHp: 10000 }), servant({ servantId: 2 }), servant({ servantId: 3 })] }),
+      action,
+      CONSTANTS,
+    );
+    expect(result.servants.find((s) => s.servantId === 1)?.currentHp).toBe(10000);
+  });
+
+  it("gainHpPercent respects ptOne targeting", () => {
+    const action: Action = { type: "useSkill", servantId: 1, skillSlot: 3, effects: [gainHpPercentEffect({ targetType: "ptOne", rawPercent: 500 })], cooldownTurns: 5, targetServantId: 2 };
+    const result = resolveAction(
+      state({ servants: [servant({ servantId: 1, currentHp: 5000, maxHp: 10000 }), servant({ servantId: 2, currentHp: 5000, maxHp: 10000 }), servant({ servantId: 3 })] }),
+      action,
+      CONSTANTS,
+    );
+    expect(result.servants.find((s) => s.servantId === 1)?.currentHp).toBe(5000);
+    expect(result.servants.find((s) => s.servantId === 2)?.currentHp).toBe(10000);
   });
 });
 

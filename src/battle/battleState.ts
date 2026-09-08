@@ -108,8 +108,24 @@ export interface BattleState {
    * shape end to end avoids a conversion step at deal time.
    */
   readonly cardBag: readonly HandCard[];
-  /** Crit stars generated last turn, allocated via this turn's weighted lottery (research/04 §6.2). Never accumulates past one turn (research/04 §6.3). */
+  /**
+   * Crit stars generated last turn, allocated via this turn's weighted lottery (research/04
+   * §6.2). Never accumulates past one turn (research/04 §6.3) — `resolveEndTurn`
+   * (`./turnLoop.js`) resets this to 0 immediately after allocating it into `handCardStars`,
+   * since a turn's leftover stars are simply discarded rather than carried to a third turn.
+   */
   readonly starsCarried: number;
+  /**
+   * Each `handCards` slot's crit-star allocation for this turn (same length/order as
+   * `handCards`), computed once at hand-draw time (`resolveEndTurn`, `./turnLoop.js`) via
+   * `allocateCritStars`'s weighted lottery over `starsCarried` (research/04 §6.2). Kept as a
+   * parallel array rather than a field on `HandCard` itself since the cardBag reuses the
+   * `HandCard` shape for not-yet-dealt cards, which have no crit-star allocation of their
+   * own — see that type's own doc comment. `resolvePlayCard` reads this to derive
+   * `HitResolutionContext.isCrit` (`./critStarLottery.js`'s `critChanceForStars`/
+   * `rollIsCrit`) instead of taking it as caller-supplied input.
+   */
+  readonly handCardStars: readonly number[];
   readonly fieldTraits: ReadonlySet<number>;
   readonly costSpent: number;
   readonly costBudget: number;

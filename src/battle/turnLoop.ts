@@ -6,9 +6,11 @@ import type { Action, CommandSealEffect } from "./action.js";
 import { enemyToBattleUnit, servantToBattleUnit, type BattleState, type EnemyInstance, type ServantInstance } from "./battleState.js";
 import { buildCombinedCardDeck } from "./cardDeck.js";
 import { drawCardBagHand } from "./cardBag.js";
+import { allocateCritStars, critChanceForStars, rollIsCrit } from "./critStarLottery.js";
+import { classifyChain, extraCardChainTypeFrom, isBusterChainFrom } from "./chainDetection.js";
 import type { BattleConstants } from "./gameConstants.js";
 import { resolveHit, type HitResolutionContext } from "./hitResolution.js";
-import type { BuffGrantEffect, GainHpEffect, GainNpEffect, RemoveBuffEffect, SkillEffect, SkillTargetType } from "./skillEffect.js";
+import type { BuffGrantEffect, GainHpEffect, GainHpPercentEffect, GainNpEffect, RemoveBuffEffect, SkillEffect, SkillTargetType } from "./skillEffect.js";
 
 /**
  * NP gauge's passive accumulation ceiling by NP level (research/04 §5.2a, confirmed by the
@@ -64,9 +66,23 @@ function advanceEnemyForEndTurn(enemy: EnemyInstance): EnemyInstance {
  * a documented, provisional call (same standing as this project's other open-item defaults)
  * rather than a confirmed rule, since no primary/community source addresses it directly.
  *
- * `starsCarried`, `currentWaveIndex`, and wave/death transitions are deliberately untouched
- * by `endTurn` — this increment's `playCard`/`castNp` don't yet generate/consume stars or
- * resolve enemy death transitions (shift/call), so there's nothing correct to compute here.
+ * `currentWaveIndex` and wave/death transitions are deliberately untouched by `endTurn` —
+ * this increment doesn't resolve enemy death transitions (shift/call), so there's nothing
+ * correct to compute here. Star *generation* from landed hits (i.e. what would feed the
+ * *next* `endTurn`'s `starsCarried`) also isn't wired yet (research/09 §7) — this increment
+ * only wires the *consumption* side, allocating whatever `starsCarried` already holds
+ * across the freshly drawn hand.
+ *
+ * The new hand's per-slot crit-star allocation (`handCardStars`, research/04 §6.2's
+ * weighted lottery, `allocateCritStars`) is computed here, once per turn, exactly matching
+ * that file's confirmed "stars generated during a turn are allocated to determine the
+ * *following* turn's per-card crit chance" — the freshly-dealt hand is the natural, and
+ * only, point where that following turn's hand is actually known. `starsCarried` itself is
+ * then reset to 0 — research/04 §6.3, confirmed: "a single turn's leftover stars are simply
+ * discarded once the next turn's crit chances are rolled," not carried indefinitely. Without
+ * this reset, an un-updated `starsCarried` (star generation being unwired means nothing else
+ * writes to it yet) would get silently re-allocated onto every future turn's hand instead of
+ * being spent exactly once.
  */
 function resolveEndTurn(state: BattleState, randomFn: () => number): BattleState {
   const servants = state.servants.map(advanceServantForEndTurn);
@@ -74,13 +90,16 @@ function resolveEndTurn(state: BattleState, randomFn: () => number): BattleState
 
   const fullDeck = buildCombinedCardDeck(servants);
   const { hand, nextBag } = drawCardBagHand(state.cardBag, fullDeck, 5, randomFn);
+  const handCardStars = allocateCritStars(hand, servants, state.starsCarried, randomFn);
 
   return {
     ...state,
     servants,
     enemies,
     handCards: hand,
+    handCardStars,
     cardBag: nextBag,
+    starsCarried: 0,
     currentTurn: state.currentTurn + 1,
     consecutiveNpChainCount: 0,
     mysticCodeSkillCooldowns: decrementCooldowns(state.mysticCodeSkillCooldowns),
@@ -121,12 +140,12 @@ function findEnemy(state: BattleState, npcId: number): EnemyInstance {
  * any, `consumeBuffUse`), and the attacker's NP gauge gain (capped at that servant's own
  * `NP_GAUGE_CAP_BY_LEVEL` ceiling).
  *
- * This is the shared core of `playCard`/`castNp` — everything research/09 §2 steps 3a-3d
- * (crit roll from stars, chain-position bonus, Overcharge stage) that would otherwise
- * *derive* `context` is still the caller's responsibility here, matching `resolveHit`'s own
- * existing "already-resolved input" design (see that function's doc comment) — this turn
- * loop does not yet compute any of it itself (research/09 §7: the crit-star weighted
- * lottery and chain detection are their own, not-yet-built increments).
+ * This is the shared core of `playCard`/`castNp` — `context` here is always a *complete*
+ * `HitResolutionContext` (its caller, `resolvePlayCard`/`resolveCastNp`, is the one that
+ * derives `isCrit`/`isBusterChain`/`extraCardChainType` before calling in). Overcharge
+ * stage and the remaining server-mod/random-roll fields (research/09 §2 steps 3a-3d) are
+ * still the caller's responsibility beyond that, matching `resolveHit`'s own existing
+ * "already-resolved input" design (see that function's doc comment).
  */
 function applyHit(
   state: BattleState,
@@ -168,10 +187,17 @@ function applyHit(
  * returned state, not against the turn's original 5-card hand.
  *
  * Throws if `handCardIndex` doesn't point at a real card in `state.handCards`, if that
- * slot's `HandCard.servantId` (research/07 §4) doesn't match `action.servantId`, or if the
- * supplied `context.card.type`/`context.isNP` don't match what's actually being played —
- * the same "don't silently accept wrong-looking input" convention `buildCombinedCardDeck`/
- * `drawCardBagHand` already use.
+ * slot's `HandCard.servantId` (research/07 §4) doesn't match `action.servantId`, if the
+ * supplied `context.card.type`/`context.isNP` don't match what's actually being played, or
+ * if `action.chainCards` doesn't include the card actually being played — the same "don't
+ * silently accept wrong-looking input" convention `buildCombinedCardDeck`/`drawCardBagHand`
+ * already use.
+ *
+ * `HitResolutionContext.isCrit`/`isBusterChain`/`extraCardChainType` are derived here rather
+ * than caller-supplied (research/09 §7's "next increment", now built): `isCrit` from this
+ * hand slot's `state.handCardStars` allocation (`critChanceForStars`/`rollIsCrit`,
+ * `./critStarLottery.js`), the other two from classifying `action.chainCards`
+ * (`classifyChain`/`isBusterChainFrom`/`extraCardChainTypeFrom`, `./chainDetection.js`).
  *
  * Removes the played card from the hand (played cards aren't returned to the bag — the bag
  * only tracks not-yet-*dealt* cards, research/03 §6.5) and resets `consecutiveNpChainCount`
@@ -181,6 +207,7 @@ function resolvePlayCard(
   state: BattleState,
   action: Extract<Action, { type: "playCard" }>,
   constants: BattleConstants,
+  randomFn: () => number,
 ): BattleState {
   const servant = findServant(state, action.servantId);
   const enemy = findEnemy(state, action.targetNpcId);
@@ -197,11 +224,26 @@ function resolvePlayCard(
   if (action.context.isNP) {
     throw new RangeError("playCard's context.isNP must be false — NP cards are cast via castNp, not playCard");
   }
+  if (!action.chainCards.some((c) => c.type === handCard.card && c.servantId === handCard.servantId)) {
+    throw new RangeError("action.chainCards must include the card actually being played (matched by type + servantId)");
+  }
 
-  const nextState = applyHit(state, servant, enemy, constants, action.context);
+  const classification = classifyChain(action.chainCards);
+  // `handCardStars` is always kept parallel to `handCards` (same length/order), and `handCard` above already confirmed this index is in range.
+  const stars = state.handCardStars[action.handCardIndex] as number;
+  const isCrit = rollIsCrit(critChanceForStars(stars), randomFn);
+  const context: HitResolutionContext = {
+    ...action.context,
+    isCrit,
+    isBusterChain: isBusterChainFrom(classification),
+    extraCardChainType: extraCardChainTypeFrom(classification),
+  };
+
+  const nextState = applyHit(state, servant, enemy, constants, context);
   const handCards = nextState.handCards.filter((_, index) => index !== action.handCardIndex);
+  const handCardStars = nextState.handCardStars.filter((_, index) => index !== action.handCardIndex);
 
-  return { ...nextState, handCards, consecutiveNpChainCount: 0 };
+  return { ...nextState, handCards, handCardStars, consecutiveNpChainCount: 0 };
 }
 
 /**
@@ -218,6 +260,11 @@ function resolvePlayCard(
  * regardless of how far past 100% (or any other bracket) it was sitting at, with no
  * "keep the remainder" carryover. This overrides whatever gauge `applyHit` just added from
  * this same NP's own hits (irrelevant for the caster, since it's zeroed immediately after).
+ *
+ * `isCrit`/`isBusterChain`/`extraCardChainType` are hardcoded `false`/`false`/`"none"`
+ * rather than derived from the crit-star lottery/chain classification the way `playCard`'s
+ * are — research/03 §1.4/§5: the NP card is an all-zero stub in the per-position modifier
+ * table and isn't part of the 3-card chain at all, so neither mechanic applies to an NP.
  */
 function resolveCastNp(state: BattleState, action: Extract<Action, { type: "castNp" }>, constants: BattleConstants): BattleState {
   const servant = findServant(state, action.servantId);
@@ -226,7 +273,8 @@ function resolveCastNp(state: BattleState, action: Extract<Action, { type: "cast
     throw new RangeError("castNp's context.isNP must be true");
   }
 
-  const nextState = applyHit(state, servant, enemy, constants, action.context);
+  const context: HitResolutionContext = { ...action.context, isCrit: false, isBusterChain: false, extraCardChainType: "none" };
+  const nextState = applyHit(state, servant, enemy, constants, context);
   const servants = nextState.servants.map((s) => (s.servantId === servant.servantId ? { ...s, currentNpGauge: 0 } : s));
 
   return { ...nextState, servants, consecutiveNpChainCount: nextState.consecutiveNpChainCount + 1 };
@@ -370,6 +418,19 @@ function applyGainHpEffect(
   return servants.map((s) => (targetIds.has(s.servantId) ? { ...s, currentHp: Math.min(s.currentHp + effect.rawAmount, s.maxHp) } : s));
 }
 
+/** Applies one `GainHpPercentEffect` (`./skillEffect.js`) to every servant `resolveAllyTargets` resolves it to — heals `rawPercent / 1000` of that servant's own `maxHp`, rounded, capped at `maxHp` (no overheal). */
+function applyGainHpPercentEffect(
+  servants: readonly ServantInstance[],
+  actingServantId: number | undefined,
+  effect: GainHpPercentEffect,
+  targetServantId: number | undefined,
+): readonly ServantInstance[] {
+  const targetIds = new Set(resolveAllyTargets(servants, effect.targetType, actingServantId, targetServantId));
+  return servants.map((s) =>
+    targetIds.has(s.servantId) ? { ...s, currentHp: Math.min(s.currentHp + Math.round((s.maxHp * effect.rawPercent) / 1000), s.maxHp) } : s,
+  );
+}
+
 /**
  * Applies one `RemoveBuffEffect` (`./skillEffect.js`, research/05 §5's `subState`) to every
  * unit it targets, via `removeBuffsByTrait` (`./buffLifecycle.js`). `self`/`ptAll`/`ptOne`
@@ -422,6 +483,8 @@ function applySkillEffect(
       return { ...state, servants: applyGainNpEffect(state.servants, actingServantId, effect, targetServantId) };
     case "gainHp":
       return { ...state, servants: applyGainHpEffect(state.servants, actingServantId, effect, targetServantId) };
+    case "gainHpPercent":
+      return { ...state, servants: applyGainHpPercentEffect(state.servants, actingServantId, effect, targetServantId) };
     case "removeBuff":
       return applyRemoveBuffEffect(state, actingServantId, effect, targetServantId, targetNpcId);
   }
@@ -545,11 +608,12 @@ function resolveOrderChange(state: BattleState, action: Extract<Action, { type: 
  * whose functions do anything else (damage, card manipulation, NP-turn shortening, etc.)
  * can't be represented yet.
  *
- * `playCard`/`castNp` themselves are also narrower than research/09 §2's full pipeline:
- * they resolve exactly one hit from an already-fully-resolved `HitResolutionContext` the
- * caller supplies (crit roll, chain position/type, Overcharge stage) — the crit-star
- * weighted lottery, chain-position detection, and Overcharge-stage derivation that would
- * *produce* that context automatically are still not implemented (research/09 §7).
+ * `playCard`/`castNp` are also narrower than research/09 §2's full pipeline in one
+ * remaining way: Overcharge-stage derivation stays caller-supplied (`context.
+ * npDamageMultiplier`), as do the server-mod/random-roll fields. `isCrit`/`isBusterChain`/
+ * `extraCardChainType`, however, are now derived automatically via the crit-star weighted
+ * lottery (`./critStarLottery.js`) and chain classification (`./chainDetection.js`) —
+ * research/09 §7's "next increment" this pass built.
  */
 export function resolveAction(
   state: BattleState,
@@ -561,7 +625,7 @@ export function resolveAction(
     case "endTurn":
       return resolveEndTurn(state, randomFn);
     case "playCard":
-      return resolvePlayCard(state, action, constants);
+      return resolvePlayCard(state, action, constants, randomFn);
     case "castNp":
       return resolveCastNp(state, action, constants);
     case "useCommandSeal":

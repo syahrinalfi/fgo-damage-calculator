@@ -1,5 +1,16 @@
+import type { Card } from "@atlasacademy/api-connector";
 import type { HitResolutionContext } from "./hitResolution.js";
 import type { SkillEffect } from "./skillEffect.js";
+
+/**
+ * The 3 fields of `HitResolutionContext` this project's turn loop now derives itself
+ * (research/09 §7's "next increment"): `isCrit` from the hand slot's crit-star allocation
+ * (`./critStarLottery.js`), `isBusterChain`/`extraCardChainType` from the turn's 3-card
+ * chain classification (`./chainDetection.js`). A caller building an `Action` supplies
+ * everything else `HitResolutionContext` still needs (Overcharge stage, server-mod values,
+ * super-effective check, etc.) as before.
+ */
+export type DerivedHitContext = Omit<HitResolutionContext, "isCrit" | "isBusterChain" | "extraCardChainType">;
 
 /**
  * One atomic thing a turn's plan can do (research/09 §1) — the granularity both
@@ -22,13 +33,28 @@ export type Action =
       readonly servantId: number;
       readonly handCardIndex: number;
       readonly targetNpcId: number;
-      readonly context: HitResolutionContext;
+      readonly context: DerivedHitContext;
+      /**
+       * This turn's full 3-card chain selection (research/03 §3: a chain is always exactly
+       * 3 non-NP cards), in play order — used only to derive `isBusterChain`/
+       * `extraCardChainType` via `classifyChain` (`./chainDetection.js`). Must include the
+       * card this action is actually playing (matched by `type` + `servantId` against the
+       * `handCards` slot at `handCardIndex`); throws otherwise, same as the existing
+       * `context.card.type` cross-check.
+       */
+      readonly chainCards: readonly { readonly type: Card; readonly servantId: number }[];
     }
   | {
       readonly type: "castNp";
       readonly servantId: number;
       readonly targetNpcId: number;
-      readonly context: HitResolutionContext;
+      /**
+       * An NP is never part of a 3-card chain and can never critically hit (research/03
+       * §1.4/§5's all-zero NP card-position stub) — `isCrit`/`isBusterChain`/
+       * `extraCardChainType` are hardcoded `false`/`false`/`"none"` by `resolveCastNp`
+       * rather than derived at all, so `castNp` needs no `chainCards` equivalent.
+       */
+      readonly context: DerivedHitContext;
     }
   | {
       readonly type: "useSkill";

@@ -91,7 +91,7 @@ export interface GainNpEffect {
 /**
  * One already-resolved flat heal a `useSkill`/`useMysticCodeSkill` `Action` applies — models
  * the API's `gainHp` `FuncType` (research/07 §2: MC "First Aid" `ptOne`, "Cure-All"
- * `ptAll`), distinct from the percentage-of-max-HP `gainHpPer` `FuncType` (not modeled).
+ * `ptAll`), distinct from the percentage-of-max-HP `gainHpPer` `FuncType` (`GainHpPercentEffect` below).
  * `rawAmount` is a flat HP addition, capped at the target's `maxHp` (no overheal modeled,
  * matching `useCommandSeal`'s `healHp` effect, `./action.js`) — same provisional-reading
  * standing as `GainNpEffect` above, not a session-specific primary-source confirmation.
@@ -110,5 +110,27 @@ export interface GainHpEffect {
   readonly targetType: SkillTargetType;
 }
 
+/**
+ * One already-resolved percentage-of-`maxHp` heal a `useSkill`/`useMysticCodeSkill` `Action`
+ * applies — models the API's `gainHpPer` `FuncType`, distinct from the flat-amount `gainHp`
+ * `FuncType` (`GainHpEffect` above). `rawPercent` follows this project's already-established
+ * per-mille rate convention (e.g. `CRITICAL_RATE_PER_STAR`/buff `baseValue`, research/04
+ * §6.1/research/05 §2 — divide by 1000 to get the real rate): `3000` → 30% of `maxHp`,
+ * rounded and added to `currentHp`, capped at `maxHp` (no overheal, same as `GainHpEffect`).
+ * This project has no live-verified primary-source example of `gainHpPer`'s exact `Vals`
+ * shape — this reading is a provisional extension of the same convention `GainNpEffect`/
+ * `GainHpEffect`'s own doc comments already flag as unconfirmed-but-consistent, not a
+ * session-specific citation.
+ *
+ * Same "not specially guarded against a dead target" and ally-only-`SkillTargetType`
+ * standing as `GainHpEffect`.
+ */
+export interface GainHpPercentEffect {
+  readonly kind: "gainHpPercent";
+  /** Raw per-mille `Vals` field — `3000` = 30% of `maxHp`. */
+  readonly rawPercent: number;
+  readonly targetType: SkillTargetType;
+}
+
 /** One already-resolved skill/NP effect a `useSkill`/`useMysticCodeSkill` `Action` can carry (research/09 §7's still-limited scope). */
-export type SkillEffect = BuffGrantEffect | RemoveBuffEffect | GainNpEffect | GainHpEffect;
+export type SkillEffect = BuffGrantEffect | RemoveBuffEffect | GainNpEffect | GainHpEffect | GainHpPercentEffect;
