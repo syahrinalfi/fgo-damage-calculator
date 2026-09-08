@@ -299,4 +299,58 @@ describe("optimizeQuest", () => {
     const ceOnBench = results.some((r) => r.party.some((m) => !m.isFrontLine && m.equippedCe !== undefined));
     expect(ceOnBench).toBe(true);
   });
+
+  it("omitting turnCount keeps the original single-turn result shape (no endTurn appended)", () => {
+    const results = optimizeQuest({
+      shortlist: [candidate(1), candidate(2), candidate(3)],
+      cePool: [],
+      waves: [wave()],
+      costBudget: 1000,
+      constants: CONSTANTS,
+      resolveHitContext,
+      randomFn: () => 0,
+    });
+    expect(results[0]?.best.actions.some((a) => a.type === "endTurn")).toBe(false);
+    expect(results[0]?.best.finalState.currentTurn).toBe(1);
+  });
+
+  it("searches a multi-turn horizon when turnCount is supplied, applying one endTurn per turn", () => {
+    const results = optimizeQuest({
+      shortlist: [candidate(1), candidate(2), candidate(3)],
+      cePool: [],
+      waves: [wave()],
+      costBudget: 1000,
+      constants: CONSTANTS,
+      resolveHitContext,
+      turnCount: 2,
+      randomFn: () => 0,
+    });
+    expect(results).toHaveLength(1);
+    const endTurnCount = results[0]?.best.actions.filter((a) => a.type === "endTurn").length;
+    expect(endTurnCount).toBe(2);
+    expect(results[0]?.best.finalState.currentTurn).toBe(3);
+  });
+
+  it("credits a multi-turn line's total damage across the whole horizon, at least as much as a single turn alone", () => {
+    const oneTurn = optimizeQuest({
+      shortlist: [candidate(1), candidate(2), candidate(3)],
+      cePool: [],
+      waves: [wave()],
+      costBudget: 1000,
+      constants: CONSTANTS,
+      resolveHitContext,
+      randomFn: () => 0,
+    });
+    const twoTurns = optimizeQuest({
+      shortlist: [candidate(1), candidate(2), candidate(3)],
+      cePool: [],
+      waves: [wave()],
+      costBudget: 1000,
+      constants: CONSTANTS,
+      resolveHitContext,
+      turnCount: 2,
+      randomFn: () => 0,
+    });
+    expect(twoTurns[0]?.best.score).toBeGreaterThanOrEqual(oneTurn[0]?.best.score ?? Infinity);
+  });
 });

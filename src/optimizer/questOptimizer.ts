@@ -1,17 +1,18 @@
 import type { Servant as ServantModule } from "@atlasacademy/api-connector";
 import type { ServantBuild } from "../account/types.js";
 import type { BattleState, EquippedCraftEssence, HandCard } from "../battle/battleState.js";
-import type { DerivedHitContext } from "../battle/action.js";
+import type { Action, DerivedHitContext } from "../battle/action.js";
 import type { BattleConstants } from "../battle/gameConstants.js";
 import { FRONT_LINE_SERVANT_COUNT } from "../battle/cardDeck.js";
 import type { Wave } from "../quest/types.js";
 import { buildInitialBattleState, type PartyMemberSpec } from "./battleStateBuilder.js";
 import { enumerateCeAssignments, enumeratePartyFormations } from "./candidateGeneration.js";
 import { buildCardOrderCandidates } from "./cardOrderCandidates.js";
+import { searchMultiTurnActionSequences, type MultiTurnResult } from "./multiTurnSearch.js";
 import { damageDealtAtSlot } from "./objectives.js";
 import { buildOrderChangeCandidates, type OrderChangeSwap } from "./orderChangeCandidates.js";
 import { buildSkillAndCardOrderCandidates, type SkillActivation } from "./skillUsageCandidates.js";
-import { searchBestActionSequence, type ActionSequenceResult, type SequenceScoreFn } from "./turnSearch.js";
+import { searchBestActionSequence, type ActionSequenceCandidate, type ActionSequenceResult, type SequenceScoreFn } from "./turnSearch.js";
 
 /** One shortlisted servant a caller wants the search to consider fielding — not yet tied to a CE or front-line/bench role, both decided per enumerated combination. */
 export interface ServantCandidate {
@@ -40,25 +41,30 @@ export interface QuestOptimizerOptions {
    * Resolves this party candidate's available (off-cooldown) skill/Mystic Code skill
    * activations (research/09 §4's "skill-usage plan per turn" axis) as fully-resolved
    * `SkillActivation`s — same "already-resolved input" convention as `resolveHitContext`.
-   * Receives the party's own just-built `initialState` so targets/servantIds can reference
-   * the actual fielded servants for this combination. Every subset of the returned list is
-   * tried (`enumerateSkillUsageSubsets`, `./candidateGeneration.js`), each crossed with
-   * every card-order candidate (`./skillUsageCandidates.js`) — omit this option entirely
-   * (the default) to search the card-order axis alone, unchanged from before this option
-   * existed.
+   * Receives the current turn's own `BattleState` so targets/servantIds can reference the
+   * actual fielded servants for this combination — this is the party's just-built
+   * `initialState` for a single-turn search (`turnCount` omitted), or *that turn's own*
+   * post-`endTurn` state (fresh cooldowns/hand already reflected) for each turn of a
+   * multi-turn search (`turnCount` supplied, `./multiTurnSearch.js`). Every subset of the
+   * returned list is tried (`enumerateSkillUsageSubsets`, `./candidateGeneration.js`), each
+   * crossed with every card-order candidate (`./skillUsageCandidates.js`) — omit this option
+   * entirely (the default) to search the card-order axis alone, unchanged from before this
+   * option existed.
    */
-  readonly resolveSkillOptions?: (initialState: BattleState) => readonly SkillActivation[];
+  readonly resolveSkillOptions?: (state: BattleState) => readonly SkillActivation[];
   /**
    * Resolves this party candidate's available (off-cooldown, live-sub-member) Order Change
    * swaps (research/09 §4's final "Order-Change-timing" axis) as fully-resolved
    * `OrderChangeSwap`s — same "already-resolved input" convention as `resolveHitContext`/
-   * `resolveSkillOptions`. Every swap is tried at both timings relative to the skill-usage
+   * `resolveSkillOptions`, called with the same per-turn state described on that option
+   * (this party's `initialState` for a single turn, or each turn's own post-`endTurn` state
+   * for a multi-turn search). Every swap is tried at both timings relative to the skill-usage
    * plan (`enumerateOrderChangeTimings`, `./candidateGeneration.js`), always resolved before
    * any card is played (see that function's own doc comment for why) — omit this option
    * entirely (the default) to search without the Order-Change axis, unchanged from before
    * this option existed.
    */
-  readonly resolveOrderChangeOptions?: (initialState: BattleState) => readonly OrderChangeSwap[];
+  readonly resolveOrderChangeOptions?: (state: BattleState) => readonly OrderChangeSwap[];
   /**
    * Maximum benched sub-members to field alongside the exactly-`FRONT_LINE_SERVANT_COUNT`
    * front-line servants (research/00 §4's "up to 3 sub-members") — every party size from
@@ -70,6 +76,25 @@ export interface QuestOptimizerOptions {
    * — meaningful once `resolveOrderChangeOptions` can swap a bench member in mid-turn.
    */
   readonly maxBenchCount?: number;
+  /**
+   * Number of turns to search as one horizon (research/09 §5's ST Burst Finder multi-turn
+   * specialization) — **omitting this option entirely** keeps this project's original
+   * single-turn search byte-for-byte (`searchBestActionSequence`, `./turnSearch.js`:
+   * `best.finalState` is the state right after this turn's actions, `endTurn` never applied).
+   * Supplying it (any value ≥ 0, including `1`) instead routes through
+   * `searchMultiTurnActionSequences` (`./multiTurnSearch.js`): an `endTurn` `Action` is
+   * applied after each turn's chosen candidate before the next turn's candidates are built,
+   * so `resolveHitContext`/`resolveSkillOptions`/`resolveOrderChangeOptions` and the target
+   * enemy are all re-resolved fresh from *that* turn's own post-`endTurn` state — cooldowns,
+   * redrawn hand, and a shifted/dead target enemy are picked up naturally, no special-casing
+   * needed here. `best.actions` for a multi-turn result is the full horizon's actions
+   * flattened turn by turn with an explicit `endTurn` inserted after each one (including the
+   * last), so `best.finalState` is always exactly what replaying `best.actions` against
+   * `initialState` would produce. `scoreFn` is applied once, at the end of the full horizon,
+   * not per turn — see `searchMultiTurnActionSequences`'s own doc comment for why a per-turn
+   * greedy score would be wrong for exactly the scenario this option exists for.
+   */
+  readonly turnCount?: number;
   /** Which of `initialState.enemies` the default `damageDealtAtSlot` objective targets and every combination's `playCard` `Action`s attack — defaults to `0` (the first/only enemy). */
   readonly targetEnemySlotIndex?: number;
   /** Overrides the default `damageDealtAtSlot(targetEnemySlotIndex)` objective. */
@@ -104,17 +129,28 @@ export interface QuestOptimizerCandidate {
  * not worth simulating at all — filtered before `buildCardOrderCandidates` even runs) or the
  * quest's first wave has no enemies to target at all.
  *
- * **Scope, deliberately not attempted here**: only a single turn's line per party (no
- * multi-turn horizon — the ST Burst Finder's own multi-turn specialization, §5, is a distinct
- * future increment on top of this same engine, not something this function's single-turn
- * scoring loop attempts). All 5 of research/09 §4's search-space axes are now searchable:
- * servant subset/CE assignment always (now including the bench axis via
- * `enumeratePartyFormations`, opt-in through `maxBenchCount`), card-order always, skill-usage
- * plan when `resolveSkillOptions` is supplied (`./skillUsageCandidates.js`), and
- * Order-Change-timing when `resolveOrderChangeOptions` is supplied
- * (`./orderChangeCandidates.js`) — all 3 optional axes remain opt-in, so omitting any of them
- * searches exactly what the search covered before that option existed.
+ * All 5 of research/09 §4's search-space axes are searchable: servant subset/CE assignment
+ * always (including the bench axis via `enumeratePartyFormations`, opt-in through
+ * `maxBenchCount`), card-order always, skill-usage plan when `resolveSkillOptions` is
+ * supplied (`./skillUsageCandidates.js`), and Order-Change-timing when
+ * `resolveOrderChangeOptions` is supplied (`./orderChangeCandidates.js`). §5's multi-turn
+ * horizon is searchable too, opt-in through `turnCount` (`./multiTurnSearch.js`) — every
+ * optional axis remains opt-in, so omitting any of them searches exactly what the search
+ * covered before that option existed.
  */
+/**
+ * Flattens a `MultiTurnResult` (`./multiTurnSearch.js`) into the same `ActionSequenceResult`
+ * shape a single-turn search already produces — `endTurn` is itself a first-class modeled
+ * `Action` (`../battle/action.js`), so inserting one after each turn's own chosen actions
+ * (including the last) makes `actions` a literal, replayable log: simulating `actions` against
+ * `initialState` reproduces `finalState` exactly, the same invariant a single-turn
+ * `ActionSequenceResult` already has.
+ */
+function toActionSequenceResult(multiTurnResult: MultiTurnResult): ActionSequenceResult {
+  const actions: Action[] = multiTurnResult.turnActions.flatMap((turnActions) => [...turnActions, { type: "endTurn" }]);
+  return { label: multiTurnResult.label, actions, finalState: multiTurnResult.finalState, score: multiTurnResult.score };
+}
+
 export function optimizeQuest(options: QuestOptimizerOptions): readonly QuestOptimizerCandidate[] {
   const targetSlot = options.targetEnemySlotIndex ?? 0;
   const scoreFn = options.scoreFn ?? damageDealtAtSlot(targetSlot);
@@ -154,22 +190,46 @@ export function optimizeQuest(options: QuestOptimizerOptions): readonly QuestOpt
       });
 
       if (initialState.costSpent > initialState.costBudget) continue;
-      const targetEnemy = initialState.enemies[targetSlot];
-      if (targetEnemy === undefined) continue;
 
-      const buildForHand = (hand: BattleState["handCards"]): ReturnType<typeof buildCardOrderCandidates> => {
-        const contextTemplates = hand.map(options.resolveHitContext);
-        const cardCandidates = buildCardOrderCandidates(hand, contextTemplates, targetEnemy.npcId);
-        return options.resolveSkillOptions === undefined
-          ? cardCandidates
-          : buildSkillAndCardOrderCandidates(options.resolveSkillOptions(initialState), cardCandidates);
+      // Re-resolves the target enemy and every optional axis fresh from `state` (rather than
+      // capturing `initialState` once) so a multi-turn search picks up a shifted/dead target,
+      // newly off-cooldown skills, and a freshly-redrawn hand each turn with no special-casing
+      // needed here — for a single-turn search (`turnCount` omitted), this is called exactly
+      // once with `initialState` itself, so behavior is unchanged from before this option
+      // existed.
+      const buildCandidatesForState = (state: BattleState): readonly ActionSequenceCandidate[] => {
+        const targetEnemy = state.enemies[targetSlot];
+        if (targetEnemy === undefined) return [];
+
+        const buildForHand = (hand: BattleState["handCards"]): ReturnType<typeof buildCardOrderCandidates> => {
+          const contextTemplates = hand.map(options.resolveHitContext);
+          const cardCandidates = buildCardOrderCandidates(hand, contextTemplates, targetEnemy.npcId);
+          return options.resolveSkillOptions === undefined
+            ? cardCandidates
+            : buildSkillAndCardOrderCandidates(options.resolveSkillOptions(state), cardCandidates);
+        };
+        return options.resolveOrderChangeOptions === undefined
+          ? buildForHand(state.handCards)
+          : buildOrderChangeCandidates(options.resolveOrderChangeOptions(state), state.handCards, buildForHand);
       };
-      const candidates =
-        options.resolveOrderChangeOptions === undefined
-          ? buildForHand(initialState.handCards)
-          : buildOrderChangeCandidates(options.resolveOrderChangeOptions(initialState), initialState.handCards, buildForHand);
-      const ranked = searchBestActionSequence(initialState, candidates, options.constants, randomFn, scoreFn);
-      const best = ranked[0];
+
+      let best: ActionSequenceResult | undefined;
+      if (options.turnCount === undefined) {
+        const candidates = buildCandidatesForState(initialState);
+        const ranked = searchBestActionSequence(initialState, candidates, options.constants, randomFn, scoreFn);
+        best = ranked[0];
+      } else {
+        const multiTurnResults = searchMultiTurnActionSequences(
+          initialState,
+          options.turnCount,
+          buildCandidatesForState,
+          options.constants,
+          randomFn,
+          scoreFn,
+        );
+        const bestMultiTurn = multiTurnResults[0];
+        best = bestMultiTurn === undefined ? undefined : toActionSequenceResult(bestMultiTurn);
+      }
       if (best === undefined) continue;
 
       results.push({ party, initialState, best });
