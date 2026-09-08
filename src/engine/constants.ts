@@ -47,6 +47,24 @@ export const CHAINBONUS_ARTS_RATE = 0.2;
 export const CHAINBONUS_QUICK_STARS = 20;
 
 /**
+ * Quick-lead flat crit-chance bonus for every hand card, next turn (research/06 §7.2/§7.4:
+ * "+20% critical chance for all 5 hand cards," added 2022-07-31's 7th-Anniversary battle
+ * overhaul). Community-sourced, cross-corroborated across 3+ independent authors — this
+ * project's usual "reliable but not primary-source" tier (see research/06 §7's own sourcing
+ * note) — no `NiceConstant` name was found for this specific figure, unlike
+ * `CHAINBONUS_ARTS_RATE`/`CHAINBONUS_QUICK`. Distinct from both `CHAINBONUS_QUICK_STARS`
+ * (the *uniform-Quick-chain*'s own next-turn star bonus) and the `criticalAdd`/
+ * `firstCardBonus` term already wired via `chainLeadCardType` (`src/battle/damageInput.ts`
+ * et al. — that one boosts *star-drop chance*, a different stat from *crit chance*): this
+ * constant fires whenever Quick merely *leads* the chain (`chainCards[0].type`), regardless
+ * of whether the chain is uniformly Quick, and is applied as a flat additive bonus on top of
+ * `critChanceForStars`'s star-derived chance — see `BattleState.critChanceBonusCarried`/
+ * `activeCritChanceBonus` (`src/battle/battleState.ts`) and `applyChainCompletionBonus`
+ * (`src/battle/turnLoop.ts`).
+ */
+export const CHAINBONUS_QUICK_CRIT_RATE = 0.2;
+
+/**
  * NP-gain formula constants (research/04-np-gauge-and-refund.md §1, §5.1), same divided-
  * decimal convention as the damage constants above.
  */

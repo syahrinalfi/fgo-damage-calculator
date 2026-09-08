@@ -1,6 +1,6 @@
-import type { Buff, Card } from "@atlasacademy/api-connector";
+import { Card, type Buff } from "@atlasacademy/api-connector";
 import type { NpLevel } from "../account/types.js";
-import { CHAINBONUS_ARTS_RATE, CHAINBONUS_QUICK_STARS, FULL_TD_POINT } from "../engine/constants.js";
+import { CHAINBONUS_ARTS_RATE, CHAINBONUS_QUICK_CRIT_RATE, CHAINBONUS_QUICK_STARS, FULL_TD_POINT } from "../engine/constants.js";
 import { advanceTurnBuffs, consumeBuffUse, grantBuff, removeBuffsByTrait } from "./buffLifecycle.js";
 import type { Action, CommandSealEffect } from "./action.js";
 import { enemyToBattleUnit, servantToBattleUnit, type BattleState, type EnemyInstance, type ServantInstance } from "./battleState.js";
@@ -83,6 +83,11 @@ function advanceEnemyForEndTurn(enemy: EnemyInstance): EnemyInstance {
  * this reset, an un-updated `starsCarried` (star generation being unwired means nothing else
  * writes to it yet) would get silently re-allocated onto every future turn's hand instead of
  * being spent exactly once.
+ *
+ * `critChanceBonusCarried` (research/06 §7.2/§7.4's Quick-lead "+20% crit chance for all 5
+ * hand cards") is activated the same way: copied into `activeCritChanceBonus` for the
+ * freshly-drawn hand, then itself reset to 0, so a Quick-led chain's bonus applies to
+ * exactly one future turn's hand rather than persisting indefinitely.
  */
 function resolveEndTurn(state: BattleState, randomFn: () => number): BattleState {
   const servants = state.servants.map(advanceServantForEndTurn);
@@ -100,6 +105,8 @@ function resolveEndTurn(state: BattleState, randomFn: () => number): BattleState
     handCardStars,
     cardBag: nextBag,
     starsCarried: 0,
+    activeCritChanceBonus: state.critChanceBonusCarried,
+    critChanceBonusCarried: 0,
     currentTurn: state.currentTurn + 1,
     consecutiveNpChainCount: 0,
     mysticCodeSkillCooldowns: decrementCooldowns(state.mysticCodeSkillCooldowns),
@@ -232,7 +239,11 @@ function resolvePlayCard(
   const classification = classifyChain(action.chainCards);
   // `handCardStars` is always kept parallel to `handCards` (same length/order), and `handCard` above already confirmed this index is in range.
   const stars = state.handCardStars[action.handCardIndex] as number;
-  const isCrit = rollIsCrit(critChanceForStars(stars), randomFn);
+  // `state.activeCritChanceBonus` (a Quick-led chain's next-turn "+20% crit chance for all
+  // hand cards," research/06 §7.2/§7.4) is a flat add-on, applied uniformly to every hand
+  // card regardless of its own star allocation — capped at 1.0 to mirror
+  // `critChanceForStars`'s own capping convention (a combined chance can't exceed 100%).
+  const isCrit = rollIsCrit(Math.min(critChanceForStars(stars) + state.activeCritChanceBonus, 1), randomFn);
   // `classifyChain` above already confirmed `action.chainCards` has exactly 3 entries, so index 0 always exists.
   const chainLeadCardType = (action.chainCards[0] as (typeof action.chainCards)[number]).type;
   const context: HitResolutionContext = {
@@ -269,25 +280,38 @@ function resolvePlayCard(
  * not this turn's `handCardStars`, which is already fixed for the turn in progress.
  *
  * A chain can only be one of `busterChain`/`artsChain`/`quickChain`/`mightyChain`/`none` at
- * once (`ChainClassification`), so at most one of these two bonuses ever applies per call.
+ * once (`ChainClassification`), so at most one of the Arts/Quick-chain branches above ever
+ * applies per call.
+ *
+ * **Quick lead** (`CHAINBONUS_QUICK_CRIT_RATE`): unlike the two branches above, this is keyed
+ * off `chainCards[0].type` directly rather than `classification` — it fires whenever Quick
+ * merely *leads* the chain (research/06 §7.2/§7.4), including a Quick-led Mighty Chain that
+ * isn't uniformly Quick and so wouldn't satisfy `isQuickChainFrom`. Independent of, and can
+ * co-occur with, the `isQuickChainFrom` branch (e.g. a uniform Quick-Quick-Quick chain gets
+ * both the stars-next-turn bonus and this one). Adds to `state.critChanceBonusCarried`, not
+ * `activeCritChanceBonus` — see that field's doc comment on `BattleState`.
  */
 function applyChainCompletionBonus(
   state: BattleState,
   chainCards: readonly { readonly type: Card; readonly servantId: number }[],
   classification: ChainClassification,
 ): BattleState {
+  let nextState = state;
   if (isArtsChainFrom(classification)) {
     const bonusServantIds = new Set(chainCards.map((c) => c.servantId));
     const bonusAmount = FULL_TD_POINT * CHAINBONUS_ARTS_RATE;
-    const servants = state.servants.map((s) =>
+    const servants = nextState.servants.map((s) =>
       bonusServantIds.has(s.servantId) ? { ...s, currentNpGauge: Math.min(s.currentNpGauge + bonusAmount, NP_GAUGE_CAP_BY_LEVEL[s.npLevel]) } : s,
     );
-    return { ...state, servants };
+    nextState = { ...nextState, servants };
+  } else if (isQuickChainFrom(classification)) {
+    nextState = { ...nextState, starsCarried: nextState.starsCarried + CHAINBONUS_QUICK_STARS };
   }
-  if (isQuickChainFrom(classification)) {
-    return { ...state, starsCarried: state.starsCarried + CHAINBONUS_QUICK_STARS };
+  // `classifyChain` (in `resolvePlayCard`) already confirmed `chainCards` has exactly 3 entries.
+  if ((chainCards[0] as (typeof chainCards)[number]).type === Card.QUICK) {
+    nextState = { ...nextState, critChanceBonusCarried: nextState.critChanceBonusCarried + CHAINBONUS_QUICK_CRIT_RATE };
   }
-  return state;
+  return nextState;
 }
 
 /**

@@ -126,6 +126,26 @@ export interface BattleState {
    * `rollIsCrit`) instead of taking it as caller-supplied input.
    */
   readonly handCardStars: readonly number[];
+  /**
+   * Pending flat crit-chance bonus earned this turn from a Quick-led chain's first-card
+   * bonus (research/06 §7.2/§7.4's "+20% critical chance for all 5 hand cards",
+   * `CHAINBONUS_QUICK_CRIT_RATE`, `src/engine/constants.ts`), to take effect *next* turn —
+   * mirrors `starsCarried`'s "earned this turn, spent/discarded next" lifecycle exactly:
+   * `resolveEndTurn` (`./turnLoop.js`) copies this into `activeCritChanceBonus` for the
+   * freshly-drawn hand, then resets this field to 0. Never touched mid-turn except by
+   * `applyChainCompletionBonus` adding to it (a Quick-led chain only affects hand cards from
+   * the *next* hand-draw onward, not the current turn's already-fixed hand).
+   */
+  readonly critChanceBonusCarried: number;
+  /**
+   * This turn's already-activated flat crit-chance bonus (research/06 §7.2/§7.4), applied
+   * uniformly to *every* hand card's crit roll — unlike `handCardStars`, this is a single
+   * scalar rather than a per-slot array, since the bonus is flat-for-all-cards rather than
+   * lottery-allocated. Set once at hand-draw time (`resolveEndTurn`) from the previous
+   * turn's `critChanceBonusCarried`; `resolvePlayCard` adds it to `critChanceForStars(stars)`
+   * before rolling `isCrit` (`./critStarLottery.js`).
+   */
+  readonly activeCritChanceBonus: number;
   readonly fieldTraits: ReadonlySet<number>;
   readonly costSpent: number;
   readonly costBudget: number;

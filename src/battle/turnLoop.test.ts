@@ -146,6 +146,8 @@ function state(overrides: Partial<BattleState> = {}): BattleState {
     cardBag: [],
     starsCarried: 0,
     handCardStars: [0, 0, 0, 0, 0],
+    critChanceBonusCarried: 0,
+    activeCritChanceBonus: 0,
     fieldTraits: new Set(),
     costSpent: 0,
     costBudget: 100,
@@ -314,6 +316,17 @@ describe("resolveAction — endTurn", () => {
     const result = resolveAction(state({ starsCarried: 9 }), END_TURN, CONSTANTS, () => 0);
     expect(result.starsCarried).toBe(0);
   });
+
+  it("activates critChanceBonusCarried into activeCritChanceBonus for the freshly-drawn hand, then resets critChanceBonusCarried to 0", () => {
+    const result = resolveAction(state({ critChanceBonusCarried: 0.2 }), END_TURN, CONSTANTS, () => 0);
+    expect(result.activeCritChanceBonus).toBe(0.2);
+    expect(result.critChanceBonusCarried).toBe(0);
+  });
+
+  it("does not carry the previous turn's activeCritChanceBonus forward when nothing new was earned", () => {
+    const result = resolveAction(state({ activeCritChanceBonus: 0.2, critChanceBonusCarried: 0 }), END_TURN, CONSTANTS, () => 0);
+    expect(result.activeCritChanceBonus).toBe(0);
+  });
 });
 
 describe("resolveAction — playCard", () => {
@@ -481,6 +494,57 @@ describe("resolveAction — playCard", () => {
   it("does not touch starsCarried for a completed non-Quick chain", () => {
     const result = resolveAction(state({ starsCarried: 5 }), { ...action, chainPosition: 3, chainCards: [{ type: ARTS, servantId: 2 }, { type: QUICK, servantId: 3 }, { type: BUSTER, servantId: 1 }] }, CONSTANTS);
     expect(result.starsCarried).toBe(5);
+  });
+
+  it("adds CHAINBONUS_QUICK_CRIT_RATE to critChanceBonusCarried when Quick leads a chain, even a non-uniform (Mighty) one", () => {
+    const quickLedMightyChain: Action = {
+      ...action,
+      context: { ...CARD_CONTEXT, card: { type: BUSTER, position: 1 } },
+      chainCards: [{ type: QUICK, servantId: 1 }, { type: ARTS, servantId: 2 }, { type: BUSTER, servantId: 1 }],
+      chainPosition: 3,
+    };
+    const result = resolveAction(state(), quickLedMightyChain, CONSTANTS);
+    expect(result.critChanceBonusCarried).toBeCloseTo(0.2);
+    // Not a uniform Quick chain, so the separate stars-next-turn bonus must not also fire.
+    expect(result.starsCarried).toBe(0);
+  });
+
+  it("does not add CHAINBONUS_QUICK_CRIT_RATE when Quick does not lead the chain", () => {
+    const quickNotLeading: Action = {
+      ...action,
+      handCardIndex: 4,
+      context: { ...CARD_CONTEXT, card: { type: QUICK, position: 1 } },
+      chainCards: [{ type: BUSTER, servantId: 2 }, { type: QUICK, servantId: 1 }, { type: ARTS, servantId: 3 }],
+      chainPosition: 2,
+    };
+    const result = resolveAction(state(), quickNotLeading, CONSTANTS);
+    expect(result.critChanceBonusCarried).toBe(0);
+  });
+
+  it("leaves activeCritChanceBonus untouched mid-turn — the bonus only applies to a future hand draw", () => {
+    const quickLeadCompleting: Action = {
+      ...action,
+      context: { ...CARD_CONTEXT, card: { type: BUSTER, position: 1 } },
+      chainCards: [{ type: QUICK, servantId: 1 }, { type: ARTS, servantId: 2 }, { type: BUSTER, servantId: 1 }],
+      chainPosition: 3,
+    };
+    const result = resolveAction(state(), quickLeadCompleting, CONSTANTS);
+    // The completion bonus lands in critChanceBonusCarried (verified above), never directly in
+    // activeCritChanceBonus — that only happens via resolveEndTurn's next hand draw.
+    expect(result.critChanceBonusCarried).toBeCloseTo(0.2);
+    expect(result.activeCritChanceBonus).toBe(0);
+  });
+
+  it("adds state.activeCritChanceBonus into the crit roll for every hand card, capped at 1.0", () => {
+    // A single star gives 10% (CRITICAL_RATE_PER_STAR); with a 95% activeCritChanceBonus the
+    // combined 105% must still roll as a crit even at randomFn's near-top-of-range value.
+    const boostedState = state({ handCardStars: [1, 0, 0, 0, 0], activeCritChanceBonus: 0.95 });
+    const result = resolveAction(boostedState, action, CONSTANTS, () => 0.99);
+    const hitEnemy = result.enemies.find((e) => e.npcId === 9001);
+    // A crit hit does strictly more damage than the non-crit baseline for the same setup.
+    const nonCritResult = resolveAction(state({ handCardStars: [1, 0, 0, 0, 0], activeCritChanceBonus: 0 }), action, CONSTANTS, () => 0.99);
+    const nonCritEnemy = nonCritResult.enemies.find((e) => e.npcId === 9001);
+    expect(hitEnemy?.currentHp ?? 0).toBeLessThan(nonCritEnemy?.currentHp ?? 0);
   });
 
   it("derives chainLeadCardType from chainCards[0], boosting a non-lead card's damage via the chain lead's own firstCardBonus", () => {
