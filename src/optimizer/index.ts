@@ -2,3 +2,4 @@ export type { ActionSequenceCandidate, ActionSequenceResult, SequenceScoreFn } f
 export { simulateActionSequence, searchBestActionSequence } from "./turnSearch.js";
 export { damageDealtAtSlot, negativeRemainingHpAtSlot } from "./objectives.js";
 export { enumerateServantSubsets, enumerateCeAssignments, enumerateOrderedSelections } from "./candidateGeneration.js";
+export { buildCardOrderCandidates } from "./cardOrderCandidates.js";
