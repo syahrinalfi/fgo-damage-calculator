@@ -77,6 +77,16 @@ export function isBusterChainFrom(classification: ChainClassification): boolean 
   return classification.chainType === "busterChain";
 }
 
+/** Whether this chain qualifies for the Arts-chain NP-gauge bonus (research/06 §7.2, `CHAINBONUS_ARTS_RATE` — +20% gauge to every servant whose card is in the chain) — true only for a uniform-Arts chain. */
+export function isArtsChainFrom(classification: ChainClassification): boolean {
+  return classification.chainType === "artsChain";
+}
+
+/** Whether this chain qualifies for the Quick-chain critical-star bonus (research/06 §7.2, `CHAINBONUS_QUICK` — a flat star count added for next turn's allocation) — true only for a uniform-Quick chain. */
+export function isQuickChainFrom(classification: ChainClassification): boolean {
+  return classification.chainType === "quickChain";
+}
+
 /**
  * The Extra Attack multiplier a would-be 4th card gets after this chain (research/06 §7.3,
  * `DamageInput.extraCardChainType`/`EXTRA_ATTACK_RATE_SINGLE`/`EXTRA_ATTACK_RATE_GRAND`):

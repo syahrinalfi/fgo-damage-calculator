@@ -6,7 +6,7 @@ import type { BattleState, EnemyInstance, HandCard, ServantInstance } from "./ba
 import { BUFF_ACTION_KEYS } from "./buffActionKeys.js";
 import type { TrackedBuff } from "./buffLifecycle.js";
 import type { BattleConstants } from "./gameConstants.js";
-import type { BuffGrantEffect, GainHpEffect, GainHpPercentEffect, GainNpEffect, RemoveBuffEffect } from "./skillEffect.js";
+import type { BuffGrantEffect, GainHpEffect, GainHpPercentEffect, GainNpEffect, RemoveBuffEffect, RevivalEffect } from "./skillEffect.js";
 import { resolveAction } from "./turnLoop.js";
 
 const BUSTER = "2" as Card;
@@ -74,8 +74,14 @@ const BUFF_CONSTANTS = {
 } as unknown as Buff.BuffConstantMap;
 
 const CARD_CONSTANTS = {
+  "1": {
+    1: { individuality: [], adjustAtk: 300, adjustTdGauge: 3000, adjustCritical: 1000, addAtk: 0, addTdGauge: 0, addCritical: 0 },
+  },
   "2": {
     1: { individuality: [], adjustAtk: 1200, adjustTdGauge: 1000, adjustCritical: 1400, addAtk: 300, addTdGauge: 0, addCritical: 50 },
+  },
+  "3": {
+    1: { individuality: [], adjustAtk: 800, adjustTdGauge: 1000, adjustCritical: 1000, addAtk: 0, addTdGauge: 0, addCritical: 0 },
   },
   "5": {
     1: { individuality: [], adjustAtk: 1200, adjustTdGauge: 1000, adjustCritical: 0, addAtk: 300, addTdGauge: 0, addCritical: 0 },
@@ -197,6 +203,14 @@ function gainHpPercentEffect(overrides: Partial<GainHpPercentEffect> = {}): Gain
   };
 }
 
+function revivalEffect(overrides: Partial<RevivalEffect> = {}): RevivalEffect {
+  return {
+    kind: "revival",
+    targetType: "self",
+    ...overrides,
+  };
+}
+
 const END_TURN: Action = { type: "endTurn" };
 
 const CARD_CONTEXT: DerivedHitContext = {
@@ -303,7 +317,7 @@ describe("resolveAction — endTurn", () => {
 });
 
 describe("resolveAction — playCard", () => {
-  const action: Action = { type: "playCard", servantId: 1, handCardIndex: 0, targetNpcId: 9001, context: CARD_CONTEXT, chainCards: DEFAULT_CHAIN_CARDS };
+  const action: Action = { type: "playCard", servantId: 1, handCardIndex: 0, targetNpcId: 9001, context: CARD_CONTEXT, chainCards: DEFAULT_CHAIN_CARDS, chainPosition: 1 };
 
   it("deals damage, reduces the target's HP, and grants the acting servant NP gauge", () => {
     const result = resolveAction(state(), action, CONSTANTS);
@@ -399,6 +413,74 @@ describe("resolveAction — playCard", () => {
     const busterHp = busterResult.enemies.find((e) => e.npcId === 9001)?.currentHp ?? 0;
     const baselineHp = baselineResult.enemies.find((e) => e.npcId === 9001)?.currentHp ?? 0;
     expect(busterHp).toBeLessThan(baselineHp);
+  });
+
+  it("grants +20% NP gauge (CHAINBONUS_ARTS_RATE) to every distinct servant in a completed Arts chain, not just the attacker", () => {
+    const artsAction: Action = {
+      type: "playCard",
+      servantId: 1,
+      handCardIndex: 2, // ARTS card in FIVE_CARD_HAND, servantId 1
+      targetNpcId: 9001,
+      context: { ...CARD_CONTEXT, card: { type: ARTS, position: 1 } },
+      chainCards: [{ type: ARTS, servantId: 2 }, { type: ARTS, servantId: 3 }, { type: ARTS, servantId: 1 }],
+      chainPosition: 3,
+    };
+    const result = resolveAction(state(), artsAction, CONSTANTS);
+    expect(result.servants.find((s) => s.servantId === 1)?.currentNpGauge).toBeGreaterThanOrEqual(2000);
+    expect(result.servants.find((s) => s.servantId === 2)?.currentNpGauge).toBe(2000);
+    expect(result.servants.find((s) => s.servantId === 3)?.currentNpGauge).toBe(2000);
+  });
+
+  it("does not grant the Arts-chain NP-gauge bonus until the chain's 3rd card is played", () => {
+    const artsAction: Action = {
+      type: "playCard",
+      servantId: 1,
+      handCardIndex: 2,
+      targetNpcId: 9001,
+      context: { ...CARD_CONTEXT, card: { type: ARTS, position: 1 } },
+      chainCards: [{ type: ARTS, servantId: 1 }, { type: ARTS, servantId: 2 }, { type: ARTS, servantId: 3 }],
+      chainPosition: 1,
+    };
+    const result = resolveAction(state(), artsAction, CONSTANTS);
+    expect(result.servants.find((s) => s.servantId === 2)?.currentNpGauge).toBe(0);
+    expect(result.servants.find((s) => s.servantId === 3)?.currentNpGauge).toBe(0);
+  });
+
+  it("caps the Arts-chain NP-gauge bonus at each servant's own NP-level ceiling", () => {
+    const artsAction: Action = {
+      type: "playCard",
+      servantId: 1,
+      handCardIndex: 2,
+      targetNpcId: 9001,
+      context: { ...CARD_CONTEXT, card: { type: ARTS, position: 1 } },
+      chainCards: [{ type: ARTS, servantId: 2 }, { type: ARTS, servantId: 3 }, { type: ARTS, servantId: 1 }],
+      chainPosition: 3,
+    };
+    const result = resolveAction(
+      state({ servants: [servant({ servantId: 1 }), servant({ servantId: 2, npLevel: 1, currentNpGauge: 9000 }), servant({ servantId: 3 })] }),
+      artsAction,
+      CONSTANTS,
+    );
+    expect(result.servants.find((s) => s.servantId === 2)?.currentNpGauge).toBeLessThanOrEqual(10000);
+  });
+
+  it("adds CHAINBONUS_QUICK_STARS to starsCarried for next turn when a Quick chain completes", () => {
+    const quickAction: Action = {
+      type: "playCard",
+      servantId: 1,
+      handCardIndex: 4, // QUICK card in FIVE_CARD_HAND, servantId 1
+      targetNpcId: 9001,
+      context: { ...CARD_CONTEXT, card: { type: QUICK, position: 1 } },
+      chainCards: [{ type: QUICK, servantId: 2 }, { type: QUICK, servantId: 3 }, { type: QUICK, servantId: 1 }],
+      chainPosition: 3,
+    };
+    const result = resolveAction(state({ starsCarried: 5 }), quickAction, CONSTANTS);
+    expect(result.starsCarried).toBe(25);
+  });
+
+  it("does not touch starsCarried for a completed non-Quick chain", () => {
+    const result = resolveAction(state({ starsCarried: 5 }), { ...action, chainPosition: 3, chainCards: [{ type: ARTS, servantId: 2 }, { type: QUICK, servantId: 3 }, { type: BUSTER, servantId: 1 }] }, CONSTANTS);
+    expect(result.starsCarried).toBe(5);
   });
 });
 
@@ -659,6 +741,44 @@ describe("resolveAction — useSkill", () => {
     );
     expect(result.servants.find((s) => s.servantId === 1)?.currentHp).toBe(5000);
     expect(result.servants.find((s) => s.servantId === 2)?.currentHp).toBe(10000);
+  });
+
+  it("revival revives a dead self-targeted servant to full HP and its own NP-level gauge cap", () => {
+    const action: Action = { type: "useSkill", servantId: 1, skillSlot: 3, effects: [revivalEffect()], cooldownTurns: 5 };
+    const result = resolveAction(
+      state({ servants: [servant({ servantId: 1, currentHp: 0, maxHp: 10000, npLevel: 5 }), servant({ servantId: 2 }), servant({ servantId: 3 })] }),
+      action,
+      CONSTANTS,
+    );
+    expect(result.servants.find((s) => s.servantId === 1)).toMatchObject({ currentHp: 10000, currentNpGauge: 30000 });
+  });
+
+  it("revival leaves an already-living target untouched", () => {
+    const action: Action = { type: "useSkill", servantId: 1, skillSlot: 3, effects: [revivalEffect()], cooldownTurns: 5 };
+    const result = resolveAction(
+      state({ servants: [servant({ servantId: 1, currentHp: 8000, maxHp: 10000, currentNpGauge: 1000 }), servant({ servantId: 2 }), servant({ servantId: 3 })] }),
+      action,
+      CONSTANTS,
+    );
+    expect(result.servants.find((s) => s.servantId === 1)).toMatchObject({ currentHp: 8000, currentNpGauge: 1000 });
+  });
+
+  it("revival respects ptAll targeting, reviving only dead front-line servants", () => {
+    const action: Action = { type: "useSkill", servantId: 1, skillSlot: 3, effects: [revivalEffect({ targetType: "ptAll" })], cooldownTurns: 5 };
+    const result = resolveAction(
+      state({
+        servants: [
+          servant({ servantId: 1, currentHp: 0, maxHp: 10000, npLevel: 1 }),
+          servant({ servantId: 2, currentHp: 5000 }),
+          servant({ servantId: 3, currentHp: 0, maxHp: 12000, npLevel: 1 }),
+        ],
+      }),
+      action,
+      CONSTANTS,
+    );
+    expect(result.servants.find((s) => s.servantId === 1)).toMatchObject({ currentHp: 10000, currentNpGauge: 10000 });
+    expect(result.servants.find((s) => s.servantId === 2)?.currentHp).toBe(5000);
+    expect(result.servants.find((s) => s.servantId === 3)).toMatchObject({ currentHp: 12000, currentNpGauge: 10000 });
   });
 });
 

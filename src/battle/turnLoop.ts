@@ -1,16 +1,16 @@
-import type { Buff } from "@atlasacademy/api-connector";
+import type { Buff, Card } from "@atlasacademy/api-connector";
 import type { NpLevel } from "../account/types.js";
-import { FULL_TD_POINT } from "../engine/constants.js";
+import { CHAINBONUS_ARTS_RATE, CHAINBONUS_QUICK_STARS, FULL_TD_POINT } from "../engine/constants.js";
 import { advanceTurnBuffs, consumeBuffUse, grantBuff, removeBuffsByTrait } from "./buffLifecycle.js";
 import type { Action, CommandSealEffect } from "./action.js";
 import { enemyToBattleUnit, servantToBattleUnit, type BattleState, type EnemyInstance, type ServantInstance } from "./battleState.js";
 import { buildCombinedCardDeck } from "./cardDeck.js";
 import { drawCardBagHand } from "./cardBag.js";
 import { allocateCritStars, critChanceForStars, rollIsCrit } from "./critStarLottery.js";
-import { classifyChain, extraCardChainTypeFrom, isBusterChainFrom } from "./chainDetection.js";
+import { classifyChain, extraCardChainTypeFrom, isArtsChainFrom, isBusterChainFrom, isQuickChainFrom, type ChainClassification } from "./chainDetection.js";
 import type { BattleConstants } from "./gameConstants.js";
 import { resolveHit, type HitResolutionContext } from "./hitResolution.js";
-import type { BuffGrantEffect, GainHpEffect, GainHpPercentEffect, GainNpEffect, RemoveBuffEffect, SkillEffect, SkillTargetType } from "./skillEffect.js";
+import type { BuffGrantEffect, GainHpEffect, GainHpPercentEffect, GainNpEffect, RemoveBuffEffect, RevivalEffect, SkillEffect, SkillTargetType } from "./skillEffect.js";
 
 /**
  * NP gauge's passive accumulation ceiling by NP level (research/04 §5.2a, confirmed by the
@@ -224,8 +224,9 @@ function resolvePlayCard(
   if (action.context.isNP) {
     throw new RangeError("playCard's context.isNP must be false — NP cards are cast via castNp, not playCard");
   }
-  if (!action.chainCards.some((c) => c.type === handCard.card && c.servantId === handCard.servantId)) {
-    throw new RangeError("action.chainCards must include the card actually being played (matched by type + servantId)");
+  const chainCardAtPosition = action.chainCards[action.chainPosition - 1];
+  if (chainCardAtPosition === undefined || chainCardAtPosition.type !== handCard.card || chainCardAtPosition.servantId !== handCard.servantId) {
+    throw new RangeError("action.chainCards[action.chainPosition - 1] must match the card actually being played (matched by type + servantId)");
   }
 
   const classification = classifyChain(action.chainCards);
@@ -239,11 +240,51 @@ function resolvePlayCard(
     extraCardChainType: extraCardChainTypeFrom(classification),
   };
 
-  const nextState = applyHit(state, servant, enemy, constants, context);
-  const handCards = nextState.handCards.filter((_, index) => index !== action.handCardIndex);
-  const handCardStars = nextState.handCardStars.filter((_, index) => index !== action.handCardIndex);
+  const hitState = applyHit(state, servant, enemy, constants, context);
+  const handCards = hitState.handCards.filter((_, index) => index !== action.handCardIndex);
+  const handCardStars = hitState.handCardStars.filter((_, index) => index !== action.handCardIndex);
+  const nextState =
+    action.chainPosition === 3 ? applyChainCompletionBonus(hitState, action.chainCards, classification) : hitState;
 
   return { ...nextState, handCards, handCardStars, consecutiveNpChainCount: 0 };
+}
+
+/**
+ * Applies the Arts/Quick-chain completion bonuses (research/06 §7.2) once, when a chain's
+ * 3rd (last) card is played (`resolvePlayCard`'s `action.chainPosition === 3` check) —
+ * distinct from `isBusterChainFrom`/`extraCardChainTypeFrom`, which feed the per-hit damage
+ * formula and so apply on every card of the chain, not just its last.
+ *
+ * **Arts chain** (`CHAINBONUS_ARTS_RATE`, `src/engine/constants.ts`): grants +20% NP gauge
+ * to every *distinct* servant whose card is in the chain — not just the current attacker,
+ * and not limited to front-line-only `resolveAllyTargets` targeting, since the chain's own
+ * card composition (`chainCards`) already names exactly which servants qualify. Capped at
+ * each servant's own `NP_GAUGE_CAP_BY_LEVEL` ceiling, same as every other gauge grant.
+ *
+ * **Quick chain** (`CHAINBONUS_QUICK_STARS`): adds a flat `CHAINBONUS_QUICK_STARS` to
+ * `BattleState.starsCarried` for the *next* turn's crit-star allocation (research/04 §6.2) —
+ * not this turn's `handCardStars`, which is already fixed for the turn in progress.
+ *
+ * A chain can only be one of `busterChain`/`artsChain`/`quickChain`/`mightyChain`/`none` at
+ * once (`ChainClassification`), so at most one of these two bonuses ever applies per call.
+ */
+function applyChainCompletionBonus(
+  state: BattleState,
+  chainCards: readonly { readonly type: Card; readonly servantId: number }[],
+  classification: ChainClassification,
+): BattleState {
+  if (isArtsChainFrom(classification)) {
+    const bonusServantIds = new Set(chainCards.map((c) => c.servantId));
+    const bonusAmount = FULL_TD_POINT * CHAINBONUS_ARTS_RATE;
+    const servants = state.servants.map((s) =>
+      bonusServantIds.has(s.servantId) ? { ...s, currentNpGauge: Math.min(s.currentNpGauge + bonusAmount, NP_GAUGE_CAP_BY_LEVEL[s.npLevel]) } : s,
+    );
+    return { ...state, servants };
+  }
+  if (isQuickChainFrom(classification)) {
+    return { ...state, starsCarried: state.starsCarried + CHAINBONUS_QUICK_STARS };
+  }
+  return state;
 }
 
 /**
@@ -432,6 +473,28 @@ function applyGainHpPercentEffect(
 }
 
 /**
+ * Applies one `RevivalEffect` (`./skillEffect.js`) to every servant `resolveAllyTargets`
+ * resolves it to — only a target already at `currentHp <= 0` is revived (to full `maxHp`
+ * and its own `NP_GAUGE_CAP_BY_LEVEL` ceiling); a still-living target is left untouched,
+ * mirroring `resolveUseCommandSeal`'s `reviveParty` effect below in that regard. Unlike
+ * `reviveParty`, though, this shares the standard `resolveAllyTargets` (`self`/`ptOne`/
+ * `ptAll`) front-line-only restriction every other `SkillEffect` uses — `reviveParty`'s own
+ * benched-inclusive scope is a documented, provisional Command-Seal-specific choice
+ * (research/00 §6), not the general rule for a `revival` skill/NP effect.
+ */
+function applyRevivalEffect(
+  servants: readonly ServantInstance[],
+  actingServantId: number | undefined,
+  effect: RevivalEffect,
+  targetServantId: number | undefined,
+): readonly ServantInstance[] {
+  const targetIds = new Set(resolveAllyTargets(servants, effect.targetType, actingServantId, targetServantId));
+  return servants.map((s) =>
+    targetIds.has(s.servantId) && s.currentHp <= 0 ? { ...s, currentHp: s.maxHp, currentNpGauge: NP_GAUGE_CAP_BY_LEVEL[s.npLevel] } : s,
+  );
+}
+
+/**
  * Applies one `RemoveBuffEffect` (`./skillEffect.js`, research/05 §5's `subState`) to every
  * unit it targets, via `removeBuffsByTrait` (`./buffLifecycle.js`). `self`/`ptAll`/`ptOne`
  * share `resolveAllyTargets`, same as every other ally-side effect; `enemyOne` resolves
@@ -485,6 +548,8 @@ function applySkillEffect(
       return { ...state, servants: applyGainHpEffect(state.servants, actingServantId, effect, targetServantId) };
     case "gainHpPercent":
       return { ...state, servants: applyGainHpPercentEffect(state.servants, actingServantId, effect, targetServantId) };
+    case "revival":
+      return { ...state, servants: applyRevivalEffect(state.servants, actingServantId, effect, targetServantId) };
     case "removeBuff":
       return applyRemoveBuffEffect(state, actingServantId, effect, targetServantId, targetNpcId);
   }

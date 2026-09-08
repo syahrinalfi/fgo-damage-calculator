@@ -36,13 +36,23 @@ export type Action =
       readonly context: DerivedHitContext;
       /**
        * This turn's full 3-card chain selection (research/03 §3: a chain is always exactly
-       * 3 non-NP cards), in play order — used only to derive `isBusterChain`/
-       * `extraCardChainType` via `classifyChain` (`./chainDetection.js`). Must include the
-       * card this action is actually playing (matched by `type` + `servantId` against the
-       * `handCards` slot at `handCardIndex`); throws otherwise, same as the existing
-       * `context.card.type` cross-check.
+       * 3 non-NP cards), in play order — used to derive `isBusterChain`/`extraCardChainType`
+       * via `classifyChain` (`./chainDetection.js`), and, together with `chainPosition`
+       * below, to detect when the Arts/Quick-chain completion bonuses fire. The card at
+       * `chainCards[chainPosition - 1]` must match the card this action is actually playing
+       * (matched by `type` + `servantId` against the `handCards` slot at `handCardIndex`);
+       * throws otherwise, same as the existing `context.card.type` cross-check.
        */
       readonly chainCards: readonly { readonly type: Card; readonly servantId: number }[];
+      /**
+       * This play's 1-indexed position within `chainCards` (research/06 §7.2's Arts-chain
+       * NP-gauge / Quick-chain star bonuses resolve once, when the chain's *last* card is
+       * played — `chainPosition === 3` — not once per card). Caller-supplied rather than
+       * inferred from card-type/servantId matching alone, since two of a chain's 3 slots can
+       * legitimately hold an identical `{ type, servantId }` pair (e.g. two Buster cards from
+       * the same servant), which would make position ambiguous to reconstruct.
+       */
+      readonly chainPosition: 1 | 2 | 3;
     }
   | {
       readonly type: "castNp";

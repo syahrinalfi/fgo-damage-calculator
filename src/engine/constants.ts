@@ -26,6 +26,27 @@ export const EXTRA_ATTACK_RATE_GRAND = 3.5;
 export const CHAINBONUS_BUSTER_RATE = 0.2;
 
 /**
+ * Arts-chain flat NP-gauge bonus (NiceConstant.CHAINBONUS_ARTS_RATE = 200, research/02 §5/
+ * research/03 §3) — 200/1000 = 20%, cross-confirmed against the independently-sourced
+ * community figure "+20% NP gauge to every servant whose card is in the chain" (research/06
+ * §7.2). Unlike `CHAINBONUS_BUSTER_RATE` (a damage-formula input), this is a flat gauge
+ * grant applied once per completed Arts chain — see `src/battle/turnLoop.ts`'s
+ * `resolvePlayCard`.
+ */
+export const CHAINBONUS_ARTS_RATE = 0.2;
+
+/**
+ * Quick-chain flat critical-star bonus for next turn's allocation (NiceConstant.
+ * CHAINBONUS_QUICK = 20, research/02 §5/research/03 §3) — a raw star *count*, not a per-
+ * mille rate (unlike every other `CHAINBONUS_*`/`*_RATE` constant in this file — research/02
+ * §5 flags this constant's scale as not directly comparable to the others). Cross-confirmed
+ * against the independently-sourced community figure "+20 critical stars for the next turn"
+ * (research/06 §7.2, the post-2022-07-31 value; pre-update was +10 — see that section's
+ * version-boundary note, not modeled here since this project doesn't version-gate mechanics).
+ */
+export const CHAINBONUS_QUICK_STARS = 20;
+
+/**
  * NP-gain formula constants (research/04-np-gauge-and-refund.md §1, §5.1), same divided-
  * decimal convention as the damage constants above.
  */

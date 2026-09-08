@@ -132,5 +132,27 @@ export interface GainHpPercentEffect {
   readonly targetType: SkillTargetType;
 }
 
+/**
+ * One already-resolved revival a `useSkill`/`useMysticCodeSkill` `Action` applies — models
+ * the API's `revival` `FuncType`. Only affects a target already at `currentHp <= 0`; a
+ * still-living target in `targetType`'s reach is left completely untouched (a revival effect
+ * doesn't also heal the living, matching `useCommandSeal`'s `reviveParty` precedent,
+ * `./action.js`, research/00 §6 confirmed by the project owner). A revived servant is set to
+ * full `maxHp` and its own `NP_GAUGE_CAP_BY_LEVEL` ceiling (`./turnLoop.js`) — the same
+ * "mentokin NP gauge juga" (maxes the gauge too) behavior `reviveParty` already confirms,
+ * rather than a partial/percentage revive: this project has no live-verified example of
+ * `revival`'s `Vals` shape suggesting anything other than a full restore, so — unlike
+ * `GainHpPercentEffect` above, which extends an already-confirmed per-mille convention —
+ * this effect deliberately carries no numeric field at all rather than guess at an
+ * unconfirmed one.
+ *
+ * Ally-only (`SkillTargetType`) — no live `revival` example this project has modeled targets
+ * an enemy.
+ */
+export interface RevivalEffect {
+  readonly kind: "revival";
+  readonly targetType: SkillTargetType;
+}
+
 /** One already-resolved skill/NP effect a `useSkill`/`useMysticCodeSkill` `Action` can carry (research/09 §7's still-limited scope). */
-export type SkillEffect = BuffGrantEffect | RemoveBuffEffect | GainNpEffect | GainHpEffect | GainHpPercentEffect;
+export type SkillEffect = BuffGrantEffect | RemoveBuffEffect | GainNpEffect | GainHpEffect | GainHpPercentEffect | RevivalEffect;
