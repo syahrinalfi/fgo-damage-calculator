@@ -317,24 +317,22 @@ export interface LossHpPercentEffect {
  * overcharge.js`, the same convention this project already uses for NP damage's own OC-stage
  * selection) — `1000` = 100%, rolled once per targeted enemy against `randomFn()`.
  *
- * **Resistance is folded in at apply time, not modeled in this interface**: `turnLoop.ts`'s
- * `applyInstantDeathEffect` reduces `deathRate` by the target's `resistInstantdeath` buff
- * total (`BUFF_ACTION_KEYS.RESIST_INSTANT_DEATH`, research/08 §2) before rolling — this
- * field itself stays the skill/NP's own raw, unreduced base chance. `QuestEnemy.deathRate`/
- * `NiceServant.instantDeathChance` (a separate per-mille "base susceptibility" the API
- * exposes per enemy/servant record, distinct from both this field and the resist buff) is
- * still NOT folded in — no source pins down how a third multiplier combines with the other
- * two, so it's left as a flagged-open gap. Likewise `nonresistInstantdeath` (the attacker-
- * side "ignore target resistance" counterpart buff) is not modeled — see
- * `BUFF_ACTION_KEYS.RESIST_INSTANT_DEATH`'s doc comment (`./buffActionKeys.ts`).
+ * **The full formula is now folded in at apply time, not modeled in this interface**:
+ * `turnLoop.ts`'s `applyInstantDeathEffect` computes `finalChance = deathRate/1000 *
+ * (enemy.deathRate/1000) * (1 + grant - resist + nonresist)` — this field itself stays the
+ * skill/NP's own raw `hitRate` term only. `enemy.deathRate` (`EnemyInstance.deathRate`,
+ * `./battleState.js`, research/08 §2's `QuestEnemy.deathRate`) is the enemy's own base
+ * susceptibility; `grant`/`resist`/`nonresist` are the 3 buff-action terms documented on
+ * `BUFF_ACTION_KEYS` (`./buffActionKeys.ts`). Sourcing tier: community (firq.dev), not
+ * project-owner live-tested — the one tier below this project's strongest findings, flagged
+ * accordingly rather than silently treated as equally solid.
  *
- * **One mechanic this effect deliberately does NOT model**: **Guts interaction** —
- * `resolveHit`'s card/NP damage path already wires `resolveGuts`
- * (`../buffs/guts.js`) for ordinary lethal damage, but this effect bypasses that entirely
- * (a plain `currentHp = 0` on success, not routed through `resolveGuts`) since `resolveGuts`
- * needs a `BuffTraitContext` (attacker/defender trait sets) this effect's flat, caller-
- * resolved shape doesn't carry — whether real instant death should or shouldn't trigger Guts
- * is a genuinely open, unconfirmed question, not a deliberate design call either way.
+ * **Guts is now wired in.** `applyInstantDeathEffect` routes a successful roll through
+ * `resolveGuts` (`../buffs/guts.js`) the same way `resolveHit` already does for ordinary
+ * lethal damage — cross-corroborated community sources (GameFAQs, GamePress Q&A) confirm
+ * instant death triggers Guts normally, closing the earlier "bypasses `resolveGuts`
+ * entirely" gap. `ForceInstantDeathEffect` below deliberately does NOT get the same
+ * treatment — see its own doc comment for why.
  *
  * Enemy-only, matching the live data above — no `SkillTargetType`/ally-side variant exists.
  */
@@ -361,10 +359,15 @@ export interface InstantDeathEffect {
  * "no live example suggests anything but a full, unconditional effect" reasoning
  * `RevivalEffect`'s doc comment already used for its own `Vals` shape).
  *
- * Sets `currentHp` straight to `0`, no `resolveGuts` check (../buffs/guts.js) — same
- * documented gap as `InstantDeathEffect`, for the same reason (no `BuffTraitContext`
- * available in this flat shape) — whether a self-sacrifice NP's own Guts buff (if any) would
- * save it is unconfirmed, not a deliberate design call.
+ * Sets `currentHp` straight to `0`, no `resolveGuts` check (../buffs/guts.js) — **unlike**
+ * `InstantDeathEffect`, which now does route a successful roll through `resolveGuts`
+ * (community-sourced: instant death from an attack triggers Guts normally). This effect is
+ * deliberately NOT given the same treatment: no source addresses whether a self-sacrifice
+ * NP *cost* (paying HP to cast, not being killed by an attack) should respect the caster's
+ * own Guts, and `forceInstantDeath` is already documented above as a structurally different
+ * mechanic from `instantDeath` — assuming the same Guts treatment applies would repeat this
+ * project's own `hastenNpturn`/`delayNpturn` "don't assume mirror-symmetry between two
+ * different `FuncType`s" lesson.
  *
  * Ally-only (`SkillTargetType`) — only `self` has a live example; `ptOne`/`ptAll` are typed
  * for consistency with every other ally-side effect but have no confirmed live usage here.

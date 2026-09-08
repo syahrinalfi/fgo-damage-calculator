@@ -35,15 +35,27 @@ export const BUFF_ACTION_KEYS = {
   COMMAND_STAR_DEF: "commandStarDef",
   CRITICAL_POINT: "criticalPoint",
   /**
-   * `upResistInstantdeath` only (live `NiceBuffList.ActionList.json` fetch this session:
-   * `plusTypes: ["upResistInstantdeath"], minusTypes: []`) — the target-side resistance
-   * `instantDeath` (research/08 §2) rolls against. A separate `nonresistInstantdeath`
-   * action (`upNonresistInstantdeath`) also exists in the live data but isn't modeled: it
-   * reads as an attacker-side "ignore target resistance" buff, and no source pins down how
-   * it combines with `resistInstantdeath` (subtract? floor at 0? which side's trait gates
-   * apply to which?) — left as a flagged-open gap rather than guessed.
+   * The instant-death formula's 3 buff-action terms — resolved this session (community
+   * source: firq.dev's "Instant Death Success Rate" formula, cross-referenced against live
+   * `funcTargetType` data for each buff type, not project-owner live-tested): `finalChance =
+   * hitRate * enemyDeathRate * (1 + grant - resist + nonresist)`.
+   *
+   * - `RESIST_INSTANT_DEATH` (`upResistInstantdeath` only) — **target-side**: every live
+   *   example is `self`/`ptAll`-targeted (e.g. Taira no Kagekiyo's skill 2, firq.dev's own
+   *   "Taira S2" example) — an ally buffing their *own* resistance.
+   * - `NONRESIST_INSTANT_DEATH` (`upNonresistInstantdeath` only) — **also target-side**,
+   *   despite the "ignore resistance" reading its name might suggest: every live example is
+   *   `enemy`/`enemyAll`-targeted (e.g. Void Shiki's skill 1, firq.dev's own "Void Shiki S1"
+   *   example) — a debuff cast *onto* the enemy lowering their effective resistance. Both
+   *   this and `RESIST_INSTANT_DEATH` are resolved against the *same* target's `activeBuffs`
+   *   (opposite signs in the formula above), not split across attacker/defender contexts.
+   * - `GRANT_INSTANT_DEATH` (`upGrantInstantdeath`/`downGrantInstantdeath`) —
+   *   **attacker-side**: every live example is `self`-targeted (e.g. Nitocris' skill 1,
+   *   firq.dev's own "Nitocris S1" example) — a servant buffing their *own* success rate.
    */
   RESIST_INSTANT_DEATH: "resistInstantdeath",
+  NONRESIST_INSTANT_DEATH: "nonresistInstantdeath",
+  GRANT_INSTANT_DEATH: "grantInstantdeath",
 } as const;
 
 /**

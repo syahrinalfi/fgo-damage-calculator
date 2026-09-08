@@ -7,6 +7,7 @@ import {
   CHAINBONUS_QUICK_STARS,
   FULL_TD_POINT,
 } from "../engine/constants.js";
+import { resolveGuts } from "../buffs/index.js";
 import { advanceTurnBuffs, consumeBuffUse, grantBuff, removeBuffsByTrait } from "./buffLifecycle.js";
 import type { Action, CommandSealEffect } from "./action.js";
 import { enemyToBattleUnit, servantToBattleUnit, type BattleState, type EnemyInstance, type ServantInstance } from "./battleState.js";
@@ -77,16 +78,34 @@ function advanceServantForEndTurn(servant: ServantInstance): ServantInstance {
 /**
  * Advances one enemy's `Turn`-based state for `endTurn`, mirroring `advanceServantForEndTurn`
  * above: buffs tick the same way, and `currentNpTurns` (research/08-enemy-mechanics.md §5)
- * advances by exactly `+1`, capped at `npTurnLimit` — an unconditional, formula-free tick,
- * unlike `ServantInstance.currentNpGauge`'s attacking/defending-formula-driven gain. Capping
- * rather than wrapping/triggering an auto-cast at the limit is deliberate: the actual "enemy
- * casts its NP" trigger is out of this project's current scope (research/08 §5).
+ * advances by exactly `+1`, an unconditional, formula-free tick, unlike `ServantInstance.
+ * currentNpGauge`'s attacking/defending-formula-driven gain.
+ *
+ * **Trigger flag, 2026-09-08**: reaching `npTurnLimit` now sets `readyToNp: true` and
+ * resets `currentNpTurns` back to `0` (a new cycle starts building toward the next cast),
+ * rather than capping and sitting there forever. This is deliberately a **flag only** — no
+ * enemy NP effect actually resolves against the servants when this fires; that's the
+ * project's still-out-of-scope "phase 2, enemy-attack simulation" (research/08 §5). A caller
+ * wanting the actual attack has to build that itself and is responsible for clearing
+ * `readyToNp` once it's handled — this function only ever sets it, never clears it, so a
+ * flag left unconsumed for multiple turns simply stays `true` while `currentNpTurns` keeps
+ * cycling underneath it (a known, documented simplification of the real game, where an
+ * enemy that's ready reliably casts on its very next turn rather than possibly cycling
+ * through several ready-but-uncast turns).
+ *
+ * `npTurnLimit <= 0` (a non-NP-capable enemy, research/08 §5 — `QuestEnemy.chargeTurn: 0`
+ * live-confirmed) never reaches `readyToNp: true` — guarded explicitly rather than relying
+ * on `nextNpTurns >= npTurnLimit` alone, which would otherwise fire on the very first turn
+ * for an enemy with no NP at all.
  */
 function advanceEnemyForEndTurn(enemy: EnemyInstance): EnemyInstance {
+  const nextNpTurns = enemy.currentNpTurns + 1;
+  const reachedLimit = enemy.npTurnLimit > 0 && nextNpTurns >= enemy.npTurnLimit;
   return {
     ...enemy,
     activeBuffs: advanceTurnBuffs(enemy.activeBuffs),
-    currentNpTurns: Math.min(enemy.currentNpTurns + 1, enemy.npTurnLimit),
+    currentNpTurns: reachedLimit ? 0 : nextNpTurns,
+    readyToNp: reachedLimit ? true : enemy.readyToNp,
   };
 }
 
@@ -723,12 +742,28 @@ function applyRemoveBuffEffect(
  * Enemy-only, matching `RemoveBuffEffect`'s `enemyOne`/`enemyAll` handling above.
  */
 /**
- * Folds the target's `resistInstantdeath` buff total (`BUFF_ACTION_KEYS.RESIST_INSTANT_DEATH`,
- * research/08 §2) into `effect.deathRate` before rolling — a target-side reduction of the
- * already-OC-resolved death chance, clamped so a large resist buff can zero the roll out but
- * never flip it negative. `nonresistInstantdeath` (the attacker-side "ignore resistance"
- * counterpart) is deliberately not folded in here — see `BUFF_ACTION_KEYS.RESIST_INSTANT_DEATH`'s
- * doc comment for why.
+ * Implements the full instant-death success-rate formula (community source: firq.dev,
+ * cross-referenced against live `funcTargetType` data for each buff type this session — see
+ * `BUFF_ACTION_KEYS`'s doc comment for the per-term sourcing, one tier below this project's
+ * live-tested findings): `finalChance = hitRate * enemyDeathRate * (1 + grant - resist +
+ * nonresist)`, clamped to `[0, 1]` before rolling. `hitRate` is `effect.deathRate`
+ * (already-OC-resolved), `enemyDeathRate` is the target's own `EnemyInstance.deathRate`
+ * (research/08 §2's `QuestEnemy.deathRate`, per-mille), `grant` is the attacker's
+ * `grantInstantdeath` buff total, and `resist`/`nonresist` are the target's own
+ * `resistInstantdeath`/`nonresistInstantdeath` buff totals (both target-side despite
+ * "nonresist" reading like an attacker-side "ignore resistance" buff — see
+ * `BUFF_ACTION_KEYS`'s doc comment).
+ *
+ * Guts is now wired in on a success (`resolveGuts`, `../buffs/guts.js`) — the earlier
+ * "bypasses `resolveGuts` entirely" gap is closed: cross-corroborated community sources
+ * (GameFAQs, GamePress Q&A) confirm instant death triggers Guts the same way ordinary
+ * lethal damage does, so a successful roll no longer unconditionally zeroes `currentHp` —
+ * it goes through the same Guts check/consume path `applyHit` already uses for ordinary
+ * hits. `forceInstantDeath` (`applyForceInstantDeathEffect` below) is deliberately NOT
+ * given the same treatment — no source addresses whether a self-sacrifice NP *cost* (as
+ * opposed to death inflicted by an attack) should respect the caster's own Guts, and it's a
+ * different enough mechanic (research/09 §7) that assuming symmetry would repeat the
+ * project's own `hastenNpturn`/`delayNpturn` mirror-symmetry lesson.
  */
 function applyInstantDeathEffect(
   state: BattleState,
@@ -738,17 +773,27 @@ function applyInstantDeathEffect(
   constants: BattleConstants,
   randomFn: () => number,
 ): BattleState {
-  const attackerTraits = actingServantId === undefined ? new Set<number>() : servantToBattleUnit(findServant(state, actingServantId)).traits;
+  const attacker = actingServantId === undefined ? undefined : servantToBattleUnit(findServant(state, actingServantId));
+  const attackerTraits = attacker?.traits ?? new Set<number>();
+  const attackerBuffs = attacker?.activeBuffs ?? [];
 
   const kills = (enemy: EnemyInstance): EnemyInstance => {
-    const resist = resolveUnitActionModifier(
-      constants.buff,
-      BUFF_ACTION_KEYS.RESIST_INSTANT_DEATH,
-      enemy.activeBuffs,
-      { holderTraits: enemyToBattleUnit(enemy).traits, targetTraits: attackerTraits },
-    );
-    const finalChance = Math.max(0, (effect.deathRate / 1000) * (1 - resist));
-    return randomFn() < finalChance ? { ...enemy, currentHp: 0 } : enemy;
+    const enemyTraits = enemyToBattleUnit(enemy).traits;
+    const defenderContext = { holderTraits: enemyTraits, targetTraits: attackerTraits };
+    const attackerContext = { holderTraits: attackerTraits, targetTraits: enemyTraits };
+
+    const resist = resolveUnitActionModifier(constants.buff, BUFF_ACTION_KEYS.RESIST_INSTANT_DEATH, enemy.activeBuffs, defenderContext);
+    const nonresist = resolveUnitActionModifier(constants.buff, BUFF_ACTION_KEYS.NONRESIST_INSTANT_DEATH, enemy.activeBuffs, defenderContext);
+    const grant = resolveUnitActionModifier(constants.buff, BUFF_ACTION_KEYS.GRANT_INSTANT_DEATH, attackerBuffs, attackerContext);
+    const rawChance = (effect.deathRate / 1000) * (enemy.deathRate / 1000) * (1 + grant - resist + nonresist);
+    const finalChance = Math.min(Math.max(rawChance, 0), 1);
+    if (randomFn() >= finalChance) {
+      return enemy;
+    }
+
+    const guts = resolveGuts(0, enemy.maxHp, enemy.activeBuffs, defenderContext);
+    const activeBuffs = guts.triggered ? consumeBuffUse(enemy.activeBuffs, "guts" as Buff.BuffType, defenderContext) : enemy.activeBuffs;
+    return { ...enemy, currentHp: guts.hpAfter, activeBuffs };
   };
 
   if (effect.targetType === "enemyOne") {

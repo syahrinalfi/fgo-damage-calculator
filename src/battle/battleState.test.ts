@@ -40,6 +40,8 @@ function enemy(overrides: Partial<EnemyInstance> = {}): EnemyInstance {
     activeBuffs: [],
     currentNpTurns: 0,
     npTurnLimit: 5,
+    deathRate: 1000,
+    readyToNp: false,
     ...overrides,
   };
 }

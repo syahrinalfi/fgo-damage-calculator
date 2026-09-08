@@ -88,6 +88,8 @@ const BUFF_CONSTANTS = {
   [BUFF_ACTION_KEYS.COMMAND_STAR_DEF]: percentAction("upDefenceCommandstar", "downDefenceCommandstar"),
   [BUFF_ACTION_KEYS.CRITICAL_POINT]: percentAction("upCriticalpoint", "downCriticalpoint", 1000),
   [BUFF_ACTION_KEYS.RESIST_INSTANT_DEATH]: percentAction("upResistInstantdeath", "__unused_downResistInstantdeath"),
+  [BUFF_ACTION_KEYS.NONRESIST_INSTANT_DEATH]: percentAction("upNonresistInstantdeath", "__unused_downNonresistInstantdeath"),
+  [BUFF_ACTION_KEYS.GRANT_INSTANT_DEATH]: percentAction("upGrantInstantdeath", "downGrantInstantdeath"),
 } as unknown as Buff.BuffConstantMap;
 
 const CARD_CONSTANTS = {
@@ -150,6 +152,8 @@ function enemy(overrides: Partial<EnemyInstance> = {}): EnemyInstance {
     activeBuffs: [],
     currentNpTurns: 0,
     npTurnLimit: 5,
+    deathRate: 1000,
+    readyToNp: false,
     ...overrides,
   };
 }
@@ -381,9 +385,21 @@ describe("resolveAction — endTurn", () => {
     expect(result.enemies[0]?.currentNpTurns).toBe(3);
   });
 
-  it("caps an enemy's currentNpTurns at its own npTurnLimit rather than exceeding it", () => {
-    const result = resolveAction(state({ enemies: [enemy({ currentNpTurns: 5, npTurnLimit: 5 })] }), END_TURN, CONSTANTS);
-    expect(result.enemies[0]?.currentNpTurns).toBe(5);
+  it("reaching npTurnLimit sets readyToNp and resets currentNpTurns to 0 for a new cycle", () => {
+    const result = resolveAction(state({ enemies: [enemy({ currentNpTurns: 4, npTurnLimit: 5, readyToNp: false })] }), END_TURN, CONSTANTS);
+    expect(result.enemies[0]?.currentNpTurns).toBe(0);
+    expect(result.enemies[0]?.readyToNp).toBe(true);
+  });
+
+  it("readyToNp, once set, is left untouched by further turns rather than being auto-cleared", () => {
+    const result = resolveAction(state({ enemies: [enemy({ currentNpTurns: 1, npTurnLimit: 5, readyToNp: true })] }), END_TURN, CONSTANTS);
+    expect(result.enemies[0]?.currentNpTurns).toBe(2);
+    expect(result.enemies[0]?.readyToNp).toBe(true);
+  });
+
+  it("an enemy with npTurnLimit 0 (no NP at all) never becomes readyToNp", () => {
+    const result = resolveAction(state({ enemies: [enemy({ currentNpTurns: 0, npTurnLimit: 0, readyToNp: false })] }), END_TURN, CONSTANTS);
+    expect(result.enemies[0]?.readyToNp).toBe(false);
   });
 
   it("draws a fresh 5-card hand from the 3 front-line servants' combined deck when the bag is empty", () => {
@@ -809,6 +825,48 @@ describe("resolveAction — castNp", () => {
     // A +50% resist buff halves the effective chance to 30%; the same 0.4 roll now survives.
     const withResist = resolveAction(state({ enemies: [resistedEnemy] }), withEffects, CONSTANTS, () => 0.4);
     expect(withResist.enemies.find((e) => e.npcId === 9001)?.currentHp).toBeGreaterThan(0);
+  });
+
+  it("instantDeath folds the target's own deathRate in as a multiplier (community-sourced formula)", () => {
+    const withEffects: Action = { ...action, effects: [instantDeathEffect({ deathRate: 1000, targetType: "enemyOne" })] };
+    // deathRate 1000 (100% hit rate) * enemy.deathRate 500 (50% susceptibility) = 50% final chance.
+    const halfSusceptible = enemy({ npcId: 9001, deathRate: 500 });
+
+    const survives = resolveAction(state({ enemies: [halfSusceptible] }), withEffects, CONSTANTS, () => 0.6);
+    expect(survives.enemies.find((e) => e.npcId === 9001)?.currentHp).toBeGreaterThan(0);
+
+    const dies = resolveAction(state({ enemies: [halfSusceptible] }), withEffects, CONSTANTS, () => 0.4);
+    expect(dies.enemies.find((e) => e.npcId === 9001)?.currentHp).toBe(0);
+  });
+
+  it("instantDeath folds the attacker's grantInstantdeath buff and the target's nonresistInstantdeath debuff in as additive rate-ups", () => {
+    const withEffects: Action = { ...action, effects: [instantDeathEffect({ deathRate: 400, targetType: "enemyOne" })] };
+    // Base chance is 40%. A roll of 0.5 survives the base chance but not a +50%-boosted one (60%).
+    const grantedServant = servant({ servantId: 1, activeBuffs: [trackedBuff({ type: "upGrantInstantdeath" as Buff.BuffType, amount: 500 })] });
+    const withGrant = resolveAction(
+      state({ servants: [grantedServant, servant({ servantId: 2 }), servant({ servantId: 3 })], enemies: [enemy({ npcId: 9001 })] }),
+      withEffects,
+      CONSTANTS,
+      () => 0.5,
+    );
+    expect(withGrant.enemies.find((e) => e.npcId === 9001)?.currentHp).toBe(0);
+
+    const cursedEnemy = enemy({ npcId: 9001, activeBuffs: [trackedBuff({ type: "upNonresistInstantdeath" as Buff.BuffType, amount: 500 })] });
+    const withNonresist = resolveAction(state({ enemies: [cursedEnemy] }), withEffects, CONSTANTS, () => 0.5);
+    expect(withNonresist.enemies.find((e) => e.npcId === 9001)?.currentHp).toBe(0);
+  });
+
+  it("a successful instantDeath roll now routes through resolveGuts instead of unconditionally zeroing HP", () => {
+    const withEffects: Action = { ...action, effects: [instantDeathEffect({ deathRate: 1000, targetType: "enemyOne" })] };
+    const gutsEnemy = enemy({
+      npcId: 9001,
+      maxHp: 50000,
+      activeBuffs: [trackedBuff({ type: "guts" as Buff.BuffType, amount: 300, buffGroup: 110, usesRemaining: 1 })],
+    });
+    const result = resolveAction(state({ enemies: [gutsEnemy] }), withEffects, CONSTANTS, () => 0);
+    const revived = result.enemies.find((e) => e.npcId === 9001);
+    expect(revived?.currentHp).toBe(15000);
+    expect(revived?.activeBuffs).toHaveLength(0);
   });
 
   it("omitting effects entirely resolves the same as an empty array (defaults to [])", () => {

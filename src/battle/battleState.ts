@@ -82,12 +82,9 @@ export interface EnemyInstance extends Omit<BattleUnit, "activeBuffs"> {
    * knowledge, then live-verified against `QuestEnemy.chargeTurn`): a discrete integer
    * countdown that advances by exactly `+1` every turn regardless of cards/crits/buffs (no
    * formula), not a continuous formula-driven percentage. `advanceEnemyForEndTurn`
-   * (`./turnLoop.js`) increments this by 1 per turn, capped at `npTurnLimit` — reaching the
-   * cap is meant to trigger an automatic enemy NP cast, but that trigger itself is **not
-   * implemented** (research/08 §5's "phase 2, enemy-attack simulation" scope boundary);
-   * this field only tracks the countdown's state, capped rather than wrapping/resetting on
-   * overflow, so a caller can inspect "is this enemy NP-ready" without the cast itself
-   * happening automatically yet.
+   * (`./turnLoop.js`) increments this by 1 per turn; reaching `npTurnLimit` resets it back
+   * to `0` (a new cycle starts) and sets `readyToNp` below — see that field's own doc
+   * comment for what is and isn't implemented at that point.
    */
   readonly currentNpTurns: number;
   /**
@@ -99,6 +96,35 @@ export interface EnemyInstance extends Omit<BattleUnit, "activeBuffs"> {
    * derived from anything comparable to NP level).
    */
   readonly npTurnLimit: number;
+  /**
+   * This enemy's own base instant-death susceptibility (`QuestEnemy.deathRate`, research/08
+   * §2) — a per-mille multiplier `applyInstantDeathEffect` (`./turnLoop.js`) folds into the
+   * skill/NP's own `InstantDeathEffect.deathRate` roll, per the community-sourced formula
+   * (firq.dev, cross-referenced against live buff-targeting data this session — **not**
+   * live-tested by the project owner, the one tier below this project's strongest sourcing):
+   * `finalChance = hitRate * (deathRate / 1000) * (1 + grant - resist + nonresist)`. Static
+   * for the fight, same shape as `npTurnLimit` above — no `WaveEnemy`-construction pipeline
+   * exists yet to source this from `QuestEnemy.deathRate` automatically (same caveat as
+   * `npTurnLimit`'s own doc comment). Typical cited values by enemy rarity: Bronze 80%,
+   * Silver 50%, Gold 20% (community-sourced, not primary-confirmed — a caller building an
+   * `EnemyInstance` by hand without real quest data should pick a plausible default from
+   * this range rather than defaulting to `0`, which would silently zero out every
+   * `instantDeath` roll against that enemy).
+   */
+  readonly deathRate: number;
+  /**
+   * Set `true` by `advanceEnemyForEndTurn` (`./turnLoop.js`) the moment `currentNpTurns`
+   * reaches `npTurnLimit` — a trigger **flag only**, added 2026-09-08. Nothing else in this
+   * project reads or clears it yet: no enemy NP effect resolves against the servants, no
+   * `Action` exists to represent "the enemy casts its NP." That's still the deliberately
+   * out-of-scope "phase 2, enemy-attack simulation" (research/08 §5) — this field exists so
+   * a caller building that phase later has something to check ("is this enemy ready right
+   * now") without also having to re-derive the reset-and-cycle logic itself. Once set, stays
+   * `true` indefinitely — `advanceEnemyForEndTurn` only ever sets it, never clears it, so a
+   * future "resolve the enemy's attack" step is responsible for flipping it back to `false`
+   * once it actually handles the cast.
+   */
+  readonly readyToNp: boolean;
 }
 
 /**
