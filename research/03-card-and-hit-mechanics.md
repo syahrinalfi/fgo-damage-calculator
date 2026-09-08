@@ -26,7 +26,7 @@ The second-level key (`1`/`2`/`3` for player cards, or `4` for Extra) is the car
 | 2nd | 1200 (120%) | 0 | 4500 (45%) | 0 |
 | 3rd | 1400 (140%) | 0 | 6000 (60%) | 0 |
 
-Arts cards have **no flat damage bonus for being played first**, but do have a **+10% flat NP-gauge bonus specifically when played as the 1st card** (`addTdGauge` = 1000 only at position 1) — matching the well-known community rule "Arts gives extra NP gauge when played first," now backed by an exact number from primary data.
+Arts cards have **no flat damage bonus for being played first**, but do have a flat NP-gauge bonus specifically when played as the 1st card (`addTdGauge` = 1000 only at position 1) — matching the well-known community rule "Arts gives extra NP gauge when played first," now backed by an exact number from primary data. **Correction (research/09 §7 follow-up pass)**: this section originally quoted the magnitude as "+10%" — cross-checking `addTdGauge`'s divided value (1000/1000 = **+100%**, the same `/1000` convention `addAtk`/`adjustAtk` etc. use throughout this file) against research/06 §7.2's independently-sourced "Arts leads → +100% flat addition to the NP-gain modifier" figure confirms the true value is **+100%**, not +10% — a wording error in this file's original text, not a genuine numeric discrepancy between primary and community sources.
 
 ### 1.2 Buster (id 2)
 | Position | `adjustAtk` | `addAtk` | `adjustCritical` |

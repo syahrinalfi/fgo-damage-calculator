@@ -29,8 +29,10 @@ describe("battle module (live Atlas Academy API)", () => {
     };
     const defender: BattleUnit = { ...attacker, activeBuffs: [] };
 
+    const cardType = (mash.noblePhantasms[0]?.card as Card | undefined) ?? Card.ARTS;
     const context: DamageResolutionContext = {
-      card: { type: (mash.noblePhantasms[0]?.card as Card | undefined) ?? Card.ARTS, position: 1 },
+      card: { type: cardType, position: 1 },
+      chainLeadCardType: cardType,
       npDamageMultiplier: 1,
       randomModifier: 1,
       isCrit: false,

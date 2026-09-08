@@ -107,6 +107,7 @@ function makeBuff(overrides: Partial<ActiveBuffInstance> = {}): ActiveBuffInstan
 
 const CONTEXT: HitResolutionContext = {
   card: { type: "2" as HitResolutionContext["card"]["type"], position: 1 },
+  chainLeadCardType: "2" as HitResolutionContext["card"]["type"],
   isCrit: false,
   npDamageMultiplier: 1,
   randomModifier: 1,
@@ -130,6 +131,7 @@ describe("resolveHit", () => {
     const expectedDamage = calculateHitDamage(
       resolveDamageInput(attacker, defender, CONSTANTS, {
         card: CONTEXT.card,
+        chainLeadCardType: CONTEXT.chainLeadCardType,
         npDamageMultiplier: CONTEXT.npDamageMultiplier,
         randomModifier: CONTEXT.randomModifier,
         isCrit: CONTEXT.isCrit,
@@ -180,6 +182,7 @@ describe("resolveHit", () => {
     const expectedDamage = calculateHitDamage(
       resolveDamageInput(attacker, defender, CONSTANTS, {
         card: CONTEXT.card,
+        chainLeadCardType: CONTEXT.chainLeadCardType,
         npDamageMultiplier: CONTEXT.npDamageMultiplier,
         randomModifier: CONTEXT.randomModifier,
         isCrit: CONTEXT.isCrit,

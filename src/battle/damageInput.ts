@@ -13,9 +13,19 @@ import type { BattleUnit } from "./unit.js";
  * a per-hit random roll, whether this specific hit is a crit/NP/Extra-Attack/Buster-chain
  * finisher, and the super-effective check result (both of which depend on the specific
  * function/skill being resolved, not on unit state alone).
+ *
+ * `chainLeadCardType` — research/03 §3/§6, research/06 §7.2: `NiceCard.json`'s `addAtk`
+ * field (this file's `firstCardBonus` term) is only ever nonzero at chain position 1, and
+ * — per research/06 §7.2's confirmed "whichever color leads the chain grants a bonus to
+ * *every* card in that chain (not just itself)" — must be looked up from the *chain's
+ * lead card's own type* at position 1, not from `card.type`/`card.position` (which stay
+ * this specific card's own true type/slot, driving `cardDamageValue` instead). A Buster-led
+ * chain's 2nd/3rd cards (of any color) still get Buster's own `addAtk` bonus this way, even
+ * though their own type's `addAtk` at their own position is 0.
  */
 export interface DamageResolutionContext {
   card: { type: Card; position: number };
+  chainLeadCardType: Card;
   npDamageMultiplier: number;
   randomModifier: number;
   isCrit: boolean;
@@ -43,6 +53,7 @@ export function resolveDamageInput(
   const traitContext = { holderTraits: attacker.traits, targetTraits: defender.traits };
   const defenderContext = { holderTraits: defender.traits, targetTraits: attacker.traits };
   const cardTerm = resolveCardTerm(constants, context.card.type, context.card.position);
+  const leadCardTerm = resolveCardTerm(constants, context.chainLeadCardType, 1);
 
   const cardMod =
     resolveUnitActionModifier(constants.buff, BUFF_ACTION_KEYS.COMMAND_ATK, attacker.activeBuffs, traitContext) -
@@ -66,7 +77,7 @@ export function resolveDamageInput(
   return {
     servantAtk: attacker.atk,
     npDamageMultiplier: context.npDamageMultiplier,
-    firstCardBonus: cardTerm.atkAdd,
+    firstCardBonus: leadCardTerm.atkAdd,
     cardDamageValue: cardTerm.atkAdjust,
     cardMod,
     classAtkBonus: resolveClassAttackBonus(constants, attacker.className),

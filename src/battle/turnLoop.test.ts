@@ -482,6 +482,26 @@ describe("resolveAction — playCard", () => {
     const result = resolveAction(state({ starsCarried: 5 }), { ...action, chainPosition: 3, chainCards: [{ type: ARTS, servantId: 2 }, { type: QUICK, servantId: 3 }, { type: BUSTER, servantId: 1 }] }, CONSTANTS);
     expect(result.starsCarried).toBe(5);
   });
+
+  it("derives chainLeadCardType from chainCards[0], boosting a non-lead card's damage via the chain lead's own firstCardBonus", () => {
+    const artsCard: Action = {
+      type: "playCard",
+      servantId: 1,
+      handCardIndex: 2, // ARTS card in FIVE_CARD_HAND, servantId 1
+      targetNpcId: 9001,
+      context: { ...CARD_CONTEXT, card: { type: ARTS, position: 1 } },
+      chainCards: [{ type: BUSTER, servantId: 2 }, { type: ARTS, servantId: 1 }, { type: QUICK, servantId: 3 }],
+      chainPosition: 2,
+    };
+    // Same Arts card, same fixed card.position — only which color leads the chain differs.
+    const artsLeads: Action = { ...artsCard, chainCards: [{ type: ARTS, servantId: 1 }, { type: BUSTER, servantId: 2 }, { type: QUICK, servantId: 3 }], chainPosition: 1 };
+    const busterLedResult = resolveAction(state(), artsCard, CONSTANTS);
+    const artsLedResult = resolveAction(state(), artsLeads, CONSTANTS);
+    const busterLedHp = busterLedResult.enemies.find((e) => e.npcId === 9001)?.currentHp ?? 0;
+    const artsLedHp = artsLedResult.enemies.find((e) => e.npcId === 9001)?.currentHp ?? 0;
+    // Buster's own addAtk (+30%, non-zero) beats Arts' own addAtk (0) as the chain's lead bonus.
+    expect(busterLedHp).toBeLessThan(artsLedHp);
+  });
 });
 
 describe("resolveAction — castNp", () => {

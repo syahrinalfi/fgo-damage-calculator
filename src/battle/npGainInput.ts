@@ -17,6 +17,8 @@ import type { BattleUnit } from "./unit.js";
  */
 export interface AttackingNpGainResolutionContext {
   card: { type: Card; position: number };
+  /** See `DamageResolutionContext.chainLeadCardType`'s doc comment (`./damageInput.js`) — same "chain lead's own position-1 `addTdGauge`" lookup, this formula's own `firstCardBonus` term (research/06 §7.2's Arts-lead +100% NP-gain-modifier example). */
+  chainLeadCardType: Card;
   offensiveNPRate: number;
   enemyServerMod: number;
   isCrit: boolean;
@@ -37,6 +39,7 @@ export function resolveAttackingNpGainInput(
   const traitContext = { holderTraits: attacker.traits, targetTraits: defender.traits };
   const defenderContext = { holderTraits: defender.traits, targetTraits: attacker.traits };
   const cardTerm = resolveCardTerm(constants, context.card.type, context.card.position);
+  const leadCardTerm = resolveCardTerm(constants, context.chainLeadCardType, 1);
 
   const cardMod =
     resolveUnitActionModifier(constants.buff, BUFF_ACTION_KEYS.COMMAND_NP_ATK, attacker.activeBuffs, traitContext) -
@@ -49,7 +52,7 @@ export function resolveAttackingNpGainInput(
 
   return {
     offensiveNPRate: context.offensiveNPRate,
-    firstCardBonus: cardTerm.npGaugeAdd,
+    firstCardBonus: leadCardTerm.npGaugeAdd,
     cardNpValue: cardTerm.npGaugeAdjust,
     cardMod,
     enemyServerMod: context.enemyServerMod,

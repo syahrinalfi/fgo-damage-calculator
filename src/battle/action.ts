@@ -3,14 +3,15 @@ import type { HitResolutionContext } from "./hitResolution.js";
 import type { SkillEffect } from "./skillEffect.js";
 
 /**
- * The 3 fields of `HitResolutionContext` this project's turn loop now derives itself
+ * The 4 fields of `HitResolutionContext` this project's turn loop now derives itself
  * (research/09 §7's "next increment"): `isCrit` from the hand slot's crit-star allocation
  * (`./critStarLottery.js`), `isBusterChain`/`extraCardChainType` from the turn's 3-card
- * chain classification (`./chainDetection.js`). A caller building an `Action` supplies
- * everything else `HitResolutionContext` still needs (Overcharge stage, server-mod values,
- * super-effective check, etc.) as before.
+ * chain classification (`./chainDetection.js`), and `chainLeadCardType` (research/06 §7.2's
+ * first-card bonus, `./damageInput.js`) from the chain's own 1st-played card. A caller
+ * building an `Action` supplies everything else `HitResolutionContext` still needs
+ * (Overcharge stage, server-mod values, super-effective check, etc.) as before.
  */
-export type DerivedHitContext = Omit<HitResolutionContext, "isCrit" | "isBusterChain" | "extraCardChainType">;
+export type DerivedHitContext = Omit<HitResolutionContext, "isCrit" | "isBusterChain" | "extraCardChainType" | "chainLeadCardType">;
 
 /**
  * One atomic thing a turn's plan can do (research/09 §1) — the granularity both
@@ -37,11 +38,13 @@ export type Action =
       /**
        * This turn's full 3-card chain selection (research/03 §3: a chain is always exactly
        * 3 non-NP cards), in play order — used to derive `isBusterChain`/`extraCardChainType`
-       * via `classifyChain` (`./chainDetection.js`), and, together with `chainPosition`
-       * below, to detect when the Arts/Quick-chain completion bonuses fire. The card at
-       * `chainCards[chainPosition - 1]` must match the card this action is actually playing
-       * (matched by `type` + `servantId` against the `handCards` slot at `handCardIndex`);
-       * throws otherwise, same as the existing `context.card.type` cross-check.
+       * via `classifyChain` (`./chainDetection.js`), `chainCards[0].type` as
+       * `DerivedHitContext.chainLeadCardType` (research/06 §7.2's first-card bonus,
+       * `./damageInput.js`), and, together with `chainPosition` below, to detect when the
+       * Arts/Quick-chain completion bonuses fire. The card at `chainCards[chainPosition - 1]`
+       * must match the card this action is actually playing (matched by `type` + `servantId`
+       * against the `handCards` slot at `handCardIndex`); throws otherwise, same as the
+       * existing `context.card.type` cross-check.
        */
       readonly chainCards: readonly { readonly type: Card; readonly servantId: number }[];
       /**
@@ -59,9 +62,11 @@ export type Action =
       readonly servantId: number;
       readonly targetNpcId: number;
       /**
-       * An NP is never part of a 3-card chain and can never critically hit (research/03
-       * §1.4/§5's all-zero NP card-position stub) — `isCrit`/`isBusterChain`/
-       * `extraCardChainType` are hardcoded `false`/`false`/`"none"` by `resolveCastNp`
+       * An NP is never part of a 3-card chain, gets no first-card bonus, and can never
+       * critically hit (research/03 §1.4/§5's all-zero NP card-position stub) —
+       * `isCrit`/`isBusterChain`/`extraCardChainType` are hardcoded `false`/`false`/`"none"`
+       * and `chainLeadCardType` is set to this NP's own card type (a deliberate no-op, since
+       * an NP's own `NiceCard.json` entry is itself an all-zero stub) by `resolveCastNp`
        * rather than derived at all, so `castNp` needs no `chainCards` equivalent.
        */
       readonly context: DerivedHitContext;

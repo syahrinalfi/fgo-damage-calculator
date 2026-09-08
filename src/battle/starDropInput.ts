@@ -16,6 +16,8 @@ import type { BattleUnit } from "./unit.js";
  */
 export interface StarDropResolutionContext {
   card: { type: Card; position: number };
+  /** See `DamageResolutionContext.chainLeadCardType`'s doc comment (`./damageInput.js`) — same "chain lead's own position-1 `addCritical`" lookup, this formula's own `firstCardBonus` term (research/06 §7.2's Quick-lead +20% critical-star-generation-rate bonus). */
+  chainLeadCardType: Card;
   baseStarRate: number;
   serverRate: number;
   isCrit: boolean;
@@ -36,6 +38,7 @@ export function resolveStarDropInput(
   const traitContext = { holderTraits: attacker.traits, targetTraits: defender.traits };
   const defenderContext = { holderTraits: defender.traits, targetTraits: attacker.traits };
   const cardTerm = resolveCardTerm(constants, context.card.type, context.card.position);
+  const leadCardTerm = resolveCardTerm(constants, context.chainLeadCardType, 1);
 
   const cardMod =
     resolveUnitActionModifier(constants.buff, BUFF_ACTION_KEYS.COMMAND_STAR_ATK, attacker.activeBuffs, traitContext) -
@@ -48,7 +51,7 @@ export function resolveStarDropInput(
 
   return {
     baseStarRate: context.baseStarRate,
-    firstCardBonus: cardTerm.criticalAdd,
+    firstCardBonus: leadCardTerm.criticalAdd,
     cardStarValue: cardTerm.criticalAdjust,
     cardMod,
     serverRate: context.serverRate,

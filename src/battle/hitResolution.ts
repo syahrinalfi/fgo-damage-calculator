@@ -23,6 +23,8 @@ import type { BattleUnit } from "./unit.js";
  */
 export interface HitResolutionContext {
   card: { type: Card; position: number };
+  /** See `DamageResolutionContext.chainLeadCardType`'s doc comment (`./damageInput.js`) — threaded into all three of `resolveDamageInput`/`resolveAttackingNpGainInput`/`resolveStarDropInput`'s own same-named field below. */
+  chainLeadCardType: Card;
   isCrit: boolean;
   npDamageMultiplier: number;
   randomModifier: number;
@@ -83,6 +85,7 @@ export function resolveHit(
 
   const damageInput = resolveDamageInput(attacker, defender, constants, {
     card: context.card,
+    chainLeadCardType: context.chainLeadCardType,
     npDamageMultiplier: context.npDamageMultiplier,
     randomModifier: context.randomModifier,
     isCrit: context.isCrit,
@@ -98,6 +101,7 @@ export function resolveHit(
 
   const npGainInput = resolveAttackingNpGainInput(attacker, defender, constants, {
     card: context.card,
+    chainLeadCardType: context.chainLeadCardType,
     offensiveNPRate: context.offensiveNPRate,
     enemyServerMod: context.npEnemyServerMod,
     isCrit: context.isCrit,
@@ -107,6 +111,7 @@ export function resolveHit(
 
   const starDropInput = resolveStarDropInput(attacker, defender, constants, {
     card: context.card,
+    chainLeadCardType: context.chainLeadCardType,
     baseStarRate: context.baseStarRate,
     serverRate: context.starEnemyServerMod,
     isCrit: context.isCrit,

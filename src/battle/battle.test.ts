@@ -206,6 +206,7 @@ describe("resolveUnitActionModifier / resolveUnitFlatActionTotal", () => {
 describe("resolveDamageInput", () => {
   const baseContext: DamageResolutionContext = {
     card: { type: BUSTER, position: 1 },
+    chainLeadCardType: BUSTER,
     npDamageMultiplier: 1,
     randomModifier: 1,
     isCrit: false,
@@ -233,6 +234,16 @@ describe("resolveDamageInput", () => {
     expect(input.powerMod).toBe(0);
     expect(input.dmgPlusAdd).toBe(0);
     expect(input.selfDmgCutAdd).toBe(0);
+  });
+
+  it("takes firstCardBonus from chainLeadCardType's own position-1 addAtk, not this card's own type/position", () => {
+    const attacker = makeUnit();
+    const defender = makeUnit({ className: ARCHER });
+    // ARTS's own position-1 addAtk is 0 (no flat damage bonus for being played first) — a
+    // Buster-led chain should still give this Arts card Buster's own +30% (0.3) addAtk,
+    // research/06 §7.2's "whichever color leads the chain grants a bonus to every card".
+    const input = resolveDamageInput(attacker, defender, CONSTANTS, { ...baseContext, card: { type: ARTS, position: 1 }, chainLeadCardType: BUSTER });
+    expect(input.firstCardBonus).toBeCloseTo(0.3, 10);
   });
 
   it("nets the attacker's commandAtk against the defender's commandDef into cardMod", () => {
@@ -285,6 +296,7 @@ describe("resolveAttackingNpGainInput / resolveDefendingNpGainInput", () => {
     const defender = makeUnit();
     const input = resolveAttackingNpGainInput(attacker, defender, CONSTANTS, {
       card: { type: ARTS, position: 1 },
+      chainLeadCardType: ARTS,
       offensiveNPRate: 69,
       enemyServerMod: 1,
       isCrit: false,
@@ -296,6 +308,23 @@ describe("resolveAttackingNpGainInput / resolveDefendingNpGainInput", () => {
     expect(input.cardNpValue).toBeCloseTo(3.0, 10);
     expect(input.cardMod).toBeCloseTo(0.2, 10);
     expect(input.npChargeRateMod).toBe(0);
+  });
+
+  it("takes firstCardBonus from chainLeadCardType's own position-1 addTdGauge, not this card's own type/position", () => {
+    const attacker = makeUnit();
+    const defender = makeUnit();
+    // BUSTER's own position-1 addTdGauge is 0 (no flat NP-gain bonus for being played
+    // first) — an Arts-led chain should still give this Buster card Arts's own +100%
+    // (1.0) addTdGauge, research/06 §7.2's Arts-lead example ("Buster 0%→100%").
+    const input = resolveAttackingNpGainInput(attacker, defender, CONSTANTS, {
+      card: { type: BUSTER, position: 1 },
+      chainLeadCardType: ARTS,
+      offensiveNPRate: 69,
+      enemyServerMod: 1,
+      isCrit: false,
+      isOverkill: false,
+    });
+    expect(input.firstCardBonus).toBeCloseTo(1.0, 10);
   });
 
   it("assembles the defending NP-gain input from the defender's own dropNp/dropNpDamage buffs", () => {
@@ -323,6 +352,7 @@ describe("resolveStarDropInput", () => {
     const defender = makeUnit();
     const input = resolveStarDropInput(attacker, defender, CONSTANTS, {
       card: { type: BUSTER, position: 1 },
+      chainLeadCardType: BUSTER,
       baseStarRate: 0.06,
       serverRate: 0,
       isCrit: false,
@@ -335,6 +365,24 @@ describe("resolveStarDropInput", () => {
     expect(input.cardMod).toBeCloseTo(0.3, 10);
   });
 
+  it("takes firstCardBonus from chainLeadCardType's own position-1 addCritical, not this card's own type/position", () => {
+    const attacker = makeUnit();
+    const defender = makeUnit();
+    // ARTS's own position-1 addCritical is 0 — a Buster-led chain should still give this
+    // Arts card Buster's own +5% (0.05) addCritical (research/06 §7.2's leader-propagates
+    // shape; this fixture uses Buster rather than Quick to reuse CARD_CONSTANTS' existing
+    // entries — the mechanism under test is the propagation itself, not which color leads).
+    const input = resolveStarDropInput(attacker, defender, CONSTANTS, {
+      card: { type: ARTS, position: 1 },
+      chainLeadCardType: BUSTER,
+      baseStarRate: 0.06,
+      serverRate: 0,
+      isCrit: false,
+      isOverkill: false,
+    });
+    expect(input.firstCardBonus).toBeCloseTo(0.05, 10);
+  });
+
   it("resolves starDropMod/enemyStarDropMod from each side's own criticalPoint buffs", () => {
     const attacker = makeUnit({
       activeBuffs: [makeBuff({ type: "upCriticalpoint" as ActiveBuffInstance["type"], amount: 50 })],
@@ -344,6 +392,7 @@ describe("resolveStarDropInput", () => {
     });
     const input = resolveStarDropInput(attacker, defender, CONSTANTS, {
       card: { type: BUSTER, position: 1 },
+      chainLeadCardType: BUSTER,
       baseStarRate: 0.06,
       serverRate: 0,
       isCrit: false,

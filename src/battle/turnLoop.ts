@@ -233,11 +233,14 @@ function resolvePlayCard(
   // `handCardStars` is always kept parallel to `handCards` (same length/order), and `handCard` above already confirmed this index is in range.
   const stars = state.handCardStars[action.handCardIndex] as number;
   const isCrit = rollIsCrit(critChanceForStars(stars), randomFn);
+  // `classifyChain` above already confirmed `action.chainCards` has exactly 3 entries, so index 0 always exists.
+  const chainLeadCardType = (action.chainCards[0] as (typeof action.chainCards)[number]).type;
   const context: HitResolutionContext = {
     ...action.context,
     isCrit,
     isBusterChain: isBusterChainFrom(classification),
     extraCardChainType: extraCardChainTypeFrom(classification),
+    chainLeadCardType,
   };
 
   const hitState = applyHit(state, servant, enemy, constants, context);
@@ -302,10 +305,13 @@ function applyChainCompletionBonus(
  * "keep the remainder" carryover. This overrides whatever gauge `applyHit` just added from
  * this same NP's own hits (irrelevant for the caster, since it's zeroed immediately after).
  *
- * `isCrit`/`isBusterChain`/`extraCardChainType` are hardcoded `false`/`false`/`"none"`
- * rather than derived from the crit-star lottery/chain classification the way `playCard`'s
- * are — research/03 §1.4/§5: the NP card is an all-zero stub in the per-position modifier
- * table and isn't part of the 3-card chain at all, so neither mechanic applies to an NP.
+ * `isCrit`/`isBusterChain`/`extraCardChainType` are hardcoded `false`/`false`/`"none"`, and
+ * `chainLeadCardType` is set to this NP's own `context.card.type` (a deliberate no-op — an
+ * NP's own `NiceCard.json` entry is itself an all-zero stub, so this lookup always yields a
+ * zero `firstCardBonus` regardless), rather than derived from the crit-star lottery/chain
+ * classification the way `playCard`'s are — research/03 §1.4/§5: the NP card is an all-zero
+ * stub in the per-position modifier table and isn't part of the 3-card chain at all, so none
+ * of these mechanics apply to an NP.
  */
 function resolveCastNp(state: BattleState, action: Extract<Action, { type: "castNp" }>, constants: BattleConstants): BattleState {
   const servant = findServant(state, action.servantId);
@@ -314,7 +320,13 @@ function resolveCastNp(state: BattleState, action: Extract<Action, { type: "cast
     throw new RangeError("castNp's context.isNP must be true");
   }
 
-  const context: HitResolutionContext = { ...action.context, isCrit: false, isBusterChain: false, extraCardChainType: "none" };
+  const context: HitResolutionContext = {
+    ...action.context,
+    isCrit: false,
+    isBusterChain: false,
+    extraCardChainType: "none",
+    chainLeadCardType: action.context.card.type,
+  };
   const nextState = applyHit(state, servant, enemy, constants, context);
   const servants = nextState.servants.map((s) => (s.servantId === servant.servantId ? { ...s, currentNpGauge: 0 } : s));
 
