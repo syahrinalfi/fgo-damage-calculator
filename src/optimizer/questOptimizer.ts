@@ -9,6 +9,7 @@ import { buildInitialBattleState, type PartyMemberSpec } from "./battleStateBuil
 import { enumerateCeAssignments, enumerateServantSubsets } from "./candidateGeneration.js";
 import { buildCardOrderCandidates } from "./cardOrderCandidates.js";
 import { damageDealtAtSlot } from "./objectives.js";
+import { buildSkillAndCardOrderCandidates, type SkillActivation } from "./skillUsageCandidates.js";
 import { searchBestActionSequence, type ActionSequenceResult, type SequenceScoreFn } from "./turnSearch.js";
 
 /** One shortlisted servant a caller wants the search to consider fielding — not yet tied to a CE or front-line/bench role, both decided per enumerated combination. */
@@ -34,6 +35,18 @@ export interface QuestOptimizerOptions {
    * `.card.position` is ignored (`buildCardOrderCandidates` overwrites it per ordering).
    */
   readonly resolveHitContext: (handCard: HandCard) => DerivedHitContext;
+  /**
+   * Resolves this party candidate's available (off-cooldown) skill/Mystic Code skill
+   * activations (research/09 §4's "skill-usage plan per turn" axis) as fully-resolved
+   * `SkillActivation`s — same "already-resolved input" convention as `resolveHitContext`.
+   * Receives the party's own just-built `initialState` so targets/servantIds can reference
+   * the actual fielded servants for this combination. Every subset of the returned list is
+   * tried (`enumerateSkillUsageSubsets`, `./candidateGeneration.js`), each crossed with
+   * every card-order candidate (`./skillUsageCandidates.js`) — omit this option entirely
+   * (the default) to search the card-order axis alone, unchanged from before this option
+   * existed.
+   */
+  readonly resolveSkillOptions?: (initialState: BattleState) => readonly SkillActivation[];
   /** Which of `initialState.enemies` the default `damageDealtAtSlot` objective targets and every combination's `playCard` `Action`s attack — defaults to `0` (the first/only enemy). */
   readonly targetEnemySlotIndex?: number;
   /** Overrides the default `damageDealtAtSlot(targetEnemySlotIndex)` objective. */
@@ -70,11 +83,12 @@ export interface QuestOptimizerCandidate {
  *
  * **Scope, deliberately not attempted here**: only exactly-3-front-line parties (no bench/
  * sub-member axis — `FRONT_LINE_SERVANT_COUNT`, this project's only fully-modeled party
- * shape); only the card-play-order axis of a turn's plan (no skill-usage-plan or
- * Order-Change-timing axis — research/09 §4's remaining 2 open axes); and only a single
- * turn's line per party (no multi-turn horizon — the ST Burst Finder's own multi-turn
- * specialization, §5, is a distinct future increment on top of this same engine, not
- * something this function's single-turn scoring loop attempts).
+ * shape); the skill-usage-plan axis is now searched too when `resolveSkillOptions` is
+ * supplied (`./skillUsageCandidates.js`), but Order-Change-timing is still unattempted
+ * (research/09 §4's last remaining open axis); and only a single turn's line per party (no
+ * multi-turn horizon — the ST Burst Finder's own multi-turn specialization, §5, is a
+ * distinct future increment on top of this same engine, not something this function's
+ * single-turn scoring loop attempts).
  */
 export function optimizeQuest(options: QuestOptimizerOptions): readonly QuestOptimizerCandidate[] {
   const targetSlot = options.targetEnemySlotIndex ?? 0;
@@ -105,7 +119,11 @@ export function optimizeQuest(options: QuestOptimizerOptions): readonly QuestOpt
       if (targetEnemy === undefined) continue;
 
       const contextTemplates = initialState.handCards.map(options.resolveHitContext);
-      const candidates = buildCardOrderCandidates(initialState.handCards, contextTemplates, targetEnemy.npcId);
+      const cardCandidates = buildCardOrderCandidates(initialState.handCards, contextTemplates, targetEnemy.npcId);
+      const candidates =
+        options.resolveSkillOptions === undefined
+          ? cardCandidates
+          : buildSkillAndCardOrderCandidates(options.resolveSkillOptions(initialState), cardCandidates);
       const ranked = searchBestActionSequence(initialState, candidates, options.constants, randomFn, scoreFn);
       const best = ranked[0];
       if (best === undefined) continue;

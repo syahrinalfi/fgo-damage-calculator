@@ -1,12 +1,13 @@
 import type { Buff, Card, CardDetail, CraftEssence, Servant as ServantModule } from "@atlasacademy/api-connector";
 import { describe, expect, it } from "vitest";
 import type { DerivedHitContext } from "../battle/action.js";
-import type { HandCard } from "../battle/battleState.js";
+import type { BattleState, HandCard } from "../battle/battleState.js";
 import { BUFF_ACTION_KEYS } from "../battle/buffActionKeys.js";
 import type { BattleConstants } from "../battle/gameConstants.js";
 import type { ServantBuild } from "../account/types.js";
 import type { Wave, WaveEnemy } from "../quest/types.js";
 import { optimizeQuest, type ServantCandidate } from "./questOptimizer.js";
+import type { SkillActivation } from "./skillUsageCandidates.js";
 
 function niceServant(overrides: Partial<ServantModule.Servant> = {}): ServantModule.Servant {
   return {
@@ -180,5 +181,45 @@ describe("optimizeQuest", () => {
     // enumerateCeAssignments(pool of 1, 3 slots) = 1 (all empty) + 3 (one slot gets the CE) = 4 combinations
     expect(results).toHaveLength(4);
     expect(results.some((r) => r.party.some((m) => m.equippedCe !== undefined))).toBe(true);
+  });
+
+  it("searches the skill-usage-plan axis and picks a beneficial ATK-up skill when resolveSkillOptions is supplied", () => {
+    const withoutSkill = optimizeQuest({
+      shortlist: [candidate(1), candidate(2), candidate(3)],
+      cePool: [],
+      waves: [wave()],
+      costBudget: 1000,
+      constants: CONSTANTS,
+      resolveHitContext,
+      randomFn: () => 0,
+    });
+
+    const resolveSkillOptions = (initialState: BattleState): readonly SkillActivation[] => {
+      const actor = initialState.servants[0];
+      if (actor === undefined) return [];
+      const atkUp: SkillActivation = {
+        type: "useSkill",
+        servantId: actor.servantId,
+        skillSlot: 1,
+        effects: [{ kind: "grantBuff", buff: { type: "upAtk" as Buff.BuffType, amount: 500, ckSelfIndv: [], ckOpIndv: [], buffGroup: 0 }, rawTurn: 3, rawCount: -1, targetType: "self" }],
+        cooldownTurns: 5,
+      };
+      return [atkUp];
+    };
+
+    const withSkill = optimizeQuest({
+      shortlist: [candidate(1), candidate(2), candidate(3)],
+      cePool: [],
+      waves: [wave()],
+      costBudget: 1000,
+      constants: CONSTANTS,
+      resolveHitContext,
+      resolveSkillOptions,
+      randomFn: () => 0,
+    });
+
+    expect(withSkill).toHaveLength(1);
+    expect(withSkill[0]?.best.score).toBeGreaterThan(withoutSkill[0]?.best.score ?? Infinity);
+    expect(withSkill[0]?.best.actions[0]?.type).toBe("useSkill");
   });
 });

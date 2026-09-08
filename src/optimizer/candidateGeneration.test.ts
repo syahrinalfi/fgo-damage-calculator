@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { enumerateCeAssignments, enumerateOrderedSelections, enumerateServantSubsets } from "./candidateGeneration.js";
+import { enumerateCeAssignments, enumerateOrderedSelections, enumerateServantSubsets, enumerateSkillUsageSubsets } from "./candidateGeneration.js";
 
 describe("enumerateServantSubsets", () => {
   it("enumerates every unordered combination of the requested size", () => {
@@ -73,5 +73,31 @@ describe("enumerateOrderedSelections", () => {
     expect(result).toHaveLength(2);
     expect(result).toContainEqual(["a", "b"]);
     expect(result).toContainEqual(["b", "a"]);
+  });
+});
+
+describe("enumerateSkillUsageSubsets", () => {
+  it("enumerates every subset (power set) including the empty one", () => {
+    const result = enumerateSkillUsageSubsets(["a", "b"]);
+    expect(result).toHaveLength(4);
+    expect(result).toContainEqual([]);
+    expect(result).toContainEqual(["a"]);
+    expect(result).toContainEqual(["b"]);
+    expect(result).toContainEqual(["a", "b"]);
+  });
+
+  it("never varies relative order within a subset", () => {
+    const result = enumerateSkillUsageSubsets(["a", "b", "c"]);
+    expect(result).not.toContainEqual(["b", "a"]);
+    expect(result).not.toContainEqual(["c", "a"]);
+    expect(result).toContainEqual(["a", "b", "c"]);
+  });
+
+  it("returns a single empty subset for an empty input", () => {
+    expect(enumerateSkillUsageSubsets([])).toEqual([[]]);
+  });
+
+  it("returns 2^n subsets for n options", () => {
+    expect(enumerateSkillUsageSubsets(["a", "b", "c", "d"])).toHaveLength(16);
   });
 });

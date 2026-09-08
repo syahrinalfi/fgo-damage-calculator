@@ -10,11 +10,12 @@
  * this module's job (keeps these functions plain, type-agnostic, and independently
  * testable rather than coupled to `BattleState`/account-data shapes).
  *
- * **Not attempted here, still genuinely open** (§4's other two search-space axes):
- * "skill-usage plan per turn" (which skills to fire, at all — a much larger space than a
- * simple enumeration since it interacts with target choice and buff/cooldown state) and
- * "Order Change timing" (when in a turn to swap, if at all). Both need their own dedicated
- * pass once there's a concrete end-to-end candidate-builder to validate them against.
+ * **Not attempted here, still genuinely open** (§4's remaining search-space axis):
+ * "Order Change timing" (when in a turn to swap, if at all — a much larger space than a
+ * simple enumeration since it interacts with cooldown/backline-freeze state, research/07
+ * §4). Needs its own dedicated pass once there's a concrete end-to-end candidate-builder to
+ * validate it against, same as `enumerateSkillUsageSubsets` below needed before
+ * `../optimizer/skillUsageCandidates.js` was built.
  *
  * **Combinatorial explosion is the caller's problem, not this module's** — these functions
  * enumerate *everything* satisfying the constraint (no pruning, no heuristic seeding); §4's
@@ -99,5 +100,40 @@ export function enumerateOrderedSelections<T>(items: readonly T[], selectCount: 
       results.push([items[i] as T, ...tail]);
     }
   }
+  return results;
+}
+
+/**
+ * Every subset of `options` (a power set, `2^n` subsets including the empty one),
+ * preserving each element's original relative order within a subset — research/09 §4's
+ * "skill-usage plan per turn" axis: pass a turn's available (off-cooldown) skill/Mystic
+ * Code skill activations as `options` to get every "use none of these / use exactly these
+ * (in this relative order)" combination worth simulating.
+ *
+ * Skill-cast **order** within a chosen subset is deliberately not itself varied here
+ * (unlike `enumerateOrderedSelections`'s card-order axis, which does vary order) — no
+ * primary source in this project models same-turn skill-activation-order interactions
+ * beyond the NP-function-order finding `Action`'s own doc comment already covers for
+ * `castNp`'s `effects`, so permuting skill order would be searching a dimension nothing
+ * sources, not a scoped simplification of a known-important one. A caller who wants a
+ * specific cast order can simply pass `options` pre-ordered the way they want it applied.
+ *
+ * Grows fast (`2^n`); a caller should pass an already-narrowed list (e.g. only skills
+ * actually off cooldown this turn), not every skill a party could ever know.
+ */
+export function enumerateSkillUsageSubsets<T>(options: readonly T[]): readonly (readonly T[])[] {
+  const results: T[][] = [];
+  const current: T[] = [];
+  function backtrack(index: number): void {
+    if (index === options.length) {
+      results.push([...current]);
+      return;
+    }
+    backtrack(index + 1);
+    current.push(options[index] as T);
+    backtrack(index + 1);
+    current.pop();
+  }
+  backtrack(0);
   return results;
 }
