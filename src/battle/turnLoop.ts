@@ -2,7 +2,7 @@ import type { Buff } from "@atlasacademy/api-connector";
 import type { NpLevel } from "../account/types.js";
 import { FULL_TD_POINT } from "../engine/constants.js";
 import { advanceTurnBuffs, consumeBuffUse } from "./buffLifecycle.js";
-import type { Action } from "./action.js";
+import type { Action, CommandSealEffect } from "./action.js";
 import { enemyToBattleUnit, servantToBattleUnit, type BattleState, type EnemyInstance, type ServantInstance } from "./battleState.js";
 import { buildCombinedCardDeck } from "./cardDeck.js";
 import { drawCardBagHand } from "./cardBag.js";
@@ -92,6 +92,15 @@ function findServant(state: BattleState, servantId: number): ServantInstance {
   }
   if (!servant.isFrontLine) {
     throw new RangeError(`Servant ${servantId} is benched (not front-line) and cannot act`);
+  }
+  return servant;
+}
+
+/** Looks up a servant by id with no front-line requirement — used for `useCommandSeal` targets, since Command Seal is a Master action, not something only an acting front-line servant can receive. */
+function findServantAny(state: BattleState, servantId: number): ServantInstance {
+  const servant = state.servants.find((s) => s.servantId === servantId);
+  if (!servant) {
+    throw new RangeError(`No servant with servantId ${servantId} in this BattleState`);
   }
   return servant;
 }
@@ -219,19 +228,75 @@ function resolveCastNp(state: BattleState, action: Extract<Action, { type: "cast
   return { ...nextState, servants, consecutiveNpChainCount: nextState.consecutiveNpChainCount + 1 };
 }
 
+/** Command Seal costs by effect (research/00 §6, confirmed by the project owner). */
+const COMMAND_SEAL_COST: Record<CommandSealEffect["kind"], number> = {
+  fillNpGauge: 1,
+  healHp: 1,
+  reviveParty: 3,
+};
+
+/**
+ * `useCommandSeal` — spends `BattleState.commandSealsRemaining` (a Master-level, account-
+ * wide resource — research/00 §6, confirmed by the project owner) on one of 3 effects.
+ * Throws if fewer seals remain than the effect's cost, rather than silently allowing an
+ * over-spend.
+ *
+ * `fillNpGauge` **raises the gauge to at least 100%, never lowering it** — `Math.max`, not
+ * an unconditional set. A flat "set to exactly 100%" would actually *reduce* the gauge of
+ * any servant above NP level 1 already sitting past 100% (research/04 §5.2a: NP levels
+ * 2-4/5 can passively hold up to 200%/300%), which makes no sense for a beneficial effect;
+ * `Math.max` is the only reading consistent with Command Seals existing to *help* reach
+ * NP-ready state. `healHp` sets HP to exactly `maxHp` — no equivalent above-cap case exists
+ * for HP (no overheal mechanic is modeled), so set-vs-max is not a live distinction there.
+ *
+ * `reviveParty` applies to every servant in `state.servants` at `currentHp <= 0` regardless
+ * of front-line/benched status, since Command Seal targeting isn't restricted to acting
+ * front-line servants the way `playCard`/`castNp` are (still a documented, provisional
+ * scope choice — research/00 §6's still-open note). A revived servant's NP gauge is maxed
+ * to *that servant's own* `NP_GAUGE_CAP_BY_LEVEL` ceiling (100/200/300% by NP level), not
+ * flatly to 100% like `fillNpGauge` — matching the confirmed "mentokin NP gauge juga"
+ * (maxes the gauge too) wording, which describes hitting each servant's own cap.
+ */
+function resolveUseCommandSeal(state: BattleState, action: Extract<Action, { type: "useCommandSeal" }>): BattleState {
+  const cost = COMMAND_SEAL_COST[action.effect.kind];
+  if (state.commandSealsRemaining < cost) {
+    throw new RangeError(`Not enough Command Seals: this effect costs ${cost}, only ${state.commandSealsRemaining} remain`);
+  }
+
+  let servants = state.servants;
+  switch (action.effect.kind) {
+    case "fillNpGauge": {
+      const target = findServantAny(state, action.effect.servantId);
+      servants = servants.map((s) => (s.servantId === target.servantId ? { ...s, currentNpGauge: Math.max(s.currentNpGauge, FULL_TD_POINT) } : s));
+      break;
+    }
+    case "healHp": {
+      const target = findServantAny(state, action.effect.servantId);
+      servants = servants.map((s) => (s.servantId === target.servantId ? { ...s, currentHp: s.maxHp } : s));
+      break;
+    }
+    case "reviveParty": {
+      servants = servants.map((s) =>
+        s.currentHp <= 0 ? { ...s, currentHp: s.maxHp, currentNpGauge: NP_GAUGE_CAP_BY_LEVEL[s.npLevel] } : s,
+      );
+      break;
+    }
+  }
+
+  return { ...state, servants, commandSealsRemaining: state.commandSealsRemaining - cost };
+}
+
 /**
  * Applies one `Action` to `state`, producing the next `BattleState` — research/09 §1's
  * pure function `(BattleState, Action) → BattleState'`.
  *
- * `endTurn`, `playCard`, and `castNp` are implemented. Every other case throws,
- * deliberately, rather than faking behavior for mechanics this codebase doesn't correctly
- * model yet: `useSkill`/`useMysticCodeSkill`'s buff-granting needs skill/NP function-array
+ * `endTurn`, `playCard`, `castNp`, and `useCommandSeal` are implemented. `useSkill`/
+ * `useMysticCodeSkill` throw, since their buff-granting needs skill/NP function-array
  * parsing, which nothing in this codebase reads yet (`grantBuff` exists but has no real
- * caller — research/09 §7); `orderChange` needs the hand-card ownership remodeling
- * research/07 §4 already flagged as a prerequisite (a hand slot's card *type* survives a
- * swap, but *which servant* it resolves against changes, and `BattleState.handCards`/
- * `Card[]` has no per-slot owner to reassign); `useCommandSeal`'s exact effect is still
- * open research (research/00 §6).
+ * caller — research/09 §7); `orderChange` throws, needing the hand-card ownership
+ * remodeling research/07 §4 already flagged as a prerequisite (a hand slot's card *type*
+ * survives a swap, but *which servant* it resolves against changes, and
+ * `BattleState.handCards`/`Card[]` has no per-slot owner to reassign).
  *
  * `playCard`/`castNp` themselves are also narrower than research/09 §2's full pipeline:
  * they resolve exactly one hit from an already-fully-resolved `HitResolutionContext` the
@@ -252,10 +317,11 @@ export function resolveAction(
       return resolvePlayCard(state, action, constants);
     case "castNp":
       return resolveCastNp(state, action, constants);
+    case "useCommandSeal":
+      return resolveUseCommandSeal(state, action);
     case "useSkill":
     case "useMysticCodeSkill":
     case "orderChange":
-    case "useCommandSeal":
       throw new Error(`Action type "${action.type}" is not implemented yet`);
     default: {
       const exhaustive: never = action;

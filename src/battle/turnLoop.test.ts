@@ -104,7 +104,6 @@ function servant(overrides: Partial<ServantInstance> = {}): ServantInstance {
     currentNpGauge: 0,
     activeBuffs: [],
     skillCooldowns: [3, 2, 0],
-    commandSealsRemaining: 3,
     ...overrides,
   };
 }
@@ -137,6 +136,7 @@ function state(overrides: Partial<BattleState> = {}): BattleState {
     costSpent: 0,
     costBudget: 100,
     consecutiveNpChainCount: 2,
+    commandSealsRemaining: 3,
     ...overrides,
   };
 }
@@ -312,12 +312,74 @@ describe("resolveAction — castNp", () => {
   });
 });
 
+describe("resolveAction — useCommandSeal", () => {
+  it("fillNpGauge raises the target's gauge to 100% and costs 1 seal", () => {
+    const result = resolveAction(
+      state({ servants: [servant({ servantId: 1, npLevel: 2, currentNpGauge: 5000 }), servant({ servantId: 2 }), servant({ servantId: 3 })] }),
+      { type: "useCommandSeal", effect: { kind: "fillNpGauge", servantId: 1 } },
+      CONSTANTS,
+    );
+    expect(result.servants.find((s) => s.servantId === 1)?.currentNpGauge).toBe(10000);
+    expect(result.commandSealsRemaining).toBe(2);
+  });
+
+  it("fillNpGauge never lowers a gauge already above 100% (NP level 2-5 can hold up to 200%/300%)", () => {
+    const result = resolveAction(
+      state({ servants: [servant({ servantId: 1, npLevel: 3, currentNpGauge: 15000 }), servant({ servantId: 2 }), servant({ servantId: 3 })] }),
+      { type: "useCommandSeal", effect: { kind: "fillNpGauge", servantId: 1 } },
+      CONSTANTS,
+    );
+    expect(result.servants.find((s) => s.servantId === 1)?.currentNpGauge).toBe(15000);
+  });
+
+  it("healHp sets the target's HP to maxHp and costs 1 seal", () => {
+    const result = resolveAction(
+      state({ servants: [servant({ servantId: 1, currentHp: 100, maxHp: 15000 }), servant({ servantId: 2 }), servant({ servantId: 3 })] }),
+      { type: "useCommandSeal", effect: { kind: "healHp", servantId: 1 } },
+      CONSTANTS,
+    );
+    expect(result.servants.find((s) => s.servantId === 1)?.currentHp).toBe(15000);
+    expect(result.commandSealsRemaining).toBe(2);
+  });
+
+  it("reviveParty revives every dead servant (front-line or benched) to full HP and their own NP-level gauge cap, costing all 3 seals", () => {
+    const benched = servant({ servantId: 4, isFrontLine: false, currentHp: 0, maxHp: 12000, npLevel: 5 });
+    const result = resolveAction(
+      state({
+        servants: [
+          servant({ servantId: 1, currentHp: 0, maxHp: 15000, npLevel: 1 }),
+          servant({ servantId: 2, currentHp: 8000 }),
+          servant({ servantId: 3 }),
+          benched,
+        ],
+      }),
+      { type: "useCommandSeal", effect: { kind: "reviveParty" } },
+      CONSTANTS,
+    );
+    expect(result.servants.find((s) => s.servantId === 1)).toMatchObject({ currentHp: 15000, currentNpGauge: 10000 });
+    expect(result.servants.find((s) => s.servantId === 2)?.currentHp).toBe(8000);
+    expect(result.servants.find((s) => s.servantId === 4)).toMatchObject({ currentHp: 12000, currentNpGauge: 30000 });
+    expect(result.commandSealsRemaining).toBe(0);
+  });
+
+  it("throws when fewer seals remain than the effect costs", () => {
+    expect(() =>
+      resolveAction(state({ commandSealsRemaining: 2 }), { type: "useCommandSeal", effect: { kind: "reviveParty" } }, CONSTANTS),
+    ).toThrow(RangeError);
+  });
+
+  it("throws for an unknown servantId target", () => {
+    expect(() =>
+      resolveAction(state(), { type: "useCommandSeal", effect: { kind: "healHp", servantId: 999 } }, CONSTANTS),
+    ).toThrow(RangeError);
+  });
+});
+
 describe("resolveAction — not-yet-implemented actions", () => {
   const cases: Action[] = [
     { type: "useSkill", servantId: 1, skillSlot: 1 },
     { type: "useMysticCodeSkill", slot: 1 },
     { type: "orderChange", outgoingServantId: 1, incomingServantId: 4 },
-    { type: "useCommandSeal" },
   ];
 
   it.each(cases)("throws for $type", (action) => {

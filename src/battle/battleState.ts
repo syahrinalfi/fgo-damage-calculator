@@ -9,10 +9,14 @@ import type { Wave } from "../quest/types.js";
  * `BattleUnit` already models (`atk`/`className`/`attribute`/`traits`) plus everything
  * that mutates turn to turn: HP, NP gauge (`FULL_TD_POINT` units, research/04 §1),
  * buffs-as-`TrackedBuff[]` (turn/use expiry, not the bare `ActiveBuffInstance[]`
- * `BattleUnit` uses for a single already-resolved hit), skill cooldowns, and Command
- * Seal count. Front-line vs. sub-member (research/00 §4) matters because only front-line
- * servants can act/be targeted; a sub-member's state is otherwise frozen (research/07 §4,
- * confirmed by the project owner — Order Change swaps in a servant's state unchanged).
+ * `BattleUnit` uses for a single already-resolved hit), and skill cooldowns. Front-line
+ * vs. sub-member (research/00 §4) matters because only front-line servants can act/be
+ * targeted; a sub-member's state is otherwise frozen (research/07 §4, confirmed by the
+ * project owner — Order Change swaps in a servant's state unchanged).
+ *
+ * Command Seal count is deliberately **not** a field here — research/00 §6, confirmed by
+ * the project owner: Command Seals are a Master-level (account-wide) resource, not
+ * per-servant, so `BattleState.commandSealsRemaining` is the single shared counter.
  */
 export interface ServantInstance extends Omit<BattleUnit, "activeBuffs"> {
   readonly servantId: number;
@@ -33,7 +37,6 @@ export interface ServantInstance extends Omit<BattleUnit, "activeBuffs"> {
   readonly activeBuffs: readonly TrackedBuff[];
   /** Turns remaining before each of the servant's 3 skill slots is usable again; 0 = ready. */
   readonly skillCooldowns: readonly [number, number, number];
-  readonly commandSealsRemaining: number;
 }
 
 /**
@@ -87,6 +90,13 @@ export interface BattleState {
   readonly fieldTraits: ReadonlySet<number>;
   readonly costSpent: number;
   readonly costBudget: number;
+  /**
+   * Master-level (account-wide) resource, not per-servant (research/00 §6, confirmed by
+   * the project owner) — max 3, spent by `useCommandSeal` (`./turnLoop.js`): 1 to fill a
+   * servant's NP gauge to 100%, 1 to heal a servant's HP to 100%, or all 3 at once to
+   * revive every dead party member (also maxing their NP gauge).
+   */
+  readonly commandSealsRemaining: number;
   /** Directly-consecutive NPs cast this turn with no non-NP card played in between (research/04 §5.5's NP Chain Bonus); resets to 0 on any non-NP `playCard`. */
   readonly consecutiveNpChainCount: number;
 }

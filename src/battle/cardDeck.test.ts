@@ -22,7 +22,6 @@ function servant(servantId: number, isFrontLine: boolean, cardTypes: readonly Ca
     currentNpGauge: 0,
     activeBuffs: [],
     skillCooldowns: [0, 0, 0],
-    commandSealsRemaining: 3,
   };
 }
 

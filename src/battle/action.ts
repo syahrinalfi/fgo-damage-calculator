@@ -7,9 +7,11 @@ import type { HitResolutionContext } from "./hitResolution.js";
  * in sequence, never batched (research/00 §4's "same-turn NP-order effects"/intra-NP
  * function-order findings — the evaluator must re-check state before the next `Action`).
  *
- * `useCommandSeal`'s exact effect semantics are still unresolved research (research/00 §6:
- * "Precise Command Seal effects to model... not yet confirmed from official sources") — its
- * variant is deliberately payload-less pending that, rather than guessing a shape.
+ * `useCommandSeal`'s 3 effects (research/00 §6, confirmed by the project owner) — raise one
+ * servant's NP gauge to at least 100% without ever lowering it (cost 1), heal one servant's
+ * HP to 100% (cost 1), or revive every dead party member with full HP and NP gauge (cost
+ * all 3 at once) — are a Master-level (account-wide) action, spending
+ * `BattleState.commandSealsRemaining`, not any one servant's own resource.
  *
  * See `resolveAction` (`./turnLoop.js`) for which of these are actually implemented yet.
  */
@@ -41,5 +43,15 @@ export type Action =
       readonly targetNpcId?: number;
     }
   | { readonly type: "orderChange"; readonly outgoingServantId: number; readonly incomingServantId: number }
-  | { readonly type: "useCommandSeal" }
+  | { readonly type: "useCommandSeal"; readonly effect: CommandSealEffect }
   | { readonly type: "endTurn" };
+
+/**
+ * The 3 real Command Seal effects (research/00 §6, confirmed by the project owner) — no
+ * "guarantee the next card played" effect exists, correcting an earlier, incorrect guess
+ * this project's research once floated.
+ */
+export type CommandSealEffect =
+  | { readonly kind: "fillNpGauge"; readonly servantId: number }
+  | { readonly kind: "healHp"; readonly servantId: number }
+  | { readonly kind: "reviveParty" };

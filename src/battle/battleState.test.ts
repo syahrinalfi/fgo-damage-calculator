@@ -23,7 +23,6 @@ function servant(overrides: Partial<ServantInstance> = {}): ServantInstance {
     currentNpGauge: 0,
     activeBuffs: [],
     skillCooldowns: [0, 0, 0],
-    commandSealsRemaining: 3,
     ...overrides,
   };
 }
@@ -55,7 +54,7 @@ describe("servantToBattleUnit", () => {
     });
   });
 
-  it("ignores mutable-only fields (HP/gauge/cooldowns/Command Seals) not part of BattleUnit", () => {
+  it("ignores mutable-only fields (HP/gauge/cooldowns) not part of BattleUnit", () => {
     const unit = servantToBattleUnit(servant());
     expect(unit).not.toHaveProperty("currentHp");
     expect(unit).not.toHaveProperty("currentNpGauge");
