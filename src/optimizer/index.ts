@@ -5,3 +5,5 @@ export { enumerateServantSubsets, enumerateCeAssignments, enumerateOrderedSelect
 export { buildCardOrderCandidates } from "./cardOrderCandidates.js";
 export type { PartyMemberSpec, InitialBattleStateOptions } from "./battleStateBuilder.js";
 export { buildInitialBattleState } from "./battleStateBuilder.js";
+export type { ServantCandidate, QuestOptimizerOptions, QuestOptimizerCandidate } from "./questOptimizer.js";
+export { optimizeQuest } from "./questOptimizer.js";
