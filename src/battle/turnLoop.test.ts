@@ -8,6 +8,7 @@ import type { TrackedBuff } from "./buffLifecycle.js";
 import type { BattleConstants } from "./gameConstants.js";
 import type {
   BuffGrantEffect,
+  ForceInstantDeathEffect,
   GainHpEffect,
   GainHpPercentEffect,
   GainNpEffect,
@@ -284,6 +285,14 @@ function instantDeathEffect(overrides: Partial<InstantDeathEffect> = {}): Instan
     kind: "instantDeath",
     deathRate: 600,
     targetType: "enemyOne",
+    ...overrides,
+  };
+}
+
+function forceInstantDeathEffect(overrides: Partial<ForceInstantDeathEffect> = {}): ForceInstantDeathEffect {
+  return {
+    kind: "forceInstantDeath",
+    targetType: "self",
     ...overrides,
   };
 }
@@ -748,6 +757,12 @@ describe("resolveAction — castNp", () => {
   it("omitting effects entirely resolves the same as an empty array (defaults to [])", () => {
     const result = resolveAction(state(), action, CONSTANTS);
     expect(result.enemies.find((e) => e.npcId === 9001)?.currentHp).toBeGreaterThan(0);
+  });
+
+  it("forceInstantDeath unconditionally zeroes the caster's own HP, no roll needed (a self-sacrifice NP cost)", () => {
+    const withEffects: Action = { ...action, effects: [forceInstantDeathEffect()] };
+    const result = resolveAction(state(), withEffects, CONSTANTS, () => 0.99);
+    expect(result.servants.find((s) => s.servantId === 1)?.currentHp).toBe(0);
   });
 });
 

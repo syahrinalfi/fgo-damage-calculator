@@ -39,6 +39,7 @@ export type {
   LossStarEffect,
   LossHpPercentEffect,
   InstantDeathEffect,
+  ForceInstantDeathEffect,
   SkillEffect,
 } from "./skillEffect.js";
 export { resolveAction, NP_GAUGE_CAP_BY_LEVEL } from "./turnLoop.js";

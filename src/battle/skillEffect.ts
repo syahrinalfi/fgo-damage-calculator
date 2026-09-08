@@ -322,6 +322,35 @@ export interface InstantDeathEffect {
   readonly targetType: "enemyOne" | "enemyAll";
 }
 
+/**
+ * One already-resolved unconditional self-kill a `castNp` `Action` applies — models the
+ * API's `forceInstantDeath` `FuncType` (research/09 §7 dedicated pass: 9 live NP instances).
+ * A structurally different mechanic from `InstantDeathEffect` above, not its "always
+ * succeeds" variant: **every** live example targets the caster's own side (8 of 9 `self`, 1
+ * `ptSelfAnotherFirst` — a paired/duo-NP targeting shape this project doesn't model, out of
+ * scope for the same single-example reason `ShortenSkillEffect`/`LossHpSafeEffect` flag
+ * `ptOther`), never an enemy — this reads as a self-sacrifice NP cost (some NPs kill their
+ * own caster as part of the attack), not "guaranteed-kill the enemy." `svals.Rate` is a
+ * constant `5000` across every live example — out of the normal 0–1000 per-mille probability
+ * range and never varying by Overcharge stage or NP level the way `instantDeath`'s does,
+ * consistent with the reading that `Rate` is a vestigial/unused field here: `force` means
+ * unconditional, no roll needed, so this effect carries no numeric field at all (the same
+ * "no live example suggests anything but a full, unconditional effect" reasoning
+ * `RevivalEffect`'s doc comment already used for its own `Vals` shape).
+ *
+ * Sets `currentHp` straight to `0`, no `resolveGuts` check (../buffs/guts.js) — same
+ * documented gap as `InstantDeathEffect`, for the same reason (no `BuffTraitContext`
+ * available in this flat shape) — whether a self-sacrifice NP's own Guts buff (if any) would
+ * save it is unconfirmed, not a deliberate design call.
+ *
+ * Ally-only (`SkillTargetType`) — only `self` has a live example; `ptOne`/`ptAll` are typed
+ * for consistency with every other ally-side effect but have no confirmed live usage here.
+ */
+export interface ForceInstantDeathEffect {
+  readonly kind: "forceInstantDeath";
+  readonly targetType: SkillTargetType;
+}
+
 /** One already-resolved skill/NP effect a `useSkill`/`useMysticCodeSkill` `Action` can carry (research/09 §7's still-limited scope). */
 export type SkillEffect =
   | BuffGrantEffect
@@ -336,4 +365,5 @@ export type SkillEffect =
   | ShortenSkillEffect
   | LossStarEffect
   | LossHpPercentEffect
+  | ForceInstantDeathEffect
   | InstantDeathEffect;

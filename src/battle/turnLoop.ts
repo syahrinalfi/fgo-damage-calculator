@@ -18,6 +18,7 @@ import type { BattleConstants } from "./gameConstants.js";
 import { resolveHit, type HitResolutionContext } from "./hitResolution.js";
 import type {
   BuffGrantEffect,
+  ForceInstantDeathEffect,
   GainHpEffect,
   GainHpPercentEffect,
   GainNpEffect,
@@ -635,6 +636,17 @@ function applyRevivalEffect(
   );
 }
 
+/** Applies one `ForceInstantDeathEffect` (`./skillEffect.js`) to every servant `resolveAllyTargets` resolves it to — unconditionally sets `currentHp` to `0` (no roll, no `resolveGuts` check — see the effect's own doc comment). */
+function applyForceInstantDeathEffect(
+  servants: readonly ServantInstance[],
+  actingServantId: number | undefined,
+  effect: ForceInstantDeathEffect,
+  targetServantId: number | undefined,
+): readonly ServantInstance[] {
+  const targetIds = new Set(resolveAllyTargets(servants, effect.targetType, actingServantId, targetServantId));
+  return servants.map((s) => (targetIds.has(s.servantId) ? { ...s, currentHp: 0 } : s));
+}
+
 /**
  * Applies one `RemoveBuffEffect` (`./skillEffect.js`, research/05 §5's `subState`) to every
  * unit it targets, via `removeBuffsByTrait` (`./buffLifecycle.js`). `self`/`ptAll`/`ptOne`
@@ -727,6 +739,8 @@ function applySkillEffect(
       return { ...state, servants: applyLossHpPercentEffect(state.servants, actingServantId, effect, targetServantId) };
     case "instantDeath":
       return applyInstantDeathEffect(state, effect, targetNpcId, randomFn);
+    case "forceInstantDeath":
+      return { ...state, servants: applyForceInstantDeathEffect(state.servants, actingServantId, effect, targetServantId) };
   }
 }
 
