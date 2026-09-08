@@ -36,6 +36,15 @@ export function servantAtkAtLevel(servant: Pick<EntityModule.Entity, "atkGrowth"
   return atk;
 }
 
+/** Same shape/caveats as `servantAtkAtLevel` above, reading `Entity.hpGrowth` instead — also works for a `CraftEssence` (also an `Entity`, research/01 §1). */
+export function servantHpAtLevel(servant: Pick<EntityModule.Entity, "hpGrowth">, level: number): number {
+  const hp = servant.hpGrowth[level - 1];
+  if (hp === undefined) {
+    throw new RangeError(`No hpGrowth entry for level ${level} (array has ${servant.hpGrowth.length} entries)`);
+  }
+  return hp;
+}
+
 /** Builds the `ReadonlySet<number>` trait context `resolveDamageInput` etc. expect. */
 export function traitIdSet(traits: readonly { id: number }[]): ReadonlySet<number> {
   return new Set(traits.map((trait) => trait.id));

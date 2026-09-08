@@ -1,7 +1,7 @@
 export { BUFF_ACTION_KEYS, getBuffConstant } from "./buffActionKeys.js";
 export { resolveUnitActionModifier, resolveUnitFlatActionTotal } from "./modifiers.js";
 export type { BattleUnit } from "./unit.js";
-export { servantAtkAtLevel, traitIdSet } from "./unit.js";
+export { servantAtkAtLevel, servantHpAtLevel, traitIdSet } from "./unit.js";
 export type { BattleConstants } from "./gameConstants.js";
 export { loadBattleConstants } from "./gameConstants.js";
 export { resolveClassAttackBonus, resolveClassTriangleModifier, resolveAttributeTriangleModifier } from "./triangle.js";
@@ -17,8 +17,8 @@ export type { HitResolutionContext, HitResolutionResult } from "./hitResolution.
 export { resolveHit } from "./hitResolution.js";
 export type { TrackedBuff } from "./buffLifecycle.js";
 export { grantBuff, advanceTurnBuffs, consumeBuffUse, removeBuffsByTrait } from "./buffLifecycle.js";
-export type { ServantInstance, EnemyInstance, BattleState, HandCard } from "./battleState.js";
-export { servantToBattleUnit, enemyToBattleUnit } from "./battleState.js";
+export type { ServantInstance, EnemyInstance, BattleState, HandCard, EquippedCraftEssence } from "./battleState.js";
+export { servantToBattleUnit, enemyToBattleUnit, buildEnemyInstance, buildServantInstance } from "./battleState.js";
 export type { CardBagDrawResult } from "./cardBag.js";
 export { shuffleCards, drawCardBagHand } from "./cardBag.js";
 export { FRONT_LINE_SERVANT_COUNT, CARDS_PER_SERVANT_DECK, buildCombinedCardDeck } from "./cardDeck.js";

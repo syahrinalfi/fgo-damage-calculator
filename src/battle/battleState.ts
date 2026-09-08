@@ -1,7 +1,7 @@
-import type { Card } from "@atlasacademy/api-connector";
-import type { NpLevel } from "../account/types.js";
+import type { Card, CraftEssence, Servant as ServantModule } from "@atlasacademy/api-connector";
+import type { NpLevel, ServantBuild } from "../account/types.js";
 import type { TrackedBuff } from "./buffLifecycle.js";
-import type { BattleUnit } from "./unit.js";
+import { servantAtkAtLevel, servantHpAtLevel, traitIdSet, type BattleUnit } from "./unit.js";
 import type { Wave, WaveEnemy } from "../quest/types.js";
 
 /**
@@ -266,5 +266,81 @@ export function buildEnemyInstance(waveEnemy: WaveEnemy): EnemyInstance {
     npTurnLimit: waveEnemy.chargeTurn,
     deathRate: waveEnemy.deathRate,
     readyToNp: false,
+  };
+}
+
+/** An already-resolved Craft Essence to fold into `buildServantInstance` — the live `CraftEssence` record plus the specific owned copy's level (`OwnedCraftEssence.level`, `../account/types.js`). Resolving `ServantBuild.equippedCraftEssenceId` to this shape (inventory lookup + a `GameDataClient.craftEssence` fetch) is the caller's job, not this function's — keeps `buildServantInstance` a pure, network-free projection. */
+export interface EquippedCraftEssence {
+  readonly data: CraftEssence.CraftEssence;
+  readonly level: number;
+}
+
+/**
+ * The `ServantBuild`(research/00 §3, `src/account/types.ts`)-to-`ServantInstance`
+ * resolver this project didn't have yet — the prerequisite research/09 §4's
+ * optimizer candidate-generation layer needs before it can simulate *any* real
+ * account servant subset (a search candidate is otherwise just a bare `servantId`
+ * with no resolved stats to run through `resolveAction`). Mirrors
+ * `buildEnemyInstance` above: a pure projection from static + account data to the
+ * live `BattleState` shape, no network calls, `isFrontLine` caller-supplied since
+ * that's a party-formation decision this function has no basis to make on its own.
+ *
+ * Field mapping:
+ * - `atk`/`currentHp`(=`maxHp`): `servantAtkAtLevel`/`servantHpAtLevel` (`./unit.js`)
+ *   at `build.level`, **plus** the equipped CE's own `atk`/`hp` at its owned level
+ *   (a `CraftEssence` is itself an `Entity`, research/01 §1, so the same growth-array
+ *   readers apply directly), **plus** `build.fou.atk`/`build.fou.hp` added as a flat
+ *   bonus with no formula/interpolation — research/00 §3's account-data model treats
+ *   Fou values as already the exact invested flat ATK/HP number the user enters
+ *   (matching what FGO's own enhancement UI itself displays), not a curve to derive.
+ *   Per `servantAtkAtLevel`'s own caveat, ascension is **not** used for either stat:
+ *   file 01 confirms `atkGrowth`/`hpGrowth` are full per-level arrays independent of
+ *   ascension stage (only the reachable level *range* differs per ascension, not the
+ *   value at a given level) — a documented, open assumption for the small number of
+ *   servants whose `ascensionAdd` data might disagree, same as that function's own
+ *   scope note.
+ * - `className`/`attribute`/`traits`/`cardTypes`/`criticalWeight`: read straight off
+ *   `NiceServant` (`starAbsorb` for `criticalWeight`, research/04 §6.3), no per-account
+ *   resolution needed — identical for any build of the same servant.
+ * - `npLevel`: `build.npLevel` directly (research/00 §3 — independently 1-5 per
+ *   servant, never assumed uniform).
+ * - `currentNpGauge: 0`, `activeBuffs: []`, `skillCooldowns: [0, 0, 0]`: battle-start
+ *   defaults (gauge starts empty, no buffs active, every skill ready) — mirrors
+ *   `buildEnemyInstance`'s own `currentNpTurns: 0`/`readyToNp: false` defaults.
+ *
+ * Deliberately **not** read from `build` here, consistent with this project's scope
+ * discipline (not silently assumed, just not yet needed by this function):
+ * `skillLevels`/`appendSkillLevels` (a skill's actual `SkillEffect[]` is resolved
+ * separately per research/09 §1's `Action.useSkill.effects`, not baked into the
+ * static instance), `commandCodeIds` (no Command Code stat/skill contribution is
+ * modeled anywhere in this project yet), and, for `OwnedServant` specifically,
+ * `bondLevel` (the Bond-15 party-wide bonus is a buff, not a base stat — a real,
+ * separately-tracked open item, not something this resolver should silently fold
+ * in) and `unlockedStrengthenings`.
+ */
+export function buildServantInstance(
+  niceServant: ServantModule.Servant,
+  build: ServantBuild,
+  isFrontLine: boolean,
+  equippedCe?: EquippedCraftEssence,
+): ServantInstance {
+  const ceAtk = equippedCe === undefined ? 0 : servantAtkAtLevel(equippedCe.data, equippedCe.level);
+  const ceHp = equippedCe === undefined ? 0 : servantHpAtLevel(equippedCe.data, equippedCe.level);
+  const hp = servantHpAtLevel(niceServant, build.level) + ceHp + build.fou.hp;
+  return {
+    servantId: build.servantId,
+    isFrontLine,
+    atk: servantAtkAtLevel(niceServant, build.level) + ceAtk + build.fou.atk,
+    className: niceServant.className,
+    attribute: niceServant.attribute,
+    traits: traitIdSet(niceServant.traits),
+    cardTypes: niceServant.cards as unknown as readonly Card[],
+    npLevel: build.npLevel,
+    currentHp: hp,
+    maxHp: hp,
+    currentNpGauge: 0,
+    activeBuffs: [],
+    skillCooldowns: [0, 0, 0],
+    criticalWeight: niceServant.starAbsorb,
   };
 }
