@@ -1,4 +1,5 @@
 import type { HitResolutionContext } from "./hitResolution.js";
+import type { SkillEffect } from "./skillEffect.js";
 
 /**
  * One atomic thing a turn's plan can do (research/09 §1) — the granularity both
@@ -33,12 +34,22 @@ export type Action =
       readonly type: "useSkill";
       readonly servantId: number;
       readonly skillSlot: 1 | 2 | 3;
+      /**
+       * This skill's already-level-resolved effects (research/09 §7 — see `SkillEffect`'s
+       * own doc comment for what's in/out of scope). Empty for a skill this project can't
+       * yet model (any function beyond `addState`/`addStateShort`/`subState`).
+       */
+      readonly effects: readonly SkillEffect[];
+      /** This skill's cooldown at its current level (`NiceSkill.coolDown[level - 1]`), applied to `skillCooldowns[skillSlot - 1]` once resolved. */
+      readonly cooldownTurns: number;
       readonly targetServantId?: number;
       readonly targetNpcId?: number;
     }
   | {
       readonly type: "useMysticCodeSkill";
       readonly slot: 1 | 2 | 3;
+      readonly effects: readonly SkillEffect[];
+      readonly cooldownTurns: number;
       readonly targetServantId?: number;
       readonly targetNpcId?: number;
     }

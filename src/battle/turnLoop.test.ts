@@ -2,17 +2,24 @@ import type { Buff, Card, CardDetail } from "@atlasacademy/api-connector";
 import { describe, expect, it } from "vitest";
 import type { ActiveBuffInstance } from "../buffs/types.js";
 import type { Action } from "./action.js";
-import type { BattleState, EnemyInstance, ServantInstance } from "./battleState.js";
+import type { BattleState, EnemyInstance, HandCard, ServantInstance } from "./battleState.js";
 import { BUFF_ACTION_KEYS } from "./buffActionKeys.js";
 import type { TrackedBuff } from "./buffLifecycle.js";
 import type { BattleConstants } from "./gameConstants.js";
 import type { HitResolutionContext } from "./hitResolution.js";
+import type { BuffGrantEffect, GainHpEffect, GainNpEffect, RemoveBuffEffect } from "./skillEffect.js";
 import { resolveAction } from "./turnLoop.js";
 
 const BUSTER = "2" as Card;
 const ARTS = "1" as Card;
 const QUICK = "3" as Card;
 const FIVE_CARD_DECK: readonly Card[] = [BUSTER, BUSTER, ARTS, ARTS, QUICK];
+
+function handCardsFor(cards: readonly Card[], servantId = 1): readonly HandCard[] {
+  return cards.map((card): HandCard => ({ card, servantId }));
+}
+
+const FIVE_CARD_HAND: readonly HandCard[] = handCardsFor(FIVE_CARD_DECK, 1);
 
 function percentAction(plusType: string, minusType: string, baseValue = 0): Buff.BuffConstant {
   return {
@@ -104,6 +111,7 @@ function servant(overrides: Partial<ServantInstance> = {}): ServantInstance {
     currentNpGauge: 0,
     activeBuffs: [],
     skillCooldowns: [3, 2, 0],
+    criticalWeight: 99,
     ...overrides,
   };
 }
@@ -129,7 +137,7 @@ function state(overrides: Partial<BattleState> = {}): BattleState {
     currentTurn: 1,
     servants: [servant({ servantId: 1 }), servant({ servantId: 2 }), servant({ servantId: 3 })],
     enemies: [enemy()],
-    handCards: [...FIVE_CARD_DECK],
+    handCards: FIVE_CARD_HAND,
     cardBag: [],
     starsCarried: 0,
     fieldTraits: new Set(),
@@ -137,6 +145,45 @@ function state(overrides: Partial<BattleState> = {}): BattleState {
     costBudget: 100,
     consecutiveNpChainCount: 2,
     commandSealsRemaining: 3,
+    mysticCodeSkillCooldowns: [0, 0, 0],
+    ...overrides,
+  };
+}
+
+function buffGrantEffect(overrides: Partial<BuffGrantEffect> = {}): BuffGrantEffect {
+  return {
+    kind: "grantBuff",
+    buff: { type: "upAtk" as Buff.BuffType, amount: 300, ckSelfIndv: [], ckOpIndv: [], buffGroup: 0 },
+    rawTurn: 3,
+    rawCount: -1,
+    targetType: "self",
+    ...overrides,
+  };
+}
+
+function removeBuffEffect(overrides: Partial<RemoveBuffEffect> = {}): RemoveBuffEffect {
+  return {
+    kind: "removeBuff",
+    targetTrait: 3004,
+    targetType: "self",
+    ...overrides,
+  };
+}
+
+function gainNpEffect(overrides: Partial<GainNpEffect> = {}): GainNpEffect {
+  return {
+    kind: "gainNp",
+    rawAmount: 3000,
+    targetType: "self",
+    ...overrides,
+  };
+}
+
+function gainHpEffect(overrides: Partial<GainHpEffect> = {}): GainHpEffect {
+  return {
+    kind: "gainHp",
+    rawAmount: 3000,
+    targetType: "self",
     ...overrides,
   };
 }
@@ -204,7 +251,7 @@ describe("resolveAction — endTurn", () => {
   });
 
   it("deals from a non-empty bag without reshuffling", () => {
-    const bag = FIVE_CARD_DECK.slice(0, 5).concat(FIVE_CARD_DECK.slice(0, 5));
+    const bag = handCardsFor(FIVE_CARD_DECK.slice(0, 5).concat(FIVE_CARD_DECK.slice(0, 5)));
     const result = resolveAction(state({ cardBag: bag }), END_TURN, CONSTANTS, () => {
       throw new Error("should not reshuffle");
     });
@@ -216,6 +263,11 @@ describe("resolveAction — endTurn", () => {
     const result = resolveAction(state({ currentTurn: 1, consecutiveNpChainCount: 2 }), END_TURN, CONSTANTS);
     expect(result.currentTurn).toBe(2);
     expect(result.consecutiveNpChainCount).toBe(0);
+  });
+
+  it("decrements the Mystic Code's skill cooldowns too, floored at 0", () => {
+    const result = resolveAction(state({ mysticCodeSkillCooldowns: [2, 0, 5] }), END_TURN, CONSTANTS);
+    expect(result.mysticCodeSkillCooldowns).toEqual([1, 0, 4]);
   });
 });
 
@@ -232,7 +284,7 @@ describe("resolveAction — playCard", () => {
 
   it("removes the played card from the hand and resets consecutiveNpChainCount", () => {
     const result = resolveAction(state({ consecutiveNpChainCount: 3 }), action, CONSTANTS);
-    expect(result.handCards).toEqual(FIVE_CARD_DECK.slice(1));
+    expect(result.handCards).toEqual(FIVE_CARD_HAND.slice(1));
     expect(result.consecutiveNpChainCount).toBe(0);
   });
 
@@ -283,6 +335,11 @@ describe("resolveAction — playCard", () => {
   it("throws for an unknown targetNpcId", () => {
     expect(() => resolveAction(state(), { ...action, targetNpcId: 12345 }, CONSTANTS)).toThrow(RangeError);
   });
+
+  it("throws when the hand card at handCardIndex belongs to a different servant", () => {
+    const mixedHand = [handCardsFor([BUSTER], 2)[0] as HandCard, ...FIVE_CARD_HAND.slice(1)];
+    expect(() => resolveAction(state({ handCards: mixedHand }), action, CONSTANTS)).toThrow(RangeError);
+  });
 });
 
 describe("resolveAction — castNp", () => {
@@ -292,7 +349,7 @@ describe("resolveAction — castNp", () => {
     const result = resolveAction(state({ consecutiveNpChainCount: 1 }), action, CONSTANTS);
     const targetEnemy = result.enemies.find((e) => e.npcId === 9001);
     expect(targetEnemy?.currentHp).toBeLessThan(50000);
-    expect(result.handCards).toEqual(FIVE_CARD_DECK);
+    expect(result.handCards).toEqual(FIVE_CARD_HAND);
     expect(result.consecutiveNpChainCount).toBe(2);
   });
 
@@ -375,14 +432,255 @@ describe("resolveAction — useCommandSeal", () => {
   });
 });
 
-describe("resolveAction — not-yet-implemented actions", () => {
-  const cases: Action[] = [
-    { type: "useSkill", servantId: 1, skillSlot: 1 },
-    { type: "useMysticCodeSkill", slot: 1 },
-    { type: "orderChange", outgoingServantId: 1, incomingServantId: 4 },
-  ];
+describe("resolveAction — useSkill", () => {
+  it("grants a self-targeted buff and sets the skill slot's cooldown, regardless of front-line status", () => {
+    const benched = servant({ servantId: 4, isFrontLine: false, skillCooldowns: [0, 0, 0] });
+    const action: Action = { type: "useSkill", servantId: 4, skillSlot: 2, effects: [buffGrantEffect()], cooldownTurns: 7 };
+    const result = resolveAction(state({ servants: [servant({ servantId: 1 }), servant({ servantId: 2 }), servant({ servantId: 3 }), benched] }), action, CONSTANTS);
+    const acted = result.servants.find((s) => s.servantId === 4);
+    expect(acted?.activeBuffs).toHaveLength(1);
+    expect(acted?.skillCooldowns).toEqual([0, 7, 0]);
+  });
 
-  it.each(cases)("throws for $type", (action) => {
-    expect(() => resolveAction(state(), action, CONSTANTS)).toThrow(/not implemented yet/);
+  it("grants a ptAll-targeted buff to every front-line servant, not the bench", () => {
+    const benched = servant({ servantId: 4, isFrontLine: false });
+    const action: Action = { type: "useSkill", servantId: 1, skillSlot: 3, effects: [buffGrantEffect({ targetType: "ptAll" })], cooldownTurns: 5 };
+    const result = resolveAction(state({ servants: [servant({ servantId: 1 }), servant({ servantId: 2 }), servant({ servantId: 3 }), benched] }), action, CONSTANTS);
+    expect(result.servants.find((s) => s.servantId === 1)?.activeBuffs).toHaveLength(1);
+    expect(result.servants.find((s) => s.servantId === 2)?.activeBuffs).toHaveLength(1);
+    expect(result.servants.find((s) => s.servantId === 3)?.activeBuffs).toHaveLength(1);
+    expect(result.servants.find((s) => s.servantId === 4)?.activeBuffs).toHaveLength(0);
+  });
+
+  it("grants a ptOne-targeted buff only to targetServantId", () => {
+    const action: Action = {
+      type: "useSkill",
+      servantId: 1,
+      skillSlot: 3,
+      effects: [buffGrantEffect({ targetType: "ptOne" })],
+      cooldownTurns: 5,
+      targetServantId: 2,
+    };
+    const result = resolveAction(state(), action, CONSTANTS);
+    expect(result.servants.find((s) => s.servantId === 1)?.activeBuffs).toHaveLength(0);
+    expect(result.servants.find((s) => s.servantId === 2)?.activeBuffs).toHaveLength(1);
+  });
+
+  it("throws when the targeted skill slot is still on cooldown", () => {
+    const action: Action = { type: "useSkill", servantId: 1, skillSlot: 1, effects: [], cooldownTurns: 5 };
+    expect(() => resolveAction(state({ servants: [servant({ servantId: 1, skillCooldowns: [3, 0, 0] }), servant({ servantId: 2 }), servant({ servantId: 3 })] }), action, CONSTANTS)).toThrow(RangeError);
+  });
+
+  it("throws when a ptOne effect's targetServantId is benched", () => {
+    const benched = servant({ servantId: 4, isFrontLine: false });
+    const action: Action = {
+      type: "useSkill",
+      servantId: 1,
+      skillSlot: 3,
+      effects: [buffGrantEffect({ targetType: "ptOne" })],
+      cooldownTurns: 5,
+      targetServantId: 4,
+    };
+    expect(() => resolveAction(state({ servants: [servant({ servantId: 1 }), servant({ servantId: 2 }), servant({ servantId: 3 }), benched] }), action, CONSTANTS)).toThrow(RangeError);
+  });
+
+  it("throws for an unknown servantId", () => {
+    const action: Action = { type: "useSkill", servantId: 999, skillSlot: 1, effects: [], cooldownTurns: 5 };
+    expect(() => resolveAction(state(), action, CONSTANTS)).toThrow(RangeError);
+  });
+
+  it("dispels a self-targeted trait-matching buff, leaving a non-matching one untouched", () => {
+    const matching = trackedBuff({ vals: new Set([3004]) });
+    const nonMatching = trackedBuff({ type: "downDefence" as Buff.BuffType, vals: new Set([9999]) });
+    const action: Action = { type: "useSkill", servantId: 1, skillSlot: 3, effects: [removeBuffEffect({ targetType: "self" })], cooldownTurns: 5 };
+    const result = resolveAction(
+      state({ servants: [servant({ servantId: 1, activeBuffs: [matching, nonMatching] }), servant({ servantId: 2 }), servant({ servantId: 3 })] }),
+      action,
+      CONSTANTS,
+    );
+    expect(result.servants.find((s) => s.servantId === 1)?.activeBuffs).toEqual([nonMatching]);
+  });
+
+  it("dispels an enemyOne-targeted enemy's matching buffs", () => {
+    const matching = trackedBuff({ vals: new Set([3004]) });
+    const action: Action = {
+      type: "useSkill",
+      servantId: 1,
+      skillSlot: 3,
+      effects: [removeBuffEffect({ targetType: "enemyOne", targetTrait: 3004 })],
+      cooldownTurns: 5,
+      targetNpcId: 9001,
+    };
+    const result = resolveAction(state({ enemies: [enemy({ activeBuffs: [matching] })] }), action, CONSTANTS);
+    expect(result.enemies.find((e) => e.npcId === 9001)?.activeBuffs).toEqual([]);
+  });
+
+  it("dispels every enemy's matching buffs for an enemyAll effect", () => {
+    const matching = trackedBuff({ vals: new Set([3004]) });
+    const action: Action = { type: "useSkill", servantId: 1, skillSlot: 3, effects: [removeBuffEffect({ targetType: "enemyAll" })], cooldownTurns: 5 };
+    const result = resolveAction(
+      state({ enemies: [enemy({ npcId: 9001, activeBuffs: [matching] }), enemy({ npcId: 9002, activeBuffs: [matching] })] }),
+      action,
+      CONSTANTS,
+    );
+    expect(result.enemies.every((e) => e.activeBuffs.length === 0)).toBe(true);
+  });
+
+  it("throws for an enemyOne effect with no targetNpcId", () => {
+    const action: Action = { type: "useSkill", servantId: 1, skillSlot: 3, effects: [removeBuffEffect({ targetType: "enemyOne" })], cooldownTurns: 5 };
+    expect(() => resolveAction(state(), action, CONSTANTS)).toThrow(RangeError);
+  });
+
+  it("gainNp adds raw gauge units to the target, capped at the servant's own NP-level ceiling", () => {
+    const action: Action = { type: "useSkill", servantId: 1, skillSlot: 3, effects: [gainNpEffect({ rawAmount: 3000 })], cooldownTurns: 5 };
+    const result = resolveAction(
+      state({ servants: [servant({ servantId: 1, npLevel: 1, currentNpGauge: 9000 }), servant({ servantId: 2 }), servant({ servantId: 3 })] }),
+      action,
+      CONSTANTS,
+    );
+    expect(result.servants.find((s) => s.servantId === 1)?.currentNpGauge).toBe(10000);
+  });
+
+  it("gainNp respects ptOne targeting", () => {
+    const action: Action = { type: "useSkill", servantId: 1, skillSlot: 3, effects: [gainNpEffect({ targetType: "ptOne" })], cooldownTurns: 5, targetServantId: 2 };
+    const result = resolveAction(state(), action, CONSTANTS);
+    expect(result.servants.find((s) => s.servantId === 1)?.currentNpGauge).toBe(0);
+    expect(result.servants.find((s) => s.servantId === 2)?.currentNpGauge).toBe(3000);
+  });
+
+  it("gainHp adds flat HP to the target, capped at maxHp (no overheal)", () => {
+    const action: Action = { type: "useSkill", servantId: 1, skillSlot: 3, effects: [gainHpEffect({ rawAmount: 5000 })], cooldownTurns: 5 };
+    const result = resolveAction(
+      state({ servants: [servant({ servantId: 1, currentHp: 13000, maxHp: 15000 }), servant({ servantId: 2 }), servant({ servantId: 3 })] }),
+      action,
+      CONSTANTS,
+    );
+    expect(result.servants.find((s) => s.servantId === 1)?.currentHp).toBe(15000);
+  });
+
+  it("gainHp respects ptAll targeting, reaching only front-line servants", () => {
+    const benched = servant({ servantId: 4, isFrontLine: false, currentHp: 1000, maxHp: 15000 });
+    const action: Action = { type: "useSkill", servantId: 1, skillSlot: 3, effects: [gainHpEffect({ targetType: "ptAll", rawAmount: 100 })], cooldownTurns: 5 };
+    const result = resolveAction(
+      state({ servants: [servant({ servantId: 1, currentHp: 14900, maxHp: 15000 }), servant({ servantId: 2 }), servant({ servantId: 3 }), benched] }),
+      action,
+      CONSTANTS,
+    );
+    expect(result.servants.find((s) => s.servantId === 1)?.currentHp).toBe(15000);
+    expect(result.servants.find((s) => s.servantId === 4)?.currentHp).toBe(1000);
+  });
+});
+
+describe("resolveAction — useMysticCodeSkill", () => {
+  it("grants a ptAll-targeted buff to every front-line servant and sets the MC's cooldown slot", () => {
+    const action: Action = { type: "useMysticCodeSkill", slot: 3, effects: [buffGrantEffect({ targetType: "ptAll" })], cooldownTurns: 10 };
+    const result = resolveAction(state(), action, CONSTANTS);
+    for (const s of result.servants) {
+      expect(s.activeBuffs).toHaveLength(1);
+    }
+    expect(result.mysticCodeSkillCooldowns).toEqual([0, 0, 10]);
+  });
+
+  it("throws for a self-targeted effect, since a Mystic Code has no servant of its own", () => {
+    const action: Action = { type: "useMysticCodeSkill", slot: 1, effects: [buffGrantEffect({ targetType: "self" })], cooldownTurns: 5 };
+    expect(() => resolveAction(state(), action, CONSTANTS)).toThrow(RangeError);
+  });
+
+  it("throws when the targeted MC skill slot is still on cooldown", () => {
+    const action: Action = { type: "useMysticCodeSkill", slot: 2, effects: [], cooldownTurns: 5 };
+    expect(() => resolveAction(state({ mysticCodeSkillCooldowns: [0, 4, 0] }), action, CONSTANTS)).toThrow(RangeError);
+  });
+
+  it("dispels an enemyAll-targeted enemy's matching buffs", () => {
+    const matching = trackedBuff({ vals: new Set([3004]) });
+    const action: Action = { type: "useMysticCodeSkill", slot: 1, effects: [removeBuffEffect({ targetType: "enemyAll" })], cooldownTurns: 5 };
+    const result = resolveAction(state({ enemies: [enemy({ activeBuffs: [matching] })] }), action, CONSTANTS);
+    expect(result.enemies[0]?.activeBuffs).toEqual([]);
+  });
+
+  it("throws for a self-targeted removeBuff effect too, since a Mystic Code has no servant of its own", () => {
+    const action: Action = { type: "useMysticCodeSkill", slot: 1, effects: [removeBuffEffect({ targetType: "self" })], cooldownTurns: 5 };
+    expect(() => resolveAction(state(), action, CONSTANTS)).toThrow(RangeError);
+  });
+
+  it("gainHp ptAll heals every front-line servant (e.g. MC 'Cure-All')", () => {
+    const action: Action = { type: "useMysticCodeSkill", slot: 1, effects: [gainHpEffect({ targetType: "ptAll", rawAmount: 2000 })], cooldownTurns: 5 };
+    const result = resolveAction(
+      state({ servants: [servant({ servantId: 1, currentHp: 10000, maxHp: 15000 }), servant({ servantId: 2, currentHp: 10000, maxHp: 15000 }), servant({ servantId: 3 })] }),
+      action,
+      CONSTANTS,
+    );
+    expect(result.servants.find((s) => s.servantId === 1)?.currentHp).toBe(12000);
+    expect(result.servants.find((s) => s.servantId === 2)?.currentHp).toBe(12000);
+  });
+
+  it("gainNp ptOne charges a single target's gauge (e.g. MC 'Spiritron Transfer')", () => {
+    const action: Action = { type: "useMysticCodeSkill", slot: 1, effects: [gainNpEffect({ targetType: "ptOne", rawAmount: 5000 })], cooldownTurns: 5, targetServantId: 3 };
+    const result = resolveAction(state(), action, CONSTANTS);
+    expect(result.servants.find((s) => s.servantId === 3)?.currentNpGauge).toBe(5000);
+  });
+});
+
+describe("resolveAction — orderChange", () => {
+  it("flips isFrontLine on both servants and re-attributes the outgoing servant's hand-card slots to the incoming one", () => {
+    const benched = servant({ servantId: 4, isFrontLine: false, cardTypes: FIVE_CARD_DECK });
+    const action: Action = { type: "orderChange", outgoingServantId: 1, incomingServantId: 4 };
+    const result = resolveAction(
+      state({ servants: [servant({ servantId: 1 }), servant({ servantId: 2 }), servant({ servantId: 3 }), benched] }),
+      action,
+      CONSTANTS,
+    );
+    expect(result.servants.find((s) => s.servantId === 1)?.isFrontLine).toBe(false);
+    expect(result.servants.find((s) => s.servantId === 4)?.isFrontLine).toBe(true);
+    expect(result.handCards.map((hc) => hc.servantId)).toEqual([4, 4, 4, 4, 4]);
+    expect(result.handCards.map((hc) => hc.card)).toEqual(FIVE_CARD_HAND.map((hc) => hc.card));
+  });
+
+  it("leaves other servants' hand-card slots and front-line status untouched", () => {
+    const benched = servant({ servantId: 4, isFrontLine: false });
+    const mixedHand = [...handCardsFor(FIVE_CARD_DECK.slice(0, 2), 1), ...handCardsFor(FIVE_CARD_DECK.slice(2), 2)];
+    const action: Action = { type: "orderChange", outgoingServantId: 1, incomingServantId: 4 };
+    const result = resolveAction(
+      state({ servants: [servant({ servantId: 1 }), servant({ servantId: 2 }), servant({ servantId: 3 }), benched], handCards: mixedHand }),
+      action,
+      CONSTANTS,
+    );
+    expect(result.handCards.slice(0, 2).map((hc) => hc.servantId)).toEqual([4, 4]);
+    expect(result.handCards.slice(2).map((hc) => hc.servantId)).toEqual([2, 2, 2]);
+    expect(result.servants.find((s) => s.servantId === 2)?.isFrontLine).toBe(true);
+  });
+
+  it("preserves the swapped-out servant's HP/NP gauge/buffs/cooldowns unchanged", () => {
+    const outgoingBuffs = [trackedBuff({ turnsRemaining: 2 })];
+    const action: Action = { type: "orderChange", outgoingServantId: 1, incomingServantId: 4 };
+    const result = resolveAction(
+      state({
+        servants: [
+          servant({ servantId: 1, currentHp: 7000, currentNpGauge: 4000, activeBuffs: outgoingBuffs, skillCooldowns: [2, 0, 0] }),
+          servant({ servantId: 2 }),
+          servant({ servantId: 3 }),
+          servant({ servantId: 4, isFrontLine: false }),
+        ],
+      }),
+      action,
+      CONSTANTS,
+    );
+    const swappedOut = result.servants.find((s) => s.servantId === 1);
+    expect(swappedOut).toMatchObject({ currentHp: 7000, currentNpGauge: 4000, activeBuffs: outgoingBuffs, skillCooldowns: [2, 0, 0], isFrontLine: false });
+  });
+
+  it("throws when outgoingServantId is not front-line", () => {
+    const benched = servant({ servantId: 4, isFrontLine: false });
+    const action: Action = { type: "orderChange", outgoingServantId: 4, incomingServantId: 1 };
+    expect(() => resolveAction(state({ servants: [servant({ servantId: 1 }), servant({ servantId: 2 }), servant({ servantId: 3 }), benched] }), action, CONSTANTS)).toThrow(RangeError);
+  });
+
+  it("throws when incomingServantId is already front-line", () => {
+    const action: Action = { type: "orderChange", outgoingServantId: 1, incomingServantId: 2 };
+    expect(() => resolveAction(state(), action, CONSTANTS)).toThrow(RangeError);
+  });
+
+  it("throws for an unknown servantId on either side", () => {
+    expect(() => resolveAction(state(), { type: "orderChange", outgoingServantId: 999, incomingServantId: 4 }, CONSTANTS)).toThrow(RangeError);
   });
 });

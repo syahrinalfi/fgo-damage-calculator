@@ -87,3 +87,22 @@ export function consumeBuffUse(
     })
     .filter((buff) => buff.usesRemaining === null || buff.usesRemaining > 0);
 }
+
+/**
+ * Dispels (`subState`, research/05 §5) every tracked instance whose own `vals` classification
+ * trait set contains `targetTrait` — e.g. `buffPositiveEffect` to strip every buff
+ * regardless of specific type, or a narrower trait like `buffEvadeAndInvincible` to strip
+ * only that family. Matches against `ActiveBuffInstance.vals`, not `type`/`ckSelfIndv`/
+ * `ckOpIndv` — those gate whether a buff *applies*, dispel targets what it *is* (research/05
+ * §5's Taira-no-Kagekiyo NP example: `subState` with `traitVals: [buffPositiveEffect]`
+ * removes every buff carrying that trait, `Rate: 1000`, unconditionally — no `Turn`/`Count`
+ * exemption). A buff with no `vals` recorded (the field is optional, `../buffs/types.js`) is
+ * never matched, so it survives any dispel untouched, never removed by omission.
+ *
+ * Ignores `usesRemaining`/`turnsRemaining` entirely — a dispelled buff is gone outright,
+ * regardless of how much of its own duration/uses remained (distinct from `consumeBuffUse`,
+ * which only decrements one charge and may leave the instance active).
+ */
+export function removeBuffsByTrait(tracked: readonly TrackedBuff[], targetTrait: number): readonly TrackedBuff[] {
+  return tracked.filter((buff) => !buff.vals?.has(targetTrait));
+}

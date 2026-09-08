@@ -33,6 +33,18 @@ export interface ActiveBuffInstance {
    * `./buffGroup.js` for the confirmed collision rule (reject-new).
    */
   buffGroup: number;
+  /**
+   * This buff's own classification trait IDs (`NiceBuff.vals`, research/05 §5) — e.g. Guts
+   * carries `buffPositiveEffect` + `buffGuts`; Evade carries `buffPositiveEffect` +
+   * `buffEvadeAndInvincible` + `buffEvade`. A dispel effect (`subState`,
+   * `removeBuffsByTrait` in `../battle/buffLifecycle.js`) matches against this set, not
+   * against `type`/`ckSelfIndv`/`ckOpIndv` — those gate whether a buff *applies*, `vals`
+   * is what a *removal* effect targets. Optional and defaults to "no classification traits
+   * recorded" (never matched by a dispel) so the many existing call sites that build an
+   * `ActiveBuffInstance` without dispel in mind (buff-action evaluation, defense-block,
+   * Guts) don't all need to start supplying it.
+   */
+  vals?: ReadonlySet<number>;
 }
 
 /**

@@ -54,3 +54,11 @@ export const OVER_KILL_STAR_RATE = 1.0;
 
 /** Flat star-drop bonus on an Overkill hit (NiceConstant.OVER_KILL_STAR_ADD = 300). */
 export const OVER_KILL_STAR_ADD = 0.3;
+
+/**
+ * Crit-chance-from-stars-on-hand constant (research/04-np-gauge-and-refund.md §6.1,
+ * primary-source-confirmed via a live `NiceConstant.json` fetch): each critical star
+ * allocated to a specific hand card slot (`src/battle/critStarLottery.ts`) adds this much
+ * flat crit-chance to that card (NiceConstant.CRITICAL_RATE_PER_STAR = 100).
+ */
+export const CRITICAL_RATE_PER_STAR = 0.1;

@@ -1,13 +1,14 @@
 import type { Buff } from "@atlasacademy/api-connector";
 import type { NpLevel } from "../account/types.js";
 import { FULL_TD_POINT } from "../engine/constants.js";
-import { advanceTurnBuffs, consumeBuffUse } from "./buffLifecycle.js";
+import { advanceTurnBuffs, consumeBuffUse, grantBuff, removeBuffsByTrait } from "./buffLifecycle.js";
 import type { Action, CommandSealEffect } from "./action.js";
 import { enemyToBattleUnit, servantToBattleUnit, type BattleState, type EnemyInstance, type ServantInstance } from "./battleState.js";
 import { buildCombinedCardDeck } from "./cardDeck.js";
 import { drawCardBagHand } from "./cardBag.js";
 import type { BattleConstants } from "./gameConstants.js";
 import { resolveHit, type HitResolutionContext } from "./hitResolution.js";
+import type { BuffGrantEffect, GainHpEffect, GainNpEffect, RemoveBuffEffect, SkillEffect, SkillTargetType } from "./skillEffect.js";
 
 /**
  * NP gauge's passive accumulation ceiling by NP level (research/04 §5.2a, confirmed by the
@@ -82,6 +83,7 @@ function resolveEndTurn(state: BattleState, randomFn: () => number): BattleState
     cardBag: nextBag,
     currentTurn: state.currentTurn + 1,
     consecutiveNpChainCount: 0,
+    mysticCodeSkillCooldowns: decrementCooldowns(state.mysticCodeSkillCooldowns),
   };
 }
 
@@ -165,12 +167,11 @@ function applyHit(
  * `playCard`s in one turn must recompute each `handCardIndex` against the previous call's
  * returned state, not against the turn's original 5-card hand.
  *
- * Throws if `handCardIndex` doesn't point at a real card in `state.handCards`, or if the
- * supplied `context.card.type`/`context.isNP` don't match what's actually being played (the
- * same "don't silently accept wrong-looking input" convention `buildCombinedCardDeck`/
- * `drawCardBagHand` already use) — `state` has no per-slot servant ownership to check the
- * *acting servant* against yet (research/07 §4's still-open data-model note), so
- * `action.servantId` is trusted as the caller's own responsibility, same as `context`.
+ * Throws if `handCardIndex` doesn't point at a real card in `state.handCards`, if that
+ * slot's `HandCard.servantId` (research/07 §4) doesn't match `action.servantId`, or if the
+ * supplied `context.card.type`/`context.isNP` don't match what's actually being played —
+ * the same "don't silently accept wrong-looking input" convention `buildCombinedCardDeck`/
+ * `drawCardBagHand` already use.
  *
  * Removes the played card from the hand (played cards aren't returned to the bag — the bag
  * only tracks not-yet-*dealt* cards, research/03 §6.5) and resets `consecutiveNpChainCount`
@@ -183,12 +184,15 @@ function resolvePlayCard(
 ): BattleState {
   const servant = findServant(state, action.servantId);
   const enemy = findEnemy(state, action.targetNpcId);
-  const card = state.handCards[action.handCardIndex];
-  if (card === undefined) {
+  const handCard = state.handCards[action.handCardIndex];
+  if (handCard === undefined) {
     throw new RangeError(`handCardIndex ${action.handCardIndex} is out of range for a ${state.handCards.length}-card hand`);
   }
-  if (action.context.card.type !== card) {
-    throw new RangeError(`context.card.type (${String(action.context.card.type)}) does not match the actual hand card (${String(card)}) at index ${action.handCardIndex}`);
+  if (handCard.servantId !== action.servantId) {
+    throw new RangeError(`Hand card at index ${action.handCardIndex} belongs to servantId ${handCard.servantId}, not the acting servantId ${action.servantId}`);
+  }
+  if (action.context.card.type !== handCard.card) {
+    throw new RangeError(`context.card.type (${String(action.context.card.type)}) does not match the actual hand card (${String(handCard.card)}) at index ${action.handCardIndex}`);
   }
   if (action.context.isNP) {
     throw new RangeError("playCard's context.isNP must be false — NP cards are cast via castNp, not playCard");
@@ -287,16 +291,259 @@ function resolveUseCommandSeal(state: BattleState, action: Extract<Action, { typ
 }
 
 /**
+ * Resolves which servant(s) an ally-only `self`/`ptOne`/`ptAll` skill-effect targeting
+ * shape (`SkillTargetType`, `./skillEffect.js`) actually reaches, as a list of
+ * `servantId`s — the shared targeting logic every ally-side `SkillEffect` variant uses.
+ * `self` always resolves against `actingServantId` regardless of front-line status (a
+ * servant can buff/heal/charge itself before being swapped in) — `actingServantId` is
+ * `undefined` for a Mystic Code skill, which has no servant of its own to mean "self", so a
+ * `self`-targeted effect there throws rather than silently doing nothing. `ptAll` reaches
+ * every front-line servant only, never the bench, matching `ServantInstance`'s existing
+ * "only front-line servants can act/be targeted" convention; `ptOne` requires
+ * `targetServantId` and — same convention — throws if it doesn't resolve to a front-line
+ * servant.
+ */
+function resolveAllyTargets(
+  servants: readonly ServantInstance[],
+  targetType: SkillTargetType,
+  actingServantId: number | undefined,
+  targetServantId: number | undefined,
+): readonly number[] {
+  switch (targetType) {
+    case "self":
+      if (actingServantId === undefined) {
+        throw new RangeError('A "self" skill effect requires an acting servant — a Mystic Code skill has none');
+      }
+      return [actingServantId];
+    case "ptAll":
+      return servants.filter((s) => s.isFrontLine).map((s) => s.servantId);
+    case "ptOne": {
+      if (targetServantId === undefined) {
+        throw new RangeError("A ptOne skill effect requires action.targetServantId");
+      }
+      const target = servants.find((s) => s.servantId === targetServantId);
+      if (!target) {
+        throw new RangeError(`No servant with servantId ${targetServantId} in this BattleState`);
+      }
+      if (!target.isFrontLine) {
+        throw new RangeError(`Servant ${targetServantId} is benched (not front-line) and cannot be targeted by a ptOne skill effect`);
+      }
+      return [target.servantId];
+    }
+  }
+}
+
+/** Applies one `BuffGrantEffect` (`./skillEffect.js`) to every servant `resolveAllyTargets` resolves it to, via `grantBuff` (buffGroup unstacking already handled there). */
+function applyBuffGrantEffect(
+  servants: readonly ServantInstance[],
+  actingServantId: number | undefined,
+  effect: BuffGrantEffect,
+  targetServantId: number | undefined,
+): readonly ServantInstance[] {
+  const targetIds = new Set(resolveAllyTargets(servants, effect.targetType, actingServantId, targetServantId));
+  return servants.map((s) =>
+    targetIds.has(s.servantId) ? { ...s, activeBuffs: grantBuff(s.activeBuffs, effect.buff, effect.rawTurn, effect.rawCount) } : s,
+  );
+}
+
+/** Applies one `GainNpEffect` (`./skillEffect.js`) to every servant `resolveAllyTargets` resolves it to, capping each at that servant's own `NP_GAUGE_CAP_BY_LEVEL` ceiling. */
+function applyGainNpEffect(
+  servants: readonly ServantInstance[],
+  actingServantId: number | undefined,
+  effect: GainNpEffect,
+  targetServantId: number | undefined,
+): readonly ServantInstance[] {
+  const targetIds = new Set(resolveAllyTargets(servants, effect.targetType, actingServantId, targetServantId));
+  return servants.map((s) =>
+    targetIds.has(s.servantId) ? { ...s, currentNpGauge: Math.min(s.currentNpGauge + effect.rawAmount, NP_GAUGE_CAP_BY_LEVEL[s.npLevel]) } : s,
+  );
+}
+
+/** Applies one `GainHpEffect` (`./skillEffect.js`) to every servant `resolveAllyTargets` resolves it to, capping each at its own `maxHp` (no overheal). */
+function applyGainHpEffect(
+  servants: readonly ServantInstance[],
+  actingServantId: number | undefined,
+  effect: GainHpEffect,
+  targetServantId: number | undefined,
+): readonly ServantInstance[] {
+  const targetIds = new Set(resolveAllyTargets(servants, effect.targetType, actingServantId, targetServantId));
+  return servants.map((s) => (targetIds.has(s.servantId) ? { ...s, currentHp: Math.min(s.currentHp + effect.rawAmount, s.maxHp) } : s));
+}
+
+/**
+ * Applies one `RemoveBuffEffect` (`./skillEffect.js`, research/05 §5's `subState`) to every
+ * unit it targets, via `removeBuffsByTrait` (`./buffLifecycle.js`). `self`/`ptAll`/`ptOne`
+ * share `resolveAllyTargets`, same as every other ally-side effect; `enemyOne` resolves
+ * `targetNpcId` against `state.enemies` (`findEnemy`, throwing on an unknown id), `enemyAll`
+ * reaches every enemy unconditionally — enemies have no bench concept in this project's
+ * model, so there's no front-line-equivalent restriction to apply there.
+ *
+ * Returns the whole next `BattleState` (not just `servants`, unlike the ally-only `apply*`
+ * functions above) since an enemy-targeted removal only touches `state.enemies`.
+ */
+function applyRemoveBuffEffect(
+  state: BattleState,
+  actingServantId: number | undefined,
+  effect: RemoveBuffEffect,
+  targetServantId: number | undefined,
+  targetNpcId: number | undefined,
+): BattleState {
+  const dispelled = (buffs: ServantInstance["activeBuffs"]) => removeBuffsByTrait(buffs, effect.targetTrait);
+
+  switch (effect.targetType) {
+    case "enemyOne": {
+      if (targetNpcId === undefined) {
+        throw new RangeError("An enemyOne skill effect requires action.targetNpcId");
+      }
+      const target = findEnemy(state, targetNpcId);
+      return { ...state, enemies: state.enemies.map((e) => (e.npcId === target.npcId ? { ...e, activeBuffs: dispelled(e.activeBuffs) } : e)) };
+    }
+    case "enemyAll":
+      return { ...state, enemies: state.enemies.map((e) => ({ ...e, activeBuffs: dispelled(e.activeBuffs) })) };
+    default: {
+      const targetIds = new Set(resolveAllyTargets(state.servants, effect.targetType, actingServantId, targetServantId));
+      return { ...state, servants: state.servants.map((s) => (targetIds.has(s.servantId) ? { ...s, activeBuffs: dispelled(s.activeBuffs) } : s)) };
+    }
+  }
+}
+
+/** Dispatches one `SkillEffect` (`./skillEffect.js`) to the matching `apply*Effect` function, folding the result back into `state`. */
+function applySkillEffect(
+  state: BattleState,
+  actingServantId: number | undefined,
+  effect: SkillEffect,
+  targetServantId: number | undefined,
+  targetNpcId: number | undefined,
+): BattleState {
+  switch (effect.kind) {
+    case "grantBuff":
+      return { ...state, servants: applyBuffGrantEffect(state.servants, actingServantId, effect, targetServantId) };
+    case "gainNp":
+      return { ...state, servants: applyGainNpEffect(state.servants, actingServantId, effect, targetServantId) };
+    case "gainHp":
+      return { ...state, servants: applyGainHpEffect(state.servants, actingServantId, effect, targetServantId) };
+    case "removeBuff":
+      return applyRemoveBuffEffect(state, actingServantId, effect, targetServantId, targetNpcId);
+  }
+}
+
+/**
+ * `useSkill` — resolves a servant skill's `effects` (research/09 §7's still-limited scope;
+ * see `SkillEffect`'s doc comment) and sets that skill slot's cooldown. Unlike
+ * `playCard`/`castNp`, the acting servant need not be front-line — skills (e.g. pre-buffing
+ * before an Order Change swap-in) are usable from the bench, per research/07 §4 confirming
+ * only buff/cooldown *ticking* freezes while benched, not skill availability itself — so
+ * `findServantAny`, not `findServant`, looks up `action.servantId`.
+ *
+ * Throws if the targeted skill slot is still on cooldown, rather than silently allowing a
+ * skill to be used twice before it's ready.
+ */
+function resolveUseSkill(state: BattleState, action: Extract<Action, { type: "useSkill" }>): BattleState {
+  const actingServant = findServantAny(state, action.servantId);
+  const cooldownIndex = action.skillSlot - 1;
+  // `skillSlot` is a `1 | 2 | 3` literal, so `cooldownIndex` is always in-bounds for the 3-tuple — `noUncheckedIndexedAccess` can't see that through a variable index.
+  const remainingCooldown = actingServant.skillCooldowns[cooldownIndex] as number;
+  if (remainingCooldown > 0) {
+    throw new RangeError(`Servant ${action.servantId}'s skill slot ${action.skillSlot} is still on cooldown (${remainingCooldown} turns remaining)`);
+  }
+
+  let nextState = state;
+  for (const effect of action.effects) {
+    nextState = applySkillEffect(nextState, actingServant.servantId, effect, action.targetServantId, action.targetNpcId);
+  }
+  const servants = nextState.servants.map((s): ServantInstance => {
+    if (s.servantId !== actingServant.servantId) {
+      return s;
+    }
+    const skillCooldowns = [...s.skillCooldowns] as [number, number, number];
+    skillCooldowns[cooldownIndex] = action.cooldownTurns;
+    return { ...s, skillCooldowns };
+  });
+
+  return { ...nextState, servants };
+}
+
+/**
+ * `useMysticCodeSkill` — the account-wide equivalent of `resolveUseSkill`, spending one of
+ * `BattleState.mysticCodeSkillCooldowns`'s 3 slots instead of a servant's own. The Mystic
+ * Code itself has no `servantId` to act as a `"self"`-targeted effect's target, so that
+ * targeting throws here (via `applySkillEffect`'s shared checks) rather than silently doing
+ * nothing.
+ */
+function resolveUseMysticCodeSkill(state: BattleState, action: Extract<Action, { type: "useMysticCodeSkill" }>): BattleState {
+  const cooldownIndex = action.slot - 1;
+  // `slot` is a `1 | 2 | 3` literal, so `cooldownIndex` is always in-bounds for the 3-tuple — `noUncheckedIndexedAccess` can't see that through a variable index.
+  const remainingCooldown = state.mysticCodeSkillCooldowns[cooldownIndex] as number;
+  if (remainingCooldown > 0) {
+    throw new RangeError(`Mystic Code skill slot ${action.slot} is still on cooldown (${remainingCooldown} turns remaining)`);
+  }
+
+  let nextState = state;
+  for (const effect of action.effects) {
+    nextState = applySkillEffect(nextState, undefined, effect, action.targetServantId, action.targetNpcId);
+  }
+
+  const mysticCodeSkillCooldowns = [...state.mysticCodeSkillCooldowns] as [number, number, number];
+  mysticCodeSkillCooldowns[cooldownIndex] = action.cooldownTurns;
+
+  return { ...nextState, mysticCodeSkillCooldowns };
+}
+
+/**
+ * `orderChange` — swaps a front-line servant out for a benched one, per research/07 §3-4
+ * (`funcType: replaceMember`, confirmed by the project owner's direct gameplay knowledge).
+ * `outgoingServantId` must currently be front-line and `incomingServantId` currently
+ * benched — throws otherwise, rather than silently no-op'ing an already-correct swap or
+ * accepting a swap that isn't actually to/from the field.
+ *
+ * Flips `isFrontLine` on both servants and re-attributes every `state.handCards` slot
+ * currently owned by `outgoingServantId` to `incomingServantId` — the card *type* in that
+ * slot is untouched, only which servant it resolves against (research/07 §4: "the card
+ * type shown in that slot for the rest of the turn is identical to what it was before the
+ * swap, only *which servant* that slot's card belongs to changes"). The card bag itself is
+ * never touched — Order Change is decoupled from the bag-depletion mechanic (research/03
+ * §6.5/research/07 §4).
+ *
+ * HP, NP gauge, buffs, and skill cooldowns need no adjustment here beyond the `isFrontLine`
+ * flip itself: they already live on the `ServantInstance`, not the hand slot, and
+ * `advanceServantForEndTurn`'s existing "skip if `!isFrontLine`" freeze (research/07 §4)
+ * automatically starts/stops applying to each servant the instant this flip takes effect.
+ */
+function resolveOrderChange(state: BattleState, action: Extract<Action, { type: "orderChange" }>): BattleState {
+  const outgoing = findServantAny(state, action.outgoingServantId);
+  const incoming = findServantAny(state, action.incomingServantId);
+  if (!outgoing.isFrontLine) {
+    throw new RangeError(`Servant ${action.outgoingServantId} is not front-line and cannot be swapped out`);
+  }
+  if (incoming.isFrontLine) {
+    throw new RangeError(`Servant ${action.incomingServantId} is already front-line and cannot be swapped in`);
+  }
+
+  const servants = state.servants.map((s): ServantInstance => {
+    if (s.servantId === outgoing.servantId) {
+      return { ...s, isFrontLine: false };
+    }
+    if (s.servantId === incoming.servantId) {
+      return { ...s, isFrontLine: true };
+    }
+    return s;
+  });
+  const handCards = state.handCards.map((hc) => (hc.servantId === outgoing.servantId ? { ...hc, servantId: incoming.servantId } : hc));
+
+  return { ...state, servants, handCards };
+}
+
+/**
  * Applies one `Action` to `state`, producing the next `BattleState` — research/09 §1's
  * pure function `(BattleState, Action) → BattleState'`.
  *
- * `endTurn`, `playCard`, `castNp`, and `useCommandSeal` are implemented. `useSkill`/
- * `useMysticCodeSkill` throw, since their buff-granting needs skill/NP function-array
- * parsing, which nothing in this codebase reads yet (`grantBuff` exists but has no real
- * caller — research/09 §7); `orderChange` throws, needing the hand-card ownership
- * remodeling research/07 §4 already flagged as a prerequisite (a hand slot's card *type*
- * survives a swap, but *which servant* it resolves against changes, and
- * `BattleState.handCards`/`Card[]` has no per-slot owner to reassign).
+ * `endTurn`, `playCard`, `castNp`, `useCommandSeal`, `useSkill`, `useMysticCodeSkill`, and
+ * `orderChange` are all implemented. `useSkill`/`useMysticCodeSkill` are narrower than a
+ * full skill/NP function-array interpreter (research/09 §7): they only apply the 4 modeled
+ * `SkillEffect` variants (`./skillEffect.js`) the caller supplies as already-resolved —
+ * `addState`/`addStateShort` (buff grant), `subState` (dispel), `gainNp`, `gainHp` — a skill
+ * whose functions do anything else (damage, card manipulation, NP-turn shortening, etc.)
+ * can't be represented yet.
  *
  * `playCard`/`castNp` themselves are also narrower than research/09 §2's full pipeline:
  * they resolve exactly one hit from an already-fully-resolved `HitResolutionContext` the
@@ -320,9 +567,11 @@ export function resolveAction(
     case "useCommandSeal":
       return resolveUseCommandSeal(state, action);
     case "useSkill":
+      return resolveUseSkill(state, action);
     case "useMysticCodeSkill":
+      return resolveUseMysticCodeSkill(state, action);
     case "orderChange":
-      throw new Error(`Action type "${action.type}" is not implemented yet`);
+      return resolveOrderChange(state, action);
     default: {
       const exhaustive: never = action;
       throw new Error(`Unhandled action: ${JSON.stringify(exhaustive)}`);

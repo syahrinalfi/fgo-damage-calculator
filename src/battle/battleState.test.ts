@@ -23,6 +23,7 @@ function servant(overrides: Partial<ServantInstance> = {}): ServantInstance {
     currentNpGauge: 0,
     activeBuffs: [],
     skillCooldowns: [0, 0, 0],
+    criticalWeight: 99,
     ...overrides,
   };
 }

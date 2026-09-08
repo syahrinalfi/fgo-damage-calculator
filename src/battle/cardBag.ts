@@ -1,5 +1,3 @@
-import type { Card } from "@atlasacademy/api-connector";
-
 /**
  * Fisher-Yates shuffle with an injectable RNG (defaults to `Math.random`) so callers —
  * and tests — can get a deterministic permutation. Returns a new array; never mutates
@@ -18,11 +16,11 @@ export function shuffleCards<T>(cards: readonly T[], randomFn: () => number = Ma
   return result;
 }
 
-export interface CardBagDrawResult {
+export interface CardBagDrawResult<T> {
   /** This turn's dealt hand — always `handSize` cards, drawn without replacement. */
-  hand: readonly Card[];
+  hand: readonly T[];
   /** The bag's remaining not-yet-dealt cards after this draw. */
-  nextBag: readonly Card[];
+  nextBag: readonly T[];
 }
 
 /**
@@ -30,6 +28,12 @@ export interface CardBagDrawResult {
  * fielded front-line servants' 15-card combined deck (`fullDeck`), shuffled once and
  * dealt without replacement across a fixed 3-turn cycle (5 of 15, then 5 of the
  * remaining 10, then the last 5), reshuffling fresh once exhausted.
+ *
+ * Generic over the dealt token type `T` (in practice `HandCard`, `./battleState.js` —
+ * a card tagged with its owning servant, research/07 §4) purely so this bag/shuffle
+ * mechanic stays decoupled from that ownership tagging: this function's own job (which
+ * card *types* get dealt, and in what without-replacement pattern) doesn't care what `T`
+ * carries.
  *
  * An empty `cardBag` (either the very first draw of a battle, or the bag having just
  * been fully depleted by the prior turn's draw) means "start a new cycle": `fullDeck` is
@@ -47,12 +51,12 @@ export interface CardBagDrawResult {
  * mistake `resolveCardTerm` (`./cardTerm.js`) already deliberately throws on rather than
  * returning a technically-valid-looking but wrong result.
  */
-export function drawCardBagHand(
-  cardBag: readonly Card[],
-  fullDeck: readonly Card[],
+export function drawCardBagHand<T>(
+  cardBag: readonly T[],
+  fullDeck: readonly T[],
   handSize = 5,
   randomFn: () => number = Math.random,
-): CardBagDrawResult {
+): CardBagDrawResult<T> {
   const bag = cardBag.length > 0 ? cardBag : shuffleCards(fullDeck, randomFn);
   if (bag.length < handSize) {
     throw new RangeError(`Card bag has ${bag.length} card(s), fewer than the requested hand size ${handSize}`);

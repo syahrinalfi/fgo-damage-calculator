@@ -1,7 +1,7 @@
 import type { Buff } from "@atlasacademy/api-connector";
 import { describe, expect, it } from "vitest";
 import type { ActiveBuffInstance, BuffTraitContext } from "../buffs/types.js";
-import { advanceTurnBuffs, consumeBuffUse, grantBuff, type TrackedBuff } from "./buffLifecycle.js";
+import { advanceTurnBuffs, consumeBuffUse, grantBuff, removeBuffsByTrait, type TrackedBuff } from "./buffLifecycle.js";
 
 function makeBuff(overrides: Partial<ActiveBuffInstance> = {}): ActiveBuffInstance {
   return {
@@ -111,5 +111,33 @@ describe("consumeBuffUse", () => {
   it("does nothing when no instance of the given type is present", () => {
     const tracked: TrackedBuff[] = [{ ...makeBuff(), turnsRemaining: null, usesRemaining: 3 }];
     expect(consumeBuffUse(tracked, "avoidance" as Buff.BuffType, NO_TRAITS)).toEqual(tracked);
+  });
+});
+
+describe("removeBuffsByTrait", () => {
+  const BUFF_POSITIVE_EFFECT = 3004;
+
+  it("removes every instance whose vals contains the target trait, regardless of Turn/Count", () => {
+    const tracked: TrackedBuff[] = [
+      { ...makeBuff({ vals: new Set([BUFF_POSITIVE_EFFECT]) }), turnsRemaining: null, usesRemaining: null },
+      { ...makeBuff({ type: "guts" as Buff.BuffType, vals: new Set([BUFF_POSITIVE_EFFECT, 2000]) }), turnsRemaining: 5, usesRemaining: 1 },
+    ];
+    expect(removeBuffsByTrait(tracked, BUFF_POSITIVE_EFFECT)).toEqual([]);
+  });
+
+  it("leaves an instance untouched when its vals doesn't contain the target trait", () => {
+    const tracked: TrackedBuff[] = [{ ...makeBuff({ vals: new Set([9999]) }), turnsRemaining: 3, usesRemaining: null }];
+    expect(removeBuffsByTrait(tracked, BUFF_POSITIVE_EFFECT)).toEqual(tracked);
+  });
+
+  it("never matches an instance with no vals recorded at all", () => {
+    const tracked: TrackedBuff[] = [{ ...makeBuff(), turnsRemaining: 3, usesRemaining: null }];
+    expect(removeBuffsByTrait(tracked, BUFF_POSITIVE_EFFECT)).toEqual(tracked);
+  });
+
+  it("removes only the matching instances, leaving the rest", () => {
+    const matching: TrackedBuff = { ...makeBuff({ vals: new Set([BUFF_POSITIVE_EFFECT]) }), turnsRemaining: 2, usesRemaining: null };
+    const nonMatching: TrackedBuff = { ...makeBuff({ type: "downAtk" as Buff.BuffType, vals: new Set([5000]) }), turnsRemaining: 2, usesRemaining: null };
+    expect(removeBuffsByTrait([matching, nonMatching], BUFF_POSITIVE_EFFECT)).toEqual([nonMatching]);
   });
 });

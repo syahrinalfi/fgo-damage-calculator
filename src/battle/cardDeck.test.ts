@@ -22,13 +22,14 @@ function servant(servantId: number, isFrontLine: boolean, cardTypes: readonly Ca
     currentNpGauge: 0,
     activeBuffs: [],
     skillCooldowns: [0, 0, 0],
+    criticalWeight: 99,
   };
 }
 
 const FIVE_CARD_DECK: readonly Card[] = [BUSTER, BUSTER, ARTS, ARTS, QUICK];
 
 describe("buildCombinedCardDeck", () => {
-  it("concatenates exactly 3 front-line servants' 5-card decks into one 15-card deck", () => {
+  it("concatenates exactly 3 front-line servants' 5-card decks into one 15-card deck, each card tagged with its owning servant", () => {
     const servants = [
       servant(1, true, FIVE_CARD_DECK),
       servant(2, true, FIVE_CARD_DECK),
@@ -36,7 +37,12 @@ describe("buildCombinedCardDeck", () => {
     ];
     const deck = buildCombinedCardDeck(servants);
     expect(deck).toHaveLength(15);
-    expect(deck).toEqual([...FIVE_CARD_DECK, ...FIVE_CARD_DECK, ...FIVE_CARD_DECK]);
+    expect(deck.map((hc) => hc.card)).toEqual([...FIVE_CARD_DECK, ...FIVE_CARD_DECK, ...FIVE_CARD_DECK]);
+    expect(deck.map((hc) => hc.servantId)).toEqual([
+      ...Array<number>(5).fill(1),
+      ...Array<number>(5).fill(2),
+      ...Array<number>(5).fill(3),
+    ]);
   });
 
   it("ignores sub-member (benched) servants", () => {
