@@ -612,6 +612,8 @@ function applySkillEffect(
       return { ...state, servants: applyRevivalEffect(state.servants, actingServantId, effect, targetServantId) };
     case "removeBuff":
       return applyRemoveBuffEffect(state, actingServantId, effect, targetServantId, targetNpcId);
+    case "gainStar":
+      return { ...state, starsCarried: state.starsCarried + effect.rawAmount };
   }
 }
 

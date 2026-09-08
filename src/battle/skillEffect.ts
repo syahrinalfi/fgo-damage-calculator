@@ -154,5 +154,29 @@ export interface RevivalEffect {
   readonly targetType: SkillTargetType;
 }
 
+/**
+ * One already-resolved flat critical-star grant a `useSkill`/`useMysticCodeSkill` `Action`
+ * applies — models the API's `gainStar` `FuncType` (research/09 §7 follow-up pass: a live
+ * `NiceServant.json` pull, ranking every `FuncType` used by a playable servant's `skills[]`
+ * by frequency, found 203 live `gainStar` instances — e.g. Altria Pendragon's "Intuition"
+ * skill, `svals: [{ Rate: 1000, Value: 5..15 }]` across its 10 skill levels — `Rate: 1000`
+ * is a constant "always applies" marker on every instance surveyed, not a variable
+ * probability; `Value` is the raw star count for that skill level).
+ *
+ * Unlike `GainNpEffect`/`GainHpEffect`, this effect carries no `targetType`/target at all:
+ * critical stars are a **Master-wide** resource (`BattleState.starsCarried`, a single
+ * number, not per-servant), so there's no ally to target — `rawAmount` is simply added to
+ * `starsCarried` directly, exactly like `CHAINBONUS_QUICK_STARS`'s existing chain-completion
+ * grant (`src/battle/turnLoop.ts`'s `applyChainCompletionBonus`). This also means a
+ * `gainStar` effect used mid-turn doesn't affect the *current* turn's already-dealt hand —
+ * it's consumed by `resolveEndTurn`'s `allocateCritStars` call for the *next* turn's hand,
+ * the same one-turn-delayed lifecycle every other `starsCarried` contributor already has
+ * (research/04 §6.2/§6.3).
+ */
+export interface GainStarEffect {
+  readonly kind: "gainStar";
+  readonly rawAmount: number;
+}
+
 /** One already-resolved skill/NP effect a `useSkill`/`useMysticCodeSkill` `Action` can carry (research/09 §7's still-limited scope). */
-export type SkillEffect = BuffGrantEffect | RemoveBuffEffect | GainNpEffect | GainHpEffect | GainHpPercentEffect | RevivalEffect;
+export type SkillEffect = BuffGrantEffect | RemoveBuffEffect | GainNpEffect | GainHpEffect | GainHpPercentEffect | RevivalEffect | GainStarEffect;

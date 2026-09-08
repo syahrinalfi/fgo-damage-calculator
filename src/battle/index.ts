@@ -23,7 +23,7 @@ export type { CardBagDrawResult } from "./cardBag.js";
 export { shuffleCards, drawCardBagHand } from "./cardBag.js";
 export { FRONT_LINE_SERVANT_COUNT, CARDS_PER_SERVANT_DECK, buildCombinedCardDeck } from "./cardDeck.js";
 export type { Action, CommandSealEffect, DerivedHitContext } from "./action.js";
-export type { SkillTargetType, BuffGrantEffect, BuffRemovalTargetType, RemoveBuffEffect, GainNpEffect, GainHpEffect, GainHpPercentEffect, RevivalEffect, SkillEffect } from "./skillEffect.js";
+export type { SkillTargetType, BuffGrantEffect, BuffRemovalTargetType, RemoveBuffEffect, GainNpEffect, GainHpEffect, GainHpPercentEffect, RevivalEffect, GainStarEffect, SkillEffect } from "./skillEffect.js";
 export { resolveAction, NP_GAUGE_CAP_BY_LEVEL } from "./turnLoop.js";
 export { allocateCritStars, critChanceForStars, rollIsCrit } from "./critStarLottery.js";
 export type { ChainType, ChainClassification } from "./chainDetection.js";

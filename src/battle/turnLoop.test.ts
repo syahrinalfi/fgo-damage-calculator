@@ -6,7 +6,7 @@ import type { BattleState, EnemyInstance, HandCard, ServantInstance } from "./ba
 import { BUFF_ACTION_KEYS } from "./buffActionKeys.js";
 import type { TrackedBuff } from "./buffLifecycle.js";
 import type { BattleConstants } from "./gameConstants.js";
-import type { BuffGrantEffect, GainHpEffect, GainHpPercentEffect, GainNpEffect, RemoveBuffEffect, RevivalEffect } from "./skillEffect.js";
+import type { BuffGrantEffect, GainHpEffect, GainHpPercentEffect, GainNpEffect, GainStarEffect, RemoveBuffEffect, RevivalEffect } from "./skillEffect.js";
 import { resolveAction } from "./turnLoop.js";
 
 const BUSTER = "2" as Card;
@@ -209,6 +209,14 @@ function revivalEffect(overrides: Partial<RevivalEffect> = {}): RevivalEffect {
   return {
     kind: "revival",
     targetType: "self",
+    ...overrides,
+  };
+}
+
+function gainStarEffect(overrides: Partial<GainStarEffect> = {}): GainStarEffect {
+  return {
+    kind: "gainStar",
+    rawAmount: 10,
     ...overrides,
   };
 }
@@ -918,6 +926,12 @@ describe("resolveAction — useSkill", () => {
     expect(result.servants.find((s) => s.servantId === 1)).toMatchObject({ currentHp: 10000, currentNpGauge: 10000 });
     expect(result.servants.find((s) => s.servantId === 2)?.currentHp).toBe(5000);
     expect(result.servants.find((s) => s.servantId === 3)).toMatchObject({ currentHp: 12000, currentNpGauge: 10000 });
+  });
+
+  it("gainStar adds rawAmount directly to BattleState.starsCarried, a Master-wide resource with no per-servant target", () => {
+    const action: Action = { type: "useSkill", servantId: 1, skillSlot: 3, effects: [gainStarEffect({ rawAmount: 12 })], cooldownTurns: 5 };
+    const result = resolveAction(state({ starsCarried: 3 }), action, CONSTANTS);
+    expect(result.starsCarried).toBe(15);
   });
 });
 
