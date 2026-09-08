@@ -103,11 +103,11 @@ function advanceEnemyForEndTurn(enemy: EnemyInstance): EnemyInstance {
  * rather than a confirmed rule, since no primary/community source addresses it directly.
  *
  * `currentWaveIndex` and wave/death transitions are deliberately untouched by `endTurn` —
- * this increment doesn't resolve enemy death transitions (shift/call), so there's nothing
- * correct to compute here. Star *generation* from landed hits (i.e. what would feed the
- * *next* `endTurn`'s `starsCarried`) also isn't wired yet (research/09 §7) — this increment
- * only wires the *consumption* side, allocating whatever `starsCarried` already holds
- * across the freshly drawn hand.
+ * this project doesn't resolve enemy death transitions (shift/call) yet, so there's nothing
+ * correct to compute here. Star *generation* from landed hits now feeds `starsCarried`
+ * directly from `applyHit` (research/09 §7, wired in a later pass than this function's own
+ * original comment suggested); this function only ever handles the *consumption* side,
+ * allocating whatever `starsCarried` already holds across the freshly drawn hand.
  *
  * The new hand's per-slot crit-star allocation (`handCardStars`, research/04 §6.2's
  * weighted lottery, `allocateCritStars`) is computed here, once per turn, exactly matching
@@ -180,8 +180,21 @@ function findEnemy(state: BattleState, npcId: number): EnemyInstance {
 /**
  * Resolves one hit (`resolveHit`, `./hitResolution.js`) and folds the result back into
  * `state`: the defender's HP, the specific defense-tier/Guts buff instance consumed (if
- * any, `consumeBuffUse`), and the attacker's NP gauge gain (capped at that servant's own
- * `NP_GAUGE_CAP_BY_LEVEL` ceiling).
+ * any, `consumeBuffUse`), the attacker's NP gauge gain (capped at that servant's own
+ * `NP_GAUGE_CAP_BY_LEVEL` ceiling), and — new this pass — the hit's own critical-star
+ * generation folded into `state.starsCarried` (research/09 §7's previously-open "star
+ * generation from landed hits isn't wired" gap; only the *consumption* side, `allocateCritStars`
+ * in `resolvePlayCard`, was wired before now).
+ *
+ * `result.starDropChance` (research/03 §5.1) is a raw, uncapped decimal fraction with no
+ * documented ">100%" multi-star behavior — `calculateStarDropChance`'s own doc comment
+ * already flags this ("no primary source states this is clamped... a caller treating the
+ * result as a Bernoulli probability should clamp it themselves") and file 03 §5.1 describes
+ * the mechanic as "a genuine per-hit probability... a Bernoulli-per-hit process, not a fixed
+ * average" — so this clamps to `[0, 1]` and rolls **once** per hit for 0-or-1 stars, the
+ * literal reading of "Bernoulli," rather than inventing an unsourced "floor the excess into
+ * guaranteed stars, roll the remainder" mechanic (the commonly-known in-game behavior for
+ * >100% chances) that no primary source in this project's research confirms.
  *
  * This is the shared core of `playCard`/`castNp` — `context` here is always a *complete*
  * `HitResolutionContext` (its caller, `resolvePlayCard`/`resolveCastNp`, is the one that
@@ -196,8 +209,11 @@ function applyHit(
   enemy: EnemyInstance,
   constants: BattleConstants,
   context: HitResolutionContext,
+  randomFn: () => number,
 ): BattleState {
   const result = resolveHit(servantToBattleUnit(servant), enemyToBattleUnit(enemy), enemy.currentHp, enemy.maxHp, constants, context);
+  const starChance = Math.min(Math.max(result.starDropChance, 0), 1);
+  const starsGained = randomFn() < starChance ? 1 : 0;
 
   const defenderContext = { holderTraits: enemy.traits, targetTraits: servant.traits };
   let enemyBuffs = enemy.activeBuffs;
@@ -218,6 +234,7 @@ function applyHit(
     ...state,
     servants: state.servants.map((s) => (s.servantId === servant.servantId ? updatedServant : s)),
     enemies: state.enemies.map((e) => (e.npcId === enemy.npcId ? updatedEnemy : e)),
+    starsCarried: state.starsCarried + starsGained,
   };
 }
 
@@ -292,7 +309,7 @@ function resolvePlayCard(
     chainLeadCardType,
   };
 
-  const hitState = applyHit(state, servant, enemy, constants, context);
+  const hitState = applyHit(state, servant, enemy, constants, context, randomFn);
   const handCards = hitState.handCards.filter((_, index) => index !== action.handCardIndex);
   const handCardStars = hitState.handCardStars.filter((_, index) => index !== action.handCardIndex);
   const nextState =
@@ -414,7 +431,7 @@ function resolveCastNp(
     extraCardChainType: "none",
     chainLeadCardType: action.context.card.type,
   };
-  let nextState = applyHit(state, servant, enemy, constants, context);
+  let nextState = applyHit(state, servant, enemy, constants, context, randomFn);
   const servants = nextState.servants.map((s) => (s.servantId === servant.servantId ? { ...s, currentNpGauge: 0 } : s));
   nextState = { ...nextState, servants, consecutiveNpChainCount: nextState.consecutiveNpChainCount + 1 };
 

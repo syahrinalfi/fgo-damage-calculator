@@ -447,6 +447,19 @@ describe("resolveAction — playCard", () => {
     expect(actingServant?.currentNpGauge).toBeGreaterThan(0);
   });
 
+  it("adds 1 star to starsCarried when the hit's star-drop roll succeeds (research/03 §5.1, clamped-Bernoulli reading)", () => {
+    // CARD_CONTEXT's baseStarRate (500 = 50%) plus card/buff terms puts the chance well
+    // above 0, so a randomFn just below 1 always beats it.
+    const result = resolveAction(state({ starsCarried: 2 }), action, CONSTANTS, () => 0);
+    expect(result.starsCarried).toBe(3);
+  });
+
+  it("does not add a star when the hit's star-drop roll fails", () => {
+    // randomFn always returns 1, which never beats a chance clamped to at most 1.
+    const result = resolveAction(state({ starsCarried: 2 }), action, CONSTANTS, () => 1);
+    expect(result.starsCarried).toBe(2);
+  });
+
   it("removes the played card from the hand and resets consecutiveNpChainCount", () => {
     const result = resolveAction(state({ consecutiveNpChainCount: 3 }), action, CONSTANTS);
     expect(result.handCards).toEqual(FIVE_CARD_HAND.slice(1));
@@ -598,12 +611,19 @@ describe("resolveAction — playCard", () => {
       chainCards: [{ type: QUICK, servantId: 2 }, { type: QUICK, servantId: 3 }, { type: QUICK, servantId: 1 }],
       chainPosition: 3,
     };
-    const result = resolveAction(state({ starsCarried: 5 }), quickAction, CONSTANTS);
+    // randomFn always returns 1 so the hit's own star-drop roll (now wired into applyHit)
+    // never fires — isolates CHAINBONUS_QUICK_STARS's flat +20 from that separate mechanic.
+    const result = resolveAction(state({ starsCarried: 5 }), quickAction, CONSTANTS, () => 1);
     expect(result.starsCarried).toBe(25);
   });
 
   it("does not touch starsCarried for a completed non-Quick chain", () => {
-    const result = resolveAction(state({ starsCarried: 5 }), { ...action, chainPosition: 3, chainCards: [{ type: ARTS, servantId: 2 }, { type: QUICK, servantId: 3 }, { type: BUSTER, servantId: 1 }] }, CONSTANTS);
+    const result = resolveAction(
+      state({ starsCarried: 5 }),
+      { ...action, chainPosition: 3, chainCards: [{ type: ARTS, servantId: 2 }, { type: QUICK, servantId: 3 }, { type: BUSTER, servantId: 1 }] },
+      CONSTANTS,
+      () => 1,
+    );
     expect(result.starsCarried).toBe(5);
   });
 
@@ -616,7 +636,8 @@ describe("resolveAction — playCard", () => {
       chainCards: [{ type: QUICK, servantId: 2 }, { type: QUICK, servantId: 3 }, { type: BUSTER, servantId: 1 }],
       chainPosition: 3,
     };
-    const result = resolveAction(state(), quickLedChain, CONSTANTS);
+    // randomFn always returns 1 so the hit's own star-drop roll never fires either.
+    const result = resolveAction(state(), quickLedChain, CONSTANTS, () => 1);
     expect(result.critChanceBonusCarried).toBeCloseTo(0.2);
     // Not a uniform Quick chain, so the separate stars-next-turn bonus must not also fire.
     expect(result.starsCarried).toBe(0);

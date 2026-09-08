@@ -186,21 +186,31 @@ export interface GainStarEffect {
  * -100%) — subtracted from the target's `currentNpGauge`, floored at `0` rather than
  * `gainNp`'s `NP_GAUGE_CAP_BY_LEVEL` ceiling.
  *
- * **Ally-only, unlike the live data's own distribution.** The live frequency pull found
- * `lossNp` is actually *majority enemy-targeted* (37 of 50 live instances use `enemy`/
- * `enemyAll` — an NP-drain debuff cast on foes) with only 13 self/`ptOne` instances (a
- * self-inflicted cost for a powerful skill, e.g. "Crimson Hero Legend EX"). This effect
- * only models the ally-side minority: `EnemyInstance` (`./battleState.js`) now *does* carry
- * NP-related state (`currentNpTurns`/`npTurnLimit`, research/08-enemy-mechanics.md §5), but
- * it's a structurally different, discrete integer-turn-countdown shape (see
- * `DelayNpTurnEffect` below), not the continuous `FULL_TD_POINT`-percentage `currentNpGauge`
- * this effect's `rawAmount` is denominated in — so an enemy-targeted `lossNp` still has no
- * compatible field to subtract from. Every live enemy-targeted `lossNp` pairing checked uses
- * the identical `Value: 2000` alongside a `delayNpturn: 1` on the same skill (research/09
- * §7) — a suggestive but unconfirmed 2:1 ratio against `DelayNpTurnEffect`'s own directly-
- * integer turn count, deliberately not modeled on that guess. Flagged here rather than
- * silently ignored: a caller building an `Action` for an enemy-targeted NP-drain skill can't
- * be served by this effect yet.
+ * **Ally-only, unlike the live data's own distribution — confirmed correct by live testing,
+ * 2026-09-08.** The live frequency pull found `lossNp` is actually *majority enemy-targeted*
+ * (37 of 50 live instances use `enemy`/`enemyAll`) with only 13 self/`ptOne` instances. The
+ * project owner tested both sides in-game and both resolve the same way `hastenNpturn` did
+ * (research/09 §7) — the *other* paired `FuncType` on the same skill turns out to be the
+ * real mechanism, and this one (or its counterpart) is redundant:
+ *
+ * - **Self/`ptOne`-targeted `lossNp` is the real effect; the `delayNpturn` it's always
+ *   paired with is a no-op.** Ryougi Shiki's "陰陽魚 A" skill 3 (`self`, `lossNp: 1000` +
+ *   `delayNpturn: 1`) measured exactly -10% NP gauge — fully explained by `lossNp`'s own
+ *   `1000/FULL_TD_POINT` reading alone, this effect's existing formula, no extra
+ *   contribution from `delayNpturn`. Elizabeth Bathory (Brave)'s "真紅の勇者伝説・劇場版
+ *   EX" skill 3 (`self`, `lossNp: 5000` + `delayNpturn: 2`) measured exactly -50%, same
+ *   story. Both a flat, fixed-point subtraction (confirmed explicitly by the project owner:
+ *   *not* a percentage of the servant's current gauge) — exactly this effect's existing
+ *   `Math.max(currentNpGauge - rawAmount, 0)` behavior. **No code change was needed**: this
+ *   effect already modeled the real mechanism correctly; see `DelayNpTurnEffect` below for
+ *   the now-confirmed no-op half.
+ * - **Enemy-targeted `lossNp` is the no-op; `DelayNpTurnEffect` is the real effect.** Tamamo
+ *   Cat's "呪術 E" skill (`enemy`, `delayNpturn: 1` + `lossNp: 2000`) and Waver/Zhuge
+ *   Liang's NP (`enemyAll`, same pairing) both measured the enemy NP bar dropping by exactly
+ *   1 pip — fully explained by `delayNpturn` alone (already modeled, `DelayNpTurnEffect`),
+ *   confirming the earlier "suspicious 2:1 ratio" guess was wrong to worry about: `lossNp`
+ *   contributes nothing extra against an enemy. Deliberately still not modeled — there's
+ *   nothing to model, not an open gap.
  */
 export interface LossNpEffect {
   readonly kind: "lossNp";
@@ -375,24 +385,24 @@ export interface ForceInstantDeathEffect {
  * rate needing a `/1000` conversion the way `GainNpEffect`'s `rawAmount` does): `rawTurns` is
  * subtracted straight from `currentNpTurns`, floored at `0`.
  *
- * **The self/ally-targeted minority of live `delayNpturn` usage is explicitly out of
- * scope** — every live example pairs self-targeted `delayNpturn` with a self-targeted
- * `lossNp` (research/09 §7's `hastenNpturn` resolution showed this project's own mirror-
- * symmetry assumptions between paired `FuncType`s can't be trusted without a direct test,
- * and this pairing hasn't been independently tested) — `targetType` is deliberately typed
- * `"enemyOne" | "enemyAll"` only, not the broader ally-capable `SkillTargetType`, so a
- * self-targeted use of the raw `delayNpturn` `FuncType` simply has no `SkillEffect` to map
- * to yet, rather than silently being modeled on an unverified guess.
+ * **The self/ally-targeted minority of live `delayNpturn` usage needs no `SkillEffect` at
+ * all — confirmed a no-op by live testing, 2026-09-08, resolved the same way `hastenNpturn`
+ * was.** Every live example pairs self-targeted `delayNpturn` with a self-targeted `lossNp`
+ * on the identical target; the project owner tested two independent skills (Ryougi Shiki's
+ * "陰陽魚 A"/"A+", Elizabeth Bathory (Brave)'s "真紅の勇者伝説"/"劇場版 EX", 3 variants
+ * total) and every measured NP-gauge change was fully explained by the paired `lossNp`'s own
+ * `LossNpEffect` reading alone — see `LossNpEffect`'s doc comment above for the measurements.
+ * `delayNpturn` against a servant contributes nothing measurable, exactly like `hastenNpturn`
+ * against a servant's own gauge — a caller can just drop it from a skill's raw `functions[]`
+ * the same way. `targetType` stays typed `"enemyOne" | "enemyAll"` only (not the broader
+ * ally-capable `SkillTargetType`) since there's genuinely nothing to model on that side, not
+ * an untested gap.
  *
  * The much more common companion `FuncType` in the same live skills, enemy-targeted
- * `lossNp` (37 of 50 live `lossNp` instances — research/09 §7), is **not** modeled by this
- * effect or any other yet: every live pairing checked uses the exact same values
- * (`delayNpturn: 1` + `lossNp: 2000`, with zero variation across ~30 servants surveyed) — a
- * suspiciously clean 2:1 ratio suggestive of `lossNp`'s per-mille `Value` also mapping onto
- * this same turn-count scale (`2000` → `-2` turns, mirroring `delayNpturn`'s `1000`-per-
- * turn-unit convention), but this reading is an unverified guess extrapolated from a
- * pattern, not a confirmed one — deliberately left unmodeled rather than guessed at, unlike
- * `delayNpturn`'s own directly-integer `Value`.
+ * `lossNp` (37 of 50 live `lossNp` instances — research/09 §7), is **also now confirmed a
+ * no-op** by the same testing pass (Tamamo Cat's "呪術 E", Waver/Zhuge Liang's NP) — see
+ * `LossNpEffect`'s doc comment for the measurements. `delayNpturn` (this effect) is the real
+ * mechanism on that side; `lossNp` contributes nothing extra.
  */
 export interface DelayNpTurnEffect {
   readonly kind: "delayNpTurn";
