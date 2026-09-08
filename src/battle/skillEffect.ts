@@ -190,11 +190,17 @@ export interface GainStarEffect {
  * `lossNp` is actually *majority enemy-targeted* (37 of 50 live instances use `enemy`/
  * `enemyAll` — an NP-drain debuff cast on foes) with only 13 self/`ptOne` instances (a
  * self-inflicted cost for a powerful skill, e.g. "Crimson Hero Legend EX"). This effect
- * only models the ally-side minority: `EnemyInstance` (`./battleState.js`) has no
- * `currentNpGauge` field at all yet — enemy NP-gauge tracking isn't part of this project's
- * state model — so an enemy-targeted `lossNp` has nowhere to write its result and is out of
- * scope until that's added. Flagged here rather than silently ignored: a caller building an
- * `Action` for an enemy-targeted NP-drain skill can't be served by this effect yet.
+ * only models the ally-side minority: `EnemyInstance` (`./battleState.js`) now *does* carry
+ * NP-related state (`currentNpTurns`/`npTurnLimit`, research/08-enemy-mechanics.md §5), but
+ * it's a structurally different, discrete integer-turn-countdown shape (see
+ * `DelayNpTurnEffect` below), not the continuous `FULL_TD_POINT`-percentage `currentNpGauge`
+ * this effect's `rawAmount` is denominated in — so an enemy-targeted `lossNp` still has no
+ * compatible field to subtract from. Every live enemy-targeted `lossNp` pairing checked uses
+ * the identical `Value: 2000` alongside a `delayNpturn: 1` on the same skill (research/09
+ * §7) — a suggestive but unconfirmed 2:1 ratio against `DelayNpTurnEffect`'s own directly-
+ * integer turn count, deliberately not modeled on that guess. Flagged here rather than
+ * silently ignored: a caller building an `Action` for an enemy-targeted NP-drain skill can't
+ * be served by this effect yet.
  */
 export interface LossNpEffect {
   readonly kind: "lossNp";
@@ -302,10 +308,14 @@ export interface LossHpPercentEffect {
  * selection) — `1000` = 100%, rolled once per targeted enemy against `randomFn()`.
  *
  * **Two mechanics this effect deliberately does NOT model, both flagged rather than guessed
- * at**: (1) **death resistance/immunity** — FGO is widely understood to let some enemies
- * (especially bosses) resist or be flatly immune to instant death, but no live data or
- * source was found this pass identifying the specific trait/buff-type/script field that
- * encodes this, so every roll here is against the full `deathRate` with no reduction; (2)
+ * at**: (1) **death resistance/immunity** — research/08-enemy-mechanics.md §2 already
+ * documents the actual mechanism (`QuestEnemy.deathRate`/`NiceServant.instantDeathChance`, a
+ * per-mille "susceptibility" multiplier, plus `upResistInstantdeath`/`upNonresistInstantdeath`
+ * buff-types stacking on top the same additive way as any other numeric buff) — this
+ * `deathRate` field is a *different* number from `InstantDeathEffect.deathRate` above (that
+ * one is the skill/NP's own base chance; the enemy-side one is a separate multiplier this
+ * effect doesn't fold in), so every roll here is still against the raw `deathRate` alone,
+ * with no target-side reduction applied — a real, sourced gap now, not an unsourced one; (2)
  * **Guts interaction** — `resolveHit`'s card/NP damage path already wires `resolveGuts`
  * (`../buffs/guts.js`) for ordinary lethal damage, but this effect bypasses that entirely
  * (a plain `currentHp = 0` on success, not routed through `resolveGuts`) since `resolveGuts`
@@ -351,6 +361,42 @@ export interface ForceInstantDeathEffect {
   readonly targetType: SkillTargetType;
 }
 
+/**
+ * One already-resolved enemy NP-charge delay a `castNp` `Action` applies — models the API's
+ * `delayNpturn` `FuncType` **against an enemy target only** (research/09 §7 / research/08
+ * §5). Unlike `ServantInstance.currentNpGauge` (a continuous, formula-driven percentage), an
+ * enemy's NP-charge state (`EnemyInstance.currentNpTurns`/`npTurnLimit`) is a discrete
+ * integer countdown that advances `+1` per turn unconditionally — against that mechanism,
+ * `delayNpturn`'s raw `Value` reads cleanly and directly as a turn count (every live example
+ * surveyed is a small integer, e.g. `1`, matching `npTurnLimit`'s own scale, not a per-mille
+ * rate needing a `/1000` conversion the way `GainNpEffect`'s `rawAmount` does): `rawTurns` is
+ * subtracted straight from `currentNpTurns`, floored at `0`.
+ *
+ * **The self/ally-targeted minority of live `delayNpturn` usage is explicitly out of
+ * scope** — every live example pairs self-targeted `delayNpturn` with a self-targeted
+ * `lossNp` (research/09 §7's `hastenNpturn` resolution showed this project's own mirror-
+ * symmetry assumptions between paired `FuncType`s can't be trusted without a direct test,
+ * and this pairing hasn't been independently tested) — `targetType` is deliberately typed
+ * `"enemyOne" | "enemyAll"` only, not the broader ally-capable `SkillTargetType`, so a
+ * self-targeted use of the raw `delayNpturn` `FuncType` simply has no `SkillEffect` to map
+ * to yet, rather than silently being modeled on an unverified guess.
+ *
+ * The much more common companion `FuncType` in the same live skills, enemy-targeted
+ * `lossNp` (37 of 50 live `lossNp` instances — research/09 §7), is **not** modeled by this
+ * effect or any other yet: every live pairing checked uses the exact same values
+ * (`delayNpturn: 1` + `lossNp: 2000`, with zero variation across ~30 servants surveyed) — a
+ * suspiciously clean 2:1 ratio suggestive of `lossNp`'s per-mille `Value` also mapping onto
+ * this same turn-count scale (`2000` → `-2` turns, mirroring `delayNpturn`'s `1000`-per-
+ * turn-unit convention), but this reading is an unverified guess extrapolated from a
+ * pattern, not a confirmed one — deliberately left unmodeled rather than guessed at, unlike
+ * `delayNpturn`'s own directly-integer `Value`.
+ */
+export interface DelayNpTurnEffect {
+  readonly kind: "delayNpTurn";
+  readonly rawTurns: number;
+  readonly targetType: "enemyOne" | "enemyAll";
+}
+
 /** One already-resolved skill/NP effect a `useSkill`/`useMysticCodeSkill` `Action` can carry (research/09 §7's still-limited scope). */
 export type SkillEffect =
   | BuffGrantEffect
@@ -366,4 +412,5 @@ export type SkillEffect =
   | LossStarEffect
   | LossHpPercentEffect
   | ForceInstantDeathEffect
-  | InstantDeathEffect;
+  | InstantDeathEffect
+  | DelayNpTurnEffect;

@@ -38,6 +38,8 @@ function enemy(overrides: Partial<EnemyInstance> = {}): EnemyInstance {
     currentHp: 50000,
     maxHp: 50000,
     activeBuffs: [],
+    currentNpTurns: 0,
+    npTurnLimit: 5,
     ...overrides,
   };
 }

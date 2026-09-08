@@ -8,6 +8,7 @@ import type { TrackedBuff } from "./buffLifecycle.js";
 import type { BattleConstants } from "./gameConstants.js";
 import type {
   BuffGrantEffect,
+  DelayNpTurnEffect,
   ForceInstantDeathEffect,
   GainHpEffect,
   GainHpPercentEffect,
@@ -146,6 +147,8 @@ function enemy(overrides: Partial<EnemyInstance> = {}): EnemyInstance {
     currentHp: 50000,
     maxHp: 50000,
     activeBuffs: [],
+    currentNpTurns: 0,
+    npTurnLimit: 5,
     ...overrides,
   };
 }
@@ -297,6 +300,15 @@ function forceInstantDeathEffect(overrides: Partial<ForceInstantDeathEffect> = {
   };
 }
 
+function delayNpTurnEffect(overrides: Partial<DelayNpTurnEffect> = {}): DelayNpTurnEffect {
+  return {
+    kind: "delayNpTurn",
+    rawTurns: 1,
+    targetType: "enemyOne",
+    ...overrides,
+  };
+}
+
 const END_TURN: Action = { type: "endTurn" };
 
 const CARD_CONTEXT: DerivedHitContext = {
@@ -361,6 +373,16 @@ describe("resolveAction — endTurn", () => {
   it("advances enemy Turn-based buffs too", () => {
     const result = resolveAction(state({ enemies: [enemy({ activeBuffs: [trackedBuff({ turnsRemaining: 1 })] })] }), END_TURN, CONSTANTS);
     expect(result.enemies[0]?.activeBuffs).toHaveLength(0);
+  });
+
+  it("advances every enemy's currentNpTurns by exactly 1, unconditionally", () => {
+    const result = resolveAction(state({ enemies: [enemy({ currentNpTurns: 2, npTurnLimit: 5 })] }), END_TURN, CONSTANTS);
+    expect(result.enemies[0]?.currentNpTurns).toBe(3);
+  });
+
+  it("caps an enemy's currentNpTurns at its own npTurnLimit rather than exceeding it", () => {
+    const result = resolveAction(state({ enemies: [enemy({ currentNpTurns: 5, npTurnLimit: 5 })] }), END_TURN, CONSTANTS);
+    expect(result.enemies[0]?.currentNpTurns).toBe(5);
   });
 
   it("draws a fresh 5-card hand from the 3 front-line servants' combined deck when the bag is empty", () => {
@@ -763,6 +785,23 @@ describe("resolveAction — castNp", () => {
     const withEffects: Action = { ...action, effects: [forceInstantDeathEffect()] };
     const result = resolveAction(state(), withEffects, CONSTANTS, () => 0.99);
     expect(result.servants.find((s) => s.servantId === 1)?.currentHp).toBe(0);
+  });
+
+  it("delayNpTurn subtracts rawTurns from the targeted enemy's currentNpTurns, floored at 0", () => {
+    const withEffects: Action = { ...action, effects: [delayNpTurnEffect({ rawTurns: 2, targetType: "enemyOne" })] };
+    const result = resolveAction(state({ enemies: [enemy({ npcId: 9001, currentNpTurns: 1, npTurnLimit: 5 })] }), withEffects, CONSTANTS);
+    expect(result.enemies.find((e) => e.npcId === 9001)?.currentNpTurns).toBe(0);
+  });
+
+  it("delayNpTurn with enemyAll targeting delays every enemy's currentNpTurns", () => {
+    const withEffects: Action = { ...action, effects: [delayNpTurnEffect({ rawTurns: 1, targetType: "enemyAll" })] };
+    const result = resolveAction(
+      state({ enemies: [enemy({ npcId: 9001, currentNpTurns: 3, npTurnLimit: 5 }), enemy({ npcId: 9002, currentNpTurns: 4, npTurnLimit: 5 })] }),
+      withEffects,
+      CONSTANTS,
+    );
+    expect(result.enemies.find((e) => e.npcId === 9001)?.currentNpTurns).toBe(2);
+    expect(result.enemies.find((e) => e.npcId === 9002)?.currentNpTurns).toBe(3);
   });
 });
 

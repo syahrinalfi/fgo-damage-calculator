@@ -18,6 +18,7 @@ import type { BattleConstants } from "./gameConstants.js";
 import { resolveHit, type HitResolutionContext } from "./hitResolution.js";
 import type {
   BuffGrantEffect,
+  DelayNpTurnEffect,
   ForceInstantDeathEffect,
   GainHpEffect,
   GainHpPercentEffect,
@@ -71,8 +72,20 @@ function advanceServantForEndTurn(servant: ServantInstance): ServantInstance {
   };
 }
 
+/**
+ * Advances one enemy's `Turn`-based state for `endTurn`, mirroring `advanceServantForEndTurn`
+ * above: buffs tick the same way, and `currentNpTurns` (research/08-enemy-mechanics.md §5)
+ * advances by exactly `+1`, capped at `npTurnLimit` — an unconditional, formula-free tick,
+ * unlike `ServantInstance.currentNpGauge`'s attacking/defending-formula-driven gain. Capping
+ * rather than wrapping/triggering an auto-cast at the limit is deliberate: the actual "enemy
+ * casts its NP" trigger is out of this project's current scope (research/08 §5).
+ */
 function advanceEnemyForEndTurn(enemy: EnemyInstance): EnemyInstance {
-  return { ...enemy, activeBuffs: advanceTurnBuffs(enemy.activeBuffs) };
+  return {
+    ...enemy,
+    activeBuffs: advanceTurnBuffs(enemy.activeBuffs),
+    currentNpTurns: Math.min(enemy.currentNpTurns + 1, enemy.npTurnLimit),
+  };
 }
 
 /**
@@ -703,6 +716,20 @@ function applyInstantDeathEffect(state: BattleState, effect: InstantDeathEffect,
   return { ...state, enemies: state.enemies.map(kills) };
 }
 
+/** Applies one `DelayNpTurnEffect` (`./skillEffect.js`) — subtracts `effect.rawTurns` from each targeted enemy's `currentNpTurns`, floored at `0`. Enemy-only, same `enemyOne`/`enemyAll` handling as `applyInstantDeathEffect` above. */
+function applyDelayNpTurnEffect(state: BattleState, effect: DelayNpTurnEffect, targetNpcId: number | undefined): BattleState {
+  const delayed = (enemy: EnemyInstance): EnemyInstance => ({ ...enemy, currentNpTurns: Math.max(enemy.currentNpTurns - effect.rawTurns, 0) });
+
+  if (effect.targetType === "enemyOne") {
+    if (targetNpcId === undefined) {
+      throw new RangeError("An enemyOne skill effect requires action.targetNpcId");
+    }
+    const target = findEnemy(state, targetNpcId);
+    return { ...state, enemies: state.enemies.map((e) => (e.npcId === target.npcId ? delayed(e) : e)) };
+  }
+  return { ...state, enemies: state.enemies.map(delayed) };
+}
+
 /** Dispatches one `SkillEffect` (`./skillEffect.js`) to the matching `apply*Effect` function, folding the result back into `state`. */
 function applySkillEffect(
   state: BattleState,
@@ -741,6 +768,8 @@ function applySkillEffect(
       return applyInstantDeathEffect(state, effect, targetNpcId, randomFn);
     case "forceInstantDeath":
       return { ...state, servants: applyForceInstantDeathEffect(state.servants, actingServantId, effect, targetServantId) };
+    case "delayNpTurn":
+      return applyDelayNpTurnEffect(state, effect, targetNpcId);
   }
 }
 

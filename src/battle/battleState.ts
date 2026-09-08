@@ -63,17 +63,42 @@ export interface HandCard {
 
 /**
  * One in-wave enemy's live battle state — a mutable copy of a `WaveEnemy` (research/08,
- * `src/quest/types.ts`) tracking only what changes during the fight: current HP and
- * buffs. Everything else (ATK, traits, skills, NP) stays on the static `WaveEnemy` record
- * this instance was built from; re-deriving it here would duplicate data `BattleState`
- * would then need to keep in sync across a shift/call/change swap (research/08 §3-4) —
- * out of scope for this increment, which does not model swap resolution yet.
+ * `src/quest/types.ts`) tracking only what changes during the fight: current HP, buffs,
+ * and NP-charge progress. Everything else (ATK, traits, skills, `npTurnLimit`'s own source
+ * value) stays on the static `WaveEnemy` record this instance was built from; re-deriving
+ * it here would duplicate data `BattleState` would then need to keep in sync across a
+ * shift/call/change swap (research/08 §3-4) — out of scope for this increment, which does
+ * not model swap resolution yet.
  */
 export interface EnemyInstance extends Omit<BattleUnit, "activeBuffs"> {
   readonly npcId: number;
   readonly currentHp: number;
   readonly maxHp: number;
   readonly activeBuffs: readonly TrackedBuff[];
+  /**
+   * Turns of NP-charge progress accumulated so far, out of `npTurnLimit` — an enemy's NP
+   * gauge is a fundamentally different mechanism from `ServantInstance.currentNpGauge`
+   * (research/08-enemy-mechanics.md §5, confirmed by the project owner's own gameplay
+   * knowledge, then live-verified against `QuestEnemy.chargeTurn`): a discrete integer
+   * countdown that advances by exactly `+1` every turn regardless of cards/crits/buffs (no
+   * formula), not a continuous formula-driven percentage. `advanceEnemyForEndTurn`
+   * (`./turnLoop.js`) increments this by 1 per turn, capped at `npTurnLimit` — reaching the
+   * cap is meant to trigger an automatic enemy NP cast, but that trigger itself is **not
+   * implemented** (research/08 §5's "phase 2, enemy-attack simulation" scope boundary);
+   * this field only tracks the countdown's state, capped rather than wrapping/resetting on
+   * overflow, so a caller can inspect "is this enemy NP-ready" without the cast itself
+   * happening automatically yet.
+   */
+  readonly currentNpTurns: number;
+  /**
+   * This enemy's own NP-charge countdown target (research/08 §5) — sourced from
+   * `WaveEnemy.chargeTurn` (live-confirmed: `5` on NP-capable enemies, `0` on enemies with
+   * no NP at all). Static for the fight, unlike `currentNpTurns` — mirrors the
+   * `currentHp`/`maxHp` pairing shape already used above, not `ServantInstance`'s
+   * level-derived `NP_GAUGE_CAP_BY_LEVEL` (an enemy's limit is a per-record value, not
+   * derived from anything comparable to NP level).
+   */
+  readonly npTurnLimit: number;
 }
 
 /**
