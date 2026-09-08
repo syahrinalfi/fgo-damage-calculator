@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { enumerateCeAssignments, enumerateOrderedSelections, enumerateServantSubsets, enumerateSkillUsageSubsets } from "./candidateGeneration.js";
+import {
+  enumerateCeAssignments,
+  enumerateOrderChangeTimings,
+  enumerateOrderedSelections,
+  enumerateServantSubsets,
+  enumerateSkillUsageSubsets,
+} from "./candidateGeneration.js";
 
 describe("enumerateServantSubsets", () => {
   it("enumerates every unordered combination of the requested size", () => {
@@ -99,5 +105,31 @@ describe("enumerateSkillUsageSubsets", () => {
 
   it("returns 2^n subsets for n options", () => {
     expect(enumerateSkillUsageSubsets(["a", "b", "c", "d"])).toHaveLength(16);
+  });
+});
+
+describe("enumerateOrderChangeTimings", () => {
+  it("returns only the no-swap option for an empty swap list", () => {
+    expect(enumerateOrderChangeTimings([])).toEqual([[]]);
+  });
+
+  it("returns the no-swap option plus both timings for every swap option", () => {
+    const result = enumerateOrderChangeTimings(["swapA", "swapB"]);
+    expect(result).toEqual([
+      [],
+      [{ swap: "swapA", afterSkills: false }],
+      [{ swap: "swapA", afterSkills: true }],
+      [{ swap: "swapB", afterSkills: false }],
+      [{ swap: "swapB", afterSkills: true }],
+    ]);
+  });
+
+  it("never combines more than one swap in a single choice", () => {
+    const result = enumerateOrderChangeTimings(["swapA", "swapB", "swapC"]);
+    expect(result.every((choice) => choice.length <= 1)).toBe(true);
+  });
+
+  it("returns 1 + 2n choices for n swap options", () => {
+    expect(enumerateOrderChangeTimings(["a", "b", "c"])).toHaveLength(7);
   });
 });

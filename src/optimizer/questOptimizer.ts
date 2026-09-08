@@ -9,6 +9,7 @@ import { buildInitialBattleState, type PartyMemberSpec } from "./battleStateBuil
 import { enumerateCeAssignments, enumerateServantSubsets } from "./candidateGeneration.js";
 import { buildCardOrderCandidates } from "./cardOrderCandidates.js";
 import { damageDealtAtSlot } from "./objectives.js";
+import { buildOrderChangeCandidates, type OrderChangeSwap } from "./orderChangeCandidates.js";
 import { buildSkillAndCardOrderCandidates, type SkillActivation } from "./skillUsageCandidates.js";
 import { searchBestActionSequence, type ActionSequenceResult, type SequenceScoreFn } from "./turnSearch.js";
 
@@ -47,6 +48,17 @@ export interface QuestOptimizerOptions {
    * existed.
    */
   readonly resolveSkillOptions?: (initialState: BattleState) => readonly SkillActivation[];
+  /**
+   * Resolves this party candidate's available (off-cooldown, live-sub-member) Order Change
+   * swaps (research/09 §4's final "Order-Change-timing" axis) as fully-resolved
+   * `OrderChangeSwap`s — same "already-resolved input" convention as `resolveHitContext`/
+   * `resolveSkillOptions`. Every swap is tried at both timings relative to the skill-usage
+   * plan (`enumerateOrderChangeTimings`, `./candidateGeneration.js`), always resolved before
+   * any card is played (see that function's own doc comment for why) — omit this option
+   * entirely (the default) to search without the Order-Change axis, unchanged from before
+   * this option existed.
+   */
+  readonly resolveOrderChangeOptions?: (initialState: BattleState) => readonly OrderChangeSwap[];
   /** Which of `initialState.enemies` the default `damageDealtAtSlot` objective targets and every combination's `playCard` `Action`s attack — defaults to `0` (the first/only enemy). */
   readonly targetEnemySlotIndex?: number;
   /** Overrides the default `damageDealtAtSlot(targetEnemySlotIndex)` objective. */
@@ -83,12 +95,14 @@ export interface QuestOptimizerCandidate {
  *
  * **Scope, deliberately not attempted here**: only exactly-3-front-line parties (no bench/
  * sub-member axis — `FRONT_LINE_SERVANT_COUNT`, this project's only fully-modeled party
- * shape); the skill-usage-plan axis is now searched too when `resolveSkillOptions` is
- * supplied (`./skillUsageCandidates.js`), but Order-Change-timing is still unattempted
- * (research/09 §4's last remaining open axis); and only a single turn's line per party (no
- * multi-turn horizon — the ST Burst Finder's own multi-turn specialization, §5, is a
- * distinct future increment on top of this same engine, not something this function's
- * single-turn scoring loop attempts).
+ * shape); and only a single turn's line per party (no multi-turn horizon — the ST Burst
+ * Finder's own multi-turn specialization, §5, is a distinct future increment on top of this
+ * same engine, not something this function's single-turn scoring loop attempts). All 5 of
+ * research/09 §4's search-space axes are now searchable: servant subset/CE assignment always,
+ * card-order always, skill-usage plan when `resolveSkillOptions` is supplied
+ * (`./skillUsageCandidates.js`), and Order-Change-timing when `resolveOrderChangeOptions` is
+ * supplied (`./orderChangeCandidates.js`) — both remain opt-in, so omitting either searches
+ * exactly what the search covered before that option existed.
  */
 export function optimizeQuest(options: QuestOptimizerOptions): readonly QuestOptimizerCandidate[] {
   const targetSlot = options.targetEnemySlotIndex ?? 0;
@@ -118,12 +132,17 @@ export function optimizeQuest(options: QuestOptimizerOptions): readonly QuestOpt
       const targetEnemy = initialState.enemies[targetSlot];
       if (targetEnemy === undefined) continue;
 
-      const contextTemplates = initialState.handCards.map(options.resolveHitContext);
-      const cardCandidates = buildCardOrderCandidates(initialState.handCards, contextTemplates, targetEnemy.npcId);
-      const candidates =
-        options.resolveSkillOptions === undefined
+      const buildForHand = (hand: BattleState["handCards"]): ReturnType<typeof buildCardOrderCandidates> => {
+        const contextTemplates = hand.map(options.resolveHitContext);
+        const cardCandidates = buildCardOrderCandidates(hand, contextTemplates, targetEnemy.npcId);
+        return options.resolveSkillOptions === undefined
           ? cardCandidates
           : buildSkillAndCardOrderCandidates(options.resolveSkillOptions(initialState), cardCandidates);
+      };
+      const candidates =
+        options.resolveOrderChangeOptions === undefined
+          ? buildForHand(initialState.handCards)
+          : buildOrderChangeCandidates(options.resolveOrderChangeOptions(initialState), initialState.handCards, buildForHand);
       const ranked = searchBestActionSequence(initialState, candidates, options.constants, randomFn, scoreFn);
       const best = ranked[0];
       if (best === undefined) continue;

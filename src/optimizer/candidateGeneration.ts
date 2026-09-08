@@ -10,13 +10,6 @@
  * this module's job (keeps these functions plain, type-agnostic, and independently
  * testable rather than coupled to `BattleState`/account-data shapes).
  *
- * **Not attempted here, still genuinely open** (§4's remaining search-space axis):
- * "Order Change timing" (when in a turn to swap, if at all — a much larger space than a
- * simple enumeration since it interacts with cooldown/backline-freeze state, research/07
- * §4). Needs its own dedicated pass once there's a concrete end-to-end candidate-builder to
- * validate it against, same as `enumerateSkillUsageSubsets` below needed before
- * `../optimizer/skillUsageCandidates.js` was built.
- *
  * **Combinatorial explosion is the caller's problem, not this module's** — these functions
  * enumerate *everything* satisfying the constraint (no pruning, no heuristic seeding); §4's
  * own coarse-pruning-then-fine-search two-tier strategy is exactly what's expected to sit on
@@ -135,5 +128,48 @@ export function enumerateSkillUsageSubsets<T>(options: readonly T[]): readonly (
     current.pop();
   }
   backtrack(0);
+  return results;
+}
+
+/**
+ * One caller-supplied Order Change option, timed relative to this turn's skill-usage plan
+ * (`enumerateSkillUsageSubsets` above) — `afterSkills: false` places the swap before the
+ * turn's skills resolve, `true` places it after them, but **always** before any card is
+ * played, same restriction `enumerateOrderChangeTimings` below documents.
+ */
+export interface OrderChangeChoice<T> {
+  readonly swap: T;
+  readonly afterSkills: boolean;
+}
+
+/**
+ * Research/09 §4's last remaining search-space axis, "Order Change timing" — every subset
+ * of `swapOptions` **of size 0 or 1** (never more than one swap per turn: this project's
+ * only modeled source of Order Change, a Mystic Code's 3rd skill slot, has a single 15→13-
+ * turn cooldown, research/07 §2, so a party can't perform two in the same turn), each timed
+ * `afterSkills: true` or `false` relative to the skill-usage-plan axis. Returns `[[]]`
+ * prepended (the "don't swap this turn" option, matching `enumerateSkillUsageSubsets`'s own
+ * "use none" convention) followed by 2 entries per swap option (one per timing).
+ *
+ * **Scoped to "before any card is played," not full within-turn timing** — deliberately
+ * narrower than the phrase "when in a turn to swap" might suggest. Unlike a skill-usage
+ * subset (which only ever *adds* buffs/resources a later `playCard`'s `context` doesn't
+ * itself encode), an Order Change reassigns which servant a hand-card slot resolves against
+ * (research/07 §4) — a `playCard` `Action` already built against the pre-swap owner would
+ * have a stale `servantId`/`context` if the swap it depends on were spliced in *after* that
+ * `Action` was constructed, mismatching the post-swap `state.handCards` at simulation time
+ * (`resolvePlayCard`'s own owner-mismatch check, `../battle/turnLoop.js`) and throwing. This
+ * project has no resolver that re-derives a specific card's `DerivedHitContext` against a
+ * *different* servant mid-sequence, so inserting between/after card plays isn't attempted —
+ * `../optimizer/orderChangeCandidates.js`'s `buildOrderChangeCandidates` instead rebuilds the
+ * hand's ownership (`reassignHandCardOwnership`) *before* generating any card-order candidate
+ * for a given swap choice, sidestepping the trap entirely rather than working around it here.
+ */
+export function enumerateOrderChangeTimings<T>(swapOptions: readonly T[]): readonly (readonly OrderChangeChoice<T>[])[] {
+  const results: OrderChangeChoice<T>[][] = [[]];
+  for (const swap of swapOptions) {
+    results.push([{ swap, afterSkills: false }]);
+    results.push([{ swap, afterSkills: true }]);
+  }
   return results;
 }

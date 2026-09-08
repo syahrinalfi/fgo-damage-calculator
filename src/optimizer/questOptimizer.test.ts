@@ -222,4 +222,25 @@ describe("optimizeQuest", () => {
     expect(withSkill[0]?.best.score).toBeGreaterThan(withoutSkill[0]?.best.score ?? Infinity);
     expect(withSkill[0]?.best.actions[0]?.type).toBe("useSkill");
   });
+
+  it("wires resolveOrderChangeOptions through without changing results when it resolves to no available swaps", () => {
+    // optimizeQuest only ever fields exactly-3-front-line parties (no bench axis, see this
+    // function's own scope note) — with no benched sub-member present in any built
+    // BattleState, a realistic resolveOrderChangeOptions has nothing to offer; this confirms
+    // the option is accepted and degenerates to the same search as omitting it entirely.
+    const options = {
+      shortlist: [candidate(1), candidate(2), candidate(3)],
+      cePool: [],
+      waves: [wave()],
+      costBudget: 1000,
+      constants: CONSTANTS,
+      resolveHitContext,
+      randomFn: () => 0,
+    } as const;
+    const withoutOption = optimizeQuest(options);
+    const withEmptyOrderChangeOptions = optimizeQuest({ ...options, resolveOrderChangeOptions: () => [] });
+    expect(withEmptyOrderChangeOptions.map((r) => ({ score: r.best.score, actions: r.best.actions }))).toEqual(
+      withoutOption.map((r) => ({ score: r.best.score, actions: r.best.actions })),
+    );
+  });
 });
