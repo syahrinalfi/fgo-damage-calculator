@@ -1,6 +1,7 @@
-import type { Buff, Card, CardDetail } from "@atlasacademy/api-connector";
+import { QuestEnemy as QuestEnemyModule, type Buff, type Card, type CardDetail } from "@atlasacademy/api-connector";
 import { describe, expect, it } from "vitest";
 import type { ActiveBuffInstance } from "../buffs/types.js";
+import type { Wave, WaveEnemy } from "../quest/types.js";
 import type { Action, DerivedHitContext } from "./action.js";
 import type { BattleState, EnemyInstance, HandCard, ServantInstance } from "./battleState.js";
 import { BUFF_ACTION_KEYS } from "./buffActionKeys.js";
@@ -156,6 +157,23 @@ function enemy(overrides: Partial<EnemyInstance> = {}): EnemyInstance {
     readyToNp: false,
     ...overrides,
   };
+}
+
+function waveEnemy(overrides: Partial<WaveEnemy> & Pick<WaveEnemy, "npcId" | "deck">): WaveEnemy {
+  return {
+    atk: 8000,
+    hp: 50000,
+    deathRate: 1000,
+    chargeTurn: 5,
+    traits: [],
+    svt: { className: "lancer", attribute: "earth" } as WaveEnemy["svt"],
+    enemyScript: {},
+    ...overrides,
+  } as unknown as WaveEnemy;
+}
+
+function wave(overrides: Partial<Wave> = {}): Wave {
+  return { waveNumber: 1, initialEnemies: [], enemyPool: [], ...overrides };
 }
 
 function state(overrides: Partial<BattleState> = {}): BattleState {
@@ -1332,5 +1350,53 @@ describe("resolveAction — orderChange", () => {
 
   it("throws for an unknown servantId on either side", () => {
     expect(() => resolveAction(state(), { type: "orderChange", outgoingServantId: 999, incomingServantId: 4 }, CONSTANTS)).toThrow(RangeError);
+  });
+});
+
+describe("resolveAction — break-bar (shift) transitions", () => {
+  const instantDeathAction: Action = {
+    type: "castNp",
+    servantId: 1,
+    targetNpcId: 9001,
+    context: NP_CONTEXT,
+    effects: [instantDeathEffect({ deathRate: 1000, targetType: "enemyOne" })],
+  };
+
+  it("swaps a dead enemy for its shift target, keeping the same array slot, when one resolves", () => {
+    const bar2 = waveEnemy({ npcId: 9002, deck: QuestEnemyModule.DeckType.SHIFT, hp: 30000, atk: 6000, chargeTurn: 3, deathRate: 500 });
+    const bar1 = waveEnemy({ npcId: 9001, deck: QuestEnemyModule.DeckType.ENEMY, enemyScript: { shift: [9002] } });
+    const result = resolveAction(
+      state({ waves: [wave({ enemyPool: [bar1, bar2] })], enemies: [enemy({ npcId: 9001, deathRate: 1000 })] }),
+      instantDeathAction,
+      CONSTANTS,
+      () => 0,
+    );
+    expect(result.enemies).toHaveLength(1);
+    expect(result.enemies[0]).toMatchObject({ npcId: 9002, currentHp: 30000, maxHp: 30000, atk: 6000, npTurnLimit: 3, deathRate: 500, readyToNp: false, currentNpTurns: 0 });
+  });
+
+  it("leaves a dead enemy with no shift target as genuinely dead (currentHp stays 0)", () => {
+    const bar1 = waveEnemy({ npcId: 9001, deck: QuestEnemyModule.DeckType.ENEMY });
+    const result = resolveAction(
+      state({ waves: [wave({ enemyPool: [bar1] })], enemies: [enemy({ npcId: 9001, deathRate: 1000 })] }),
+      instantDeathAction,
+      CONSTANTS,
+      () => 0,
+    );
+    expect(result.enemies[0]).toMatchObject({ npcId: 9001, currentHp: 0 });
+  });
+
+  it("does not shift an enemy that's still alive", () => {
+    const bar2 = waveEnemy({ npcId: 9002, deck: QuestEnemyModule.DeckType.SHIFT });
+    const bar1 = waveEnemy({ npcId: 9001, deck: QuestEnemyModule.DeckType.ENEMY, enemyScript: { shift: [9002] } });
+    // deathRate 0 on the caster's own state.enemies entry means the instant-death roll always fails.
+    const result = resolveAction(
+      state({ waves: [wave({ enemyPool: [bar1, bar2] })], enemies: [enemy({ npcId: 9001, deathRate: 0 })] }),
+      instantDeathAction,
+      CONSTANTS,
+      () => 0,
+    );
+    expect(result.enemies[0]).toMatchObject({ npcId: 9001 });
+    expect(result.enemies[0]?.currentHp).toBeGreaterThan(0);
   });
 });

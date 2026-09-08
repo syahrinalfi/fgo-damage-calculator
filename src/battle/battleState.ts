@@ -2,7 +2,7 @@ import type { Card } from "@atlasacademy/api-connector";
 import type { NpLevel } from "../account/types.js";
 import type { TrackedBuff } from "./buffLifecycle.js";
 import type { BattleUnit } from "./unit.js";
-import type { Wave } from "../quest/types.js";
+import type { Wave, WaveEnemy } from "../quest/types.js";
 
 /**
  * One fielded servant's live battle state (research/09 §1) — the static baseline stats
@@ -225,4 +225,46 @@ export function servantToBattleUnit(servant: ServantInstance): BattleUnit {
 /** Builds the `BattleUnit` shape `resolveHit`/`resolveDamageInput` etc. expect from an `EnemyInstance`. */
 export function enemyToBattleUnit(enemy: EnemyInstance): BattleUnit {
   return { atk: enemy.atk, className: enemy.className, attribute: enemy.attribute, traits: enemy.traits, activeBuffs: enemy.activeBuffs };
+}
+
+/**
+ * The `WaveEnemy`(`QuestEnemy`)-to-`EnemyInstance` constructor this project didn't have yet
+ * — every other `EnemyInstance`-shaped fixture up to now (tests, and every "no construction
+ * pipeline exists yet" caveat on `currentNpTurns`/`npTurnLimit`/`deathRate`'s own doc
+ * comments) was hand-built. Used by `applyShiftTransitions` (`./turnLoop.js`, research/08
+ * §4) to build the replacement `EnemyInstance` when a break-bar (`shift`) transition fires,
+ * and is the natural place a future initial-wave-setup step would also call from.
+ *
+ * Field mapping, each already-resolved per research/01 §6.2 ("actual stat values for this
+ * specific quest instance, already resolved — not raw growth curves the caller has to
+ * interpolate"): `atk`/`hp` direct (`adjustAtk`/`adjustHp` exist on the record too but no
+ * research pass pinned down whether/how they'd need combining with `atk`/`hp` — not used
+ * here, consistent with not guessing at an unsourced combination rule); `className`/
+ * `attribute` from the nested `svt: EntityBasic`, not the enemy record's own top level
+ * (`QuestEnemy` has no top-level `className`/`attribute` fields); `traits` flattened to the
+ * `ReadonlySet<number>` id-only shape every other trait field in this project already uses;
+ * `npTurnLimit` from `chargeTurn` (research/08 §5, live-confirmed); `deathRate` direct
+ * (research/08 §2's formula input); `currentNpTurns: 0` and `readyToNp: false` (research/08
+ * §5's confirmed "starts at 0 unless a specific quest/enemy gimmick says otherwise" — no
+ * gimmick-detection exists yet, so this is always the unconditional default); `activeBuffs:
+ * []` — an enemy's `classPassive`/`addPassive` skills (`QuestEnemy.classPassive`) are NOT
+ * auto-granted as buffs here, a known gap consistent with this project's scope: no general
+ * skill/passive interpreter reads a `NiceSkill`'s raw `functions[]` automatically anywhere
+ * yet (every `SkillEffect` this project models is still hand-constructed by a caller).
+ */
+export function buildEnemyInstance(waveEnemy: WaveEnemy): EnemyInstance {
+  return {
+    npcId: waveEnemy.npcId,
+    atk: waveEnemy.atk,
+    className: waveEnemy.svt.className,
+    attribute: waveEnemy.svt.attribute,
+    traits: new Set(waveEnemy.traits.map((trait) => trait.id)),
+    currentHp: waveEnemy.hp,
+    maxHp: waveEnemy.hp,
+    activeBuffs: [],
+    currentNpTurns: 0,
+    npTurnLimit: waveEnemy.chargeTurn,
+    deathRate: waveEnemy.deathRate,
+    readyToNp: false,
+  };
 }

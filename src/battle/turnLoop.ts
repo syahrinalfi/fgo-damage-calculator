@@ -10,7 +10,7 @@ import {
 import { resolveGuts } from "../buffs/index.js";
 import { advanceTurnBuffs, consumeBuffUse, grantBuff, removeBuffsByTrait } from "./buffLifecycle.js";
 import type { Action, CommandSealEffect } from "./action.js";
-import { enemyToBattleUnit, servantToBattleUnit, type BattleState, type EnemyInstance, type ServantInstance } from "./battleState.js";
+import { buildEnemyInstance, enemyToBattleUnit, servantToBattleUnit, type BattleState, type EnemyInstance, type ServantInstance } from "./battleState.js";
 import { BUFF_ACTION_KEYS } from "./buffActionKeys.js";
 import { buildCombinedCardDeck } from "./cardDeck.js";
 import { drawCardBagHand } from "./cardBag.js";
@@ -19,6 +19,7 @@ import { classifyChain, extraCardChainTypeFrom, isArtsChainFrom, isBusterChainFr
 import type { BattleConstants } from "./gameConstants.js";
 import { resolveHit, type HitResolutionContext } from "./hitResolution.js";
 import { resolveUnitActionModifier } from "./modifiers.js";
+import { findEnemyByNpcId, resolveShiftTargets } from "../quest/types.js";
 import type {
   BuffGrantEffect,
   DelayNpTurnEffect,
@@ -197,6 +198,55 @@ function findEnemy(state: BattleState, npcId: number): EnemyInstance {
 }
 
 /**
+ * Wave/death transitions, first piece: **break-bar (`shift`) only** — reinforcement
+ * (`call`) is deliberately deferred (research/08 §3-4/§6), since no research pass pinned
+ * down its exact trigger condition (death of the specific enemy? a turn count? another
+ * enemy's death? research/01 §6.3 only established the *mechanism*, not this project's own
+ * open "when does it actually fire" question) — modeling it now would be guessing at a
+ * trigger this project's own sourcing standard doesn't allow.
+ *
+ * `shift` is unambiguous by contrast: Atlas Academy's own schema title for the field is
+ * literally "Break bar switch to these NPC IDs" (research/08 §4, research/01 §6.3) — this
+ * enemy's HP hitting `0` is *the* trigger, no ambiguity to research further. Scans every
+ * `currentHp <= 0` enemy; for each, looks up its static `WaveEnemy` record in the current
+ * wave's `enemyPool` (`state.waves[state.currentWaveIndex]`) and resolves its `shift`
+ * targets (`resolveShiftTargets`, `../quest/types.js`). A resolvable target's `WaveEnemy`
+ * record is rebuilt into a fresh `EnemyInstance` (`buildEnemyInstance`, `./battleState.js`)
+ * and takes over that same array slot — the boss "continues" rather than the wave treating
+ * it as dead. No target (no `shift` array, an empty one, or every listed npcId missing from
+ * the pool — research/01 §6.3's noted Rayshift hash-coverage gaps) leaves the `0`-HP entry
+ * untouched, i.e. this enemy is genuinely dead.
+ *
+ * **Only the first resolved shift target is used** when `shift` lists more than one npcId —
+ * no live example or schema note in this project's research explains what a multi-entry
+ * `shift` array means (simultaneous multi-boss transition? an ordered fallback list?), so
+ * rather than guess, this takes the array's natural "primary" reading (first entry) and
+ * leaves the rest unused; flagged here as an open item, not a silent assumption. Called
+ * unconditionally after every state-returning path that can reduce an enemy's `currentHp`
+ * (`applyHit`, `applyInstantDeathEffect`) — a no-op scan when nothing died this call.
+ */
+function applyShiftTransitions(state: BattleState): BattleState {
+  const wave = state.waves[state.currentWaveIndex];
+  if (!wave) {
+    return state;
+  }
+
+  const enemies = state.enemies.map((enemy): EnemyInstance => {
+    if (enemy.currentHp > 0) {
+      return enemy;
+    }
+    const waveEnemy = findEnemyByNpcId(wave, enemy.npcId);
+    if (!waveEnemy) {
+      return enemy;
+    }
+    const [shiftTarget] = resolveShiftTargets(wave, waveEnemy);
+    return shiftTarget ? buildEnemyInstance(shiftTarget) : enemy;
+  });
+
+  return { ...state, enemies };
+}
+
+/**
  * Resolves one hit (`resolveHit`, `./hitResolution.js`) and folds the result back into
  * `state`: the defender's HP, the specific defense-tier/Guts buff instance consumed (if
  * any, `consumeBuffUse`), the attacker's NP gauge gain (capped at that servant's own
@@ -249,12 +299,12 @@ function applyHit(
     currentNpGauge: Math.min(servant.currentNpGauge + result.npGain, NP_GAUGE_CAP_BY_LEVEL[servant.npLevel]),
   };
 
-  return {
+  return applyShiftTransitions({
     ...state,
     servants: state.servants.map((s) => (s.servantId === servant.servantId ? updatedServant : s)),
     enemies: state.enemies.map((e) => (e.npcId === enemy.npcId ? updatedEnemy : e)),
     starsCarried: state.starsCarried + starsGained,
-  };
+  });
 }
 
 /**
@@ -801,9 +851,9 @@ function applyInstantDeathEffect(
       throw new RangeError("An enemyOne skill effect requires action.targetNpcId");
     }
     const target = findEnemy(state, targetNpcId);
-    return { ...state, enemies: state.enemies.map((e) => (e.npcId === target.npcId ? kills(e) : e)) };
+    return applyShiftTransitions({ ...state, enemies: state.enemies.map((e) => (e.npcId === target.npcId ? kills(e) : e)) });
   }
-  return { ...state, enemies: state.enemies.map(kills) };
+  return applyShiftTransitions({ ...state, enemies: state.enemies.map(kills) });
 }
 
 /** Applies one `DelayNpTurnEffect` (`./skillEffect.js`) — subtracts `effect.rawTurns` from each targeted enemy's `currentNpTurns`, floored at `0`. Enemy-only, same `enemyOne`/`enemyAll` handling as `applyInstantDeathEffect` above. */

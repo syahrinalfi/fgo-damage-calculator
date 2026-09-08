@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { ActiveBuffInstance } from "../buffs/types.js";
+import type { WaveEnemy } from "../quest/types.js";
 import type { TrackedBuff } from "./buffLifecycle.js";
-import { enemyToBattleUnit, servantToBattleUnit, type EnemyInstance, type ServantInstance } from "./battleState.js";
+import { buildEnemyInstance, enemyToBattleUnit, servantToBattleUnit, type EnemyInstance, type ServantInstance } from "./battleState.js";
 
 function trackedBuff(overrides: Partial<TrackedBuff> = {}): TrackedBuff {
   const base: ActiveBuffInstance = { type: "upAtk" as ActiveBuffInstance["type"], amount: 200, ckSelfIndv: [], ckOpIndv: [], buffGroup: 0 };
@@ -75,6 +76,40 @@ describe("enemyToBattleUnit", () => {
       attribute: "earth",
       traits: new Set([200]),
       activeBuffs: [],
+    });
+  });
+});
+
+describe("buildEnemyInstance", () => {
+  function waveEnemy(overrides: Partial<WaveEnemy> = {}): WaveEnemy {
+    return {
+      npcId: 9002,
+      atk: 6000,
+      hp: 30000,
+      deathRate: 500,
+      chargeTurn: 3,
+      traits: [{ id: 100 }, { id: 200 }],
+      svt: { className: "rider", attribute: "sky" },
+      enemyScript: {},
+      ...overrides,
+    } as unknown as WaveEnemy;
+  }
+
+  it("maps static QuestEnemy fields into a fresh EnemyInstance, HP full and NP/ready state at their defaults", () => {
+    const result = buildEnemyInstance(waveEnemy());
+    expect(result).toEqual({
+      npcId: 9002,
+      atk: 6000,
+      className: "rider",
+      attribute: "sky",
+      traits: new Set([100, 200]),
+      currentHp: 30000,
+      maxHp: 30000,
+      activeBuffs: [],
+      currentNpTurns: 0,
+      npTurnLimit: 3,
+      deathRate: 500,
+      readyToNp: false,
     });
   });
 });
