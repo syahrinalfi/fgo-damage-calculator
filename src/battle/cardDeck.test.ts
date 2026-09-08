@@ -23,6 +23,7 @@ function servant(servantId: number, isFrontLine: boolean, cardTypes: readonly Ca
     activeBuffs: [],
     skillCooldowns: [0, 0, 0],
     criticalWeight: 99,
+    starGen: 60,
   };
 }
 

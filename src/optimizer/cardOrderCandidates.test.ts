@@ -142,6 +142,7 @@ describe("buildCardOrderCandidates — end to end with searchBestActionSequence"
       activeBuffs: [],
       skillCooldowns: [0, 0, 0],
       criticalWeight: 99,
+      starGen: 60,
     };
   }
 
@@ -159,6 +160,7 @@ describe("buildCardOrderCandidates — end to end with searchBestActionSequence"
       npTurnLimit: 5,
       deathRate: 1000,
       readyToNp: false,
+      serverMod: { tdRate: 1000, tdAttackRate: 1000, starRate: 1000 },
     };
   }
 

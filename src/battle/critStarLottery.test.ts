@@ -22,6 +22,7 @@ function servant(servantId: number, criticalWeight: number): ServantInstance {
     activeBuffs: [],
     skillCooldowns: [0, 0, 0],
     criticalWeight,
+    starGen: 60,
   };
 }
 

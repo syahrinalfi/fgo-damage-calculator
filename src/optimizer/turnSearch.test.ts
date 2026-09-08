@@ -64,6 +64,7 @@ function servant(overrides: Partial<ServantInstance> = {}): ServantInstance {
     activeBuffs: [],
     skillCooldowns: [0, 0, 0],
     criticalWeight: 99,
+    starGen: 60,
     ...overrides,
   };
 }
@@ -82,6 +83,7 @@ function enemy(overrides: Partial<EnemyInstance> = {}): EnemyInstance {
     npTurnLimit: 5,
     deathRate: 1000,
     readyToNp: false,
+    serverMod: { tdRate: 1000, tdAttackRate: 1000, starRate: 1000 },
     ...overrides,
   };
 }

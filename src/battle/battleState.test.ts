@@ -27,6 +27,7 @@ function servant(overrides: Partial<ServantInstance> = {}): ServantInstance {
     activeBuffs: [],
     skillCooldowns: [0, 0, 0],
     criticalWeight: 99,
+    starGen: 60,
     ...overrides,
   };
 }
@@ -45,6 +46,7 @@ function enemy(overrides: Partial<EnemyInstance> = {}): EnemyInstance {
     npTurnLimit: 5,
     deathRate: 1000,
     readyToNp: false,
+    serverMod: { tdRate: 1000, tdAttackRate: 1000, starRate: 1000 },
     ...overrides,
   };
 }
@@ -93,6 +95,7 @@ describe("buildEnemyInstance", () => {
       traits: [{ id: 100 }, { id: 200 }],
       svt: { className: "rider", attribute: "sky" },
       enemyScript: {},
+      serverMod: { tdRate: 1200, tdAttackRate: 1200, starRate: 0 },
       ...overrides,
     } as unknown as WaveEnemy;
   }
@@ -112,6 +115,7 @@ describe("buildEnemyInstance", () => {
       npTurnLimit: 3,
       deathRate: 500,
       readyToNp: false,
+      serverMod: { tdRate: 1200, tdAttackRate: 1200, starRate: 0 },
     });
   });
 });
@@ -126,6 +130,7 @@ describe("buildServantInstance", () => {
       traits: [{ id: 100 }, { id: 200 }],
       cards: ["2", "2", "1", "1", "3"],
       starAbsorb: 90,
+      starGen: 60,
       ...overrides,
     } as unknown as ServantModule.Servant;
   }
@@ -169,6 +174,7 @@ describe("buildServantInstance", () => {
       activeBuffs: [],
       skillCooldowns: [0, 0, 0],
       criticalWeight: 90,
+      starGen: 60,
     });
   });
 

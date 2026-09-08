@@ -45,6 +45,15 @@ export interface ServantInstance extends Omit<BattleUnit, "activeBuffs"> {
    * servants' own weight.
    */
   readonly criticalWeight: number;
+  /**
+   * This servant's flat critical-star generation baseline (`NiceServant.starGen`,
+   * research/03 §5.1 — a flat per-servant value, e.g. Space Ishtar's is 60) — the
+   * `baseStarRate` term `HitResolutionContext`/`DerivedHitContext` (`./action.js`) needs per
+   * hit. Distinct from `criticalWeight` (`starAbsorb`) above: that's how much of *already-
+   * generated* stars this servant's cards tend to attract; this is how many stars a hit
+   * *generates* in the first place.
+   */
+  readonly starGen: number;
 }
 
 /**
@@ -125,6 +134,17 @@ export interface EnemyInstance extends Omit<BattleUnit, "activeBuffs"> {
    * once it actually handles the cast.
    */
   readonly readyToNp: boolean;
+  /**
+   * This enemy's own quest-specific NP-gain/star-generation multipliers (`QuestEnemy.serverMod`,
+   * research/08 §1) — a real, per-mille, per-enemy-per-quest server-supplied set of 3 values
+   * (`tdRate`/`tdAttackRate`/`starRate`), live-verified to vary *by quest design*, not by a
+   * fixed Bronze/Silver/Gold-style tier table (a `danger`-role enemy showed identical
+   * `serverMod` to `normal`-role enemies in the same wave). Feeds `DerivedHitContext`'s
+   * `npEnemyServerMod`/`starEnemyServerMod` fields (`./action.js`) for a hit landed against
+   * this enemy — `resolveCardHitContext` (`./hitContextResolver.js`) reads `tdRate`/`starRate`
+   * directly off this field.
+   */
+  readonly serverMod: { readonly tdRate: number; readonly tdAttackRate: number; readonly starRate: number };
 }
 
 /**
@@ -251,6 +271,9 @@ export function enemyToBattleUnit(enemy: EnemyInstance): BattleUnit {
  * auto-granted as buffs here, a known gap consistent with this project's scope: no general
  * skill/passive interpreter reads a `NiceSkill`'s raw `functions[]` automatically anywhere
  * yet (every `SkillEffect` this project models is still hand-constructed by a caller).
+ * `serverMod` is copied direct from `QuestEnemy.serverMod` (research/08 §1) — added
+ * 2026-09-08 alongside `resolveCardHitContext` (`./hitContextResolver.js`), which is the
+ * first caller that actually reads it.
  */
 export function buildEnemyInstance(waveEnemy: WaveEnemy): EnemyInstance {
   return {
@@ -266,6 +289,7 @@ export function buildEnemyInstance(waveEnemy: WaveEnemy): EnemyInstance {
     npTurnLimit: waveEnemy.chargeTurn,
     deathRate: waveEnemy.deathRate,
     readyToNp: false,
+    serverMod: waveEnemy.serverMod,
   };
 }
 
@@ -299,9 +323,10 @@ export interface EquippedCraftEssence {
  *   value at a given level) — a documented, open assumption for the small number of
  *   servants whose `ascensionAdd` data might disagree, same as that function's own
  *   scope note.
- * - `className`/`attribute`/`traits`/`cardTypes`/`criticalWeight`: read straight off
- *   `NiceServant` (`starAbsorb` for `criticalWeight`, research/04 §6.3), no per-account
- *   resolution needed — identical for any build of the same servant.
+ * - `className`/`attribute`/`traits`/`cardTypes`/`criticalWeight`/`starGen`: read straight
+ *   off `NiceServant` (`starAbsorb` for `criticalWeight`, research/04 §6.3; `starGen` direct,
+ *   research/03 §5.1), no per-account resolution needed — identical for any build of the
+ *   same servant.
  * - `npLevel`: `build.npLevel` directly (research/00 §3 — independently 1-5 per
  *   servant, never assumed uniform).
  * - `currentNpGauge: 0`, `activeBuffs: []`, `skillCooldowns: [0, 0, 0]`: battle-start
@@ -342,5 +367,6 @@ export function buildServantInstance(
     activeBuffs: [],
     skillCooldowns: [0, 0, 0],
     criticalWeight: niceServant.starAbsorb,
+    starGen: niceServant.starGen,
   };
 }

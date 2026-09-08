@@ -46,6 +46,7 @@ export type {
 export { resolveAction, NP_GAUGE_CAP_BY_LEVEL } from "./turnLoop.js";
 export type { FuncInterpretationResult } from "./funcInterpreter.js";
 export { resolveSkillEffects, resolveNpEffects } from "./funcInterpreter.js";
+export { resolveCardHitContext } from "./hitContextResolver.js";
 export { allocateCritStars, critChanceForStars, rollIsCrit } from "./critStarLottery.js";
 export type { ChainType, ChainClassification } from "./chainDetection.js";
 export { classifyChain, isBusterChainFrom, isArtsChainFrom, isQuickChainFrom, isMightyChainFrom, extraCardChainTypeFrom } from "./chainDetection.js";
