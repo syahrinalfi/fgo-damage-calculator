@@ -282,6 +282,46 @@ export interface LossHpPercentEffect {
   readonly targetType: SkillTargetType;
 }
 
+/**
+ * One already-resolved instant-death roll a `castNp` `Action` applies — models the API's
+ * `instantDeath` `FuncType` (research/09 §7 dedicated pass: 64 live NP instances, **every**
+ * one enemy-targeted — 35 `enemy` (single) + 37 `enemyAll`, none self/ally-targeted; the
+ * separate `forceInstantDeath` `FuncType`, 9 instances, includes a `self`-targeted example
+ * — a self-sacrifice NP cost, a structurally different use case this effect does not model).
+ *
+ * **The percentage lives in the `Rate` field, not `Value`** (`instantDeath`'s `svals` carry
+ * no `Value` at all — every live example is `{ Rate: N }` only), and — unlike every other
+ * modeled `FuncType`'s `svals`/`svals2`/.../`svals5` quintet, which vary by *NP level* — this
+ * one's 5 arrays vary by **Overcharge stage** while staying constant across NP level within
+ * each array (e.g. one live NP: `Rate` 600/700/800/900/1000 at OC1–OC5, identical across all
+ * 5 NP-level entries within each stage) — a live-confirmed instance of the death chance
+ * scaling with Overcharge, matching the widely-known "instant death % increases with
+ * Overcharge" in-game behavior. `deathRate` here is the single already-OC-resolved per-mille
+ * value (the caller picks the right `svalsN` entry via `overchargeStage()`, `../engine/
+ * overcharge.js`, the same convention this project already uses for NP damage's own OC-stage
+ * selection) — `1000` = 100%, rolled once per targeted enemy against `randomFn()`.
+ *
+ * **Two mechanics this effect deliberately does NOT model, both flagged rather than guessed
+ * at**: (1) **death resistance/immunity** — FGO is widely understood to let some enemies
+ * (especially bosses) resist or be flatly immune to instant death, but no live data or
+ * source was found this pass identifying the specific trait/buff-type/script field that
+ * encodes this, so every roll here is against the full `deathRate` with no reduction; (2)
+ * **Guts interaction** — `resolveHit`'s card/NP damage path already wires `resolveGuts`
+ * (`../buffs/guts.js`) for ordinary lethal damage, but this effect bypasses that entirely
+ * (a plain `currentHp = 0` on success, not routed through `resolveGuts`) since `resolveGuts`
+ * needs a `BuffTraitContext` (attacker/defender trait sets) this effect's flat, caller-
+ * resolved shape doesn't carry — whether real instant death should or shouldn't trigger Guts
+ * is a genuinely open, unconfirmed question, not a deliberate design call either way.
+ *
+ * Enemy-only, matching the live data above — no `SkillTargetType`/ally-side variant exists.
+ */
+export interface InstantDeathEffect {
+  readonly kind: "instantDeath";
+  /** Per-mille death chance, already Overcharge-stage-resolved by the caller — `1000` = 100%. */
+  readonly deathRate: number;
+  readonly targetType: "enemyOne" | "enemyAll";
+}
+
 /** One already-resolved skill/NP effect a `useSkill`/`useMysticCodeSkill` `Action` can carry (research/09 §7's still-limited scope). */
 export type SkillEffect =
   | BuffGrantEffect
@@ -295,4 +335,5 @@ export type SkillEffect =
   | LossHpSafeEffect
   | ShortenSkillEffect
   | LossStarEffect
-  | LossHpPercentEffect;
+  | LossHpPercentEffect
+  | InstantDeathEffect;

@@ -21,6 +21,7 @@ import type {
   GainHpEffect,
   GainHpPercentEffect,
   GainNpEffect,
+  InstantDeathEffect,
   LossHpPercentEffect,
   LossHpSafeEffect,
   LossNpEffect,
@@ -372,8 +373,17 @@ function applyChainCompletionBonus(
  * classification the way `playCard`'s are — research/03 §1.4/§5: the NP card is an all-zero
  * stub in the per-position modifier table and isn't part of the 3-card chain at all, so none
  * of these mechanics apply to an NP.
+ *
+ * `action.effects` (default `[]` — `./action.js`'s doc comment) are folded in via
+ * `applySkillEffect` strictly *after* the above (damage, gauge reset, NP Chain count) —
+ * this is where `InstantDeathEffect` (`./skillEffect.js`) attaches for NPs that carry it.
  */
-function resolveCastNp(state: BattleState, action: Extract<Action, { type: "castNp" }>, constants: BattleConstants): BattleState {
+function resolveCastNp(
+  state: BattleState,
+  action: Extract<Action, { type: "castNp" }>,
+  constants: BattleConstants,
+  randomFn: () => number,
+): BattleState {
   const servant = findServant(state, action.servantId);
   const enemy = findEnemy(state, action.targetNpcId);
   if (!action.context.isNP) {
@@ -388,10 +398,15 @@ function resolveCastNp(state: BattleState, action: Extract<Action, { type: "cast
     extraCardChainType: "none",
     chainLeadCardType: action.context.card.type,
   };
-  const nextState = applyHit(state, servant, enemy, constants, context);
+  let nextState = applyHit(state, servant, enemy, constants, context);
   const servants = nextState.servants.map((s) => (s.servantId === servant.servantId ? { ...s, currentNpGauge: 0 } : s));
+  nextState = { ...nextState, servants, consecutiveNpChainCount: nextState.consecutiveNpChainCount + 1 };
 
-  return { ...nextState, servants, consecutiveNpChainCount: nextState.consecutiveNpChainCount + 1 };
+  for (const effect of action.effects ?? []) {
+    nextState = applySkillEffect(nextState, servant.servantId, effect, undefined, action.targetNpcId, randomFn);
+  }
+
+  return nextState;
 }
 
 /** Command Seal costs by effect (research/00 §6, confirmed by the project owner). */
@@ -657,6 +672,25 @@ function applyRemoveBuffEffect(
   }
 }
 
+/**
+ * Applies one `InstantDeathEffect` (`./skillEffect.js`) — rolls `effect.deathRate / 1000`
+ * against `randomFn()` independently for each targeted enemy, setting `currentHp` straight
+ * to `0` on success (no `resolveGuts` check — see the effect's own doc comment for why).
+ * Enemy-only, matching `RemoveBuffEffect`'s `enemyOne`/`enemyAll` handling above.
+ */
+function applyInstantDeathEffect(state: BattleState, effect: InstantDeathEffect, targetNpcId: number | undefined, randomFn: () => number): BattleState {
+  const kills = (enemy: EnemyInstance): EnemyInstance => (randomFn() < effect.deathRate / 1000 ? { ...enemy, currentHp: 0 } : enemy);
+
+  if (effect.targetType === "enemyOne") {
+    if (targetNpcId === undefined) {
+      throw new RangeError("An enemyOne skill effect requires action.targetNpcId");
+    }
+    const target = findEnemy(state, targetNpcId);
+    return { ...state, enemies: state.enemies.map((e) => (e.npcId === target.npcId ? kills(e) : e)) };
+  }
+  return { ...state, enemies: state.enemies.map(kills) };
+}
+
 /** Dispatches one `SkillEffect` (`./skillEffect.js`) to the matching `apply*Effect` function, folding the result back into `state`. */
 function applySkillEffect(
   state: BattleState,
@@ -664,6 +698,7 @@ function applySkillEffect(
   effect: SkillEffect,
   targetServantId: number | undefined,
   targetNpcId: number | undefined,
+  randomFn: () => number,
 ): BattleState {
   switch (effect.kind) {
     case "grantBuff":
@@ -690,6 +725,8 @@ function applySkillEffect(
       return { ...state, starsCarried: Math.max(state.starsCarried - effect.rawAmount, 0) };
     case "lossHpPercent":
       return { ...state, servants: applyLossHpPercentEffect(state.servants, actingServantId, effect, targetServantId) };
+    case "instantDeath":
+      return applyInstantDeathEffect(state, effect, targetNpcId, randomFn);
   }
 }
 
@@ -704,7 +741,7 @@ function applySkillEffect(
  * Throws if the targeted skill slot is still on cooldown, rather than silently allowing a
  * skill to be used twice before it's ready.
  */
-function resolveUseSkill(state: BattleState, action: Extract<Action, { type: "useSkill" }>): BattleState {
+function resolveUseSkill(state: BattleState, action: Extract<Action, { type: "useSkill" }>, randomFn: () => number): BattleState {
   const actingServant = findServantAny(state, action.servantId);
   const cooldownIndex = action.skillSlot - 1;
   // `skillSlot` is a `1 | 2 | 3` literal, so `cooldownIndex` is always in-bounds for the 3-tuple — `noUncheckedIndexedAccess` can't see that through a variable index.
@@ -715,7 +752,7 @@ function resolveUseSkill(state: BattleState, action: Extract<Action, { type: "us
 
   let nextState = state;
   for (const effect of action.effects) {
-    nextState = applySkillEffect(nextState, actingServant.servantId, effect, action.targetServantId, action.targetNpcId);
+    nextState = applySkillEffect(nextState, actingServant.servantId, effect, action.targetServantId, action.targetNpcId, randomFn);
   }
   const servants = nextState.servants.map((s): ServantInstance => {
     if (s.servantId !== actingServant.servantId) {
@@ -736,7 +773,7 @@ function resolveUseSkill(state: BattleState, action: Extract<Action, { type: "us
  * targeting throws here (via `applySkillEffect`'s shared checks) rather than silently doing
  * nothing.
  */
-function resolveUseMysticCodeSkill(state: BattleState, action: Extract<Action, { type: "useMysticCodeSkill" }>): BattleState {
+function resolveUseMysticCodeSkill(state: BattleState, action: Extract<Action, { type: "useMysticCodeSkill" }>, randomFn: () => number): BattleState {
   const cooldownIndex = action.slot - 1;
   // `slot` is a `1 | 2 | 3` literal, so `cooldownIndex` is always in-bounds for the 3-tuple — `noUncheckedIndexedAccess` can't see that through a variable index.
   const remainingCooldown = state.mysticCodeSkillCooldowns[cooldownIndex] as number;
@@ -746,7 +783,7 @@ function resolveUseMysticCodeSkill(state: BattleState, action: Extract<Action, {
 
   let nextState = state;
   for (const effect of action.effects) {
-    nextState = applySkillEffect(nextState, undefined, effect, action.targetServantId, action.targetNpcId);
+    nextState = applySkillEffect(nextState, undefined, effect, action.targetServantId, action.targetNpcId, randomFn);
   }
 
   const mysticCodeSkillCooldowns = [...state.mysticCodeSkillCooldowns] as [number, number, number];
@@ -830,13 +867,13 @@ export function resolveAction(
     case "playCard":
       return resolvePlayCard(state, action, constants, randomFn);
     case "castNp":
-      return resolveCastNp(state, action, constants);
+      return resolveCastNp(state, action, constants, randomFn);
     case "useCommandSeal":
       return resolveUseCommandSeal(state, action);
     case "useSkill":
-      return resolveUseSkill(state, action);
+      return resolveUseSkill(state, action, randomFn);
     case "useMysticCodeSkill":
-      return resolveUseMysticCodeSkill(state, action);
+      return resolveUseMysticCodeSkill(state, action, randomFn);
     case "orderChange":
       return resolveOrderChange(state, action);
     default: {

@@ -71,6 +71,19 @@ export type Action =
        * rather than derived at all, so `castNp` needs no `chainCards` equivalent.
        */
       readonly context: DerivedHitContext;
+      /**
+       * This NP's own already-level/Overcharge-resolved non-damage effects beyond its core
+       * damage (research/09 §7 — currently just `InstantDeathEffect`, `./skillEffect.js`),
+       * applied by `resolveCastNp` strictly *after* the NP's own damage/gauge/star
+       * resolution, in array order. Defaults to `[]` when omitted. This is a scoped
+       * simplification, not a general NP function-order interpreter: research/05 §5's
+       * Taira-no-Kagekiyo example (`subState` removing enemy buffs *before* the NP's own
+       * damage function runs) needs the reverse ordering and isn't representable here —
+       * every live `instantDeath` example this field was added for happens to occur *after*
+       * the NP's own damage function in its own `functions[]` order, which is what this
+       * fixed post-damage placement models.
+       */
+      readonly effects?: readonly SkillEffect[];
     }
   | {
       readonly type: "useSkill";

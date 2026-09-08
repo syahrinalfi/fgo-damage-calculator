@@ -12,6 +12,7 @@ import type {
   GainHpPercentEffect,
   GainNpEffect,
   GainStarEffect,
+  InstantDeathEffect,
   LossHpPercentEffect,
   LossHpSafeEffect,
   LossNpEffect,
@@ -274,6 +275,15 @@ function lossHpPercentEffect(overrides: Partial<LossHpPercentEffect> = {}): Loss
     kind: "lossHpPercent",
     rawPercent: 500,
     targetType: "self",
+    ...overrides,
+  };
+}
+
+function instantDeathEffect(overrides: Partial<InstantDeathEffect> = {}): InstantDeathEffect {
+  return {
+    kind: "instantDeath",
+    deathRate: 600,
+    targetType: "enemyOne",
     ...overrides,
   };
 }
@@ -712,6 +722,32 @@ describe("resolveAction — castNp", () => {
   it("throws when context.isNP is false", () => {
     const wrongFlag: Action = { ...action, context: { ...NP_CONTEXT, isNP: false } };
     expect(() => resolveAction(state(), wrongFlag, CONSTANTS)).toThrow(RangeError);
+  });
+
+  it("applies effects (e.g. instantDeath) after its own damage/gauge resolution, in array order", () => {
+    const withEffects: Action = { ...action, effects: [instantDeathEffect({ deathRate: 600, targetType: "enemyOne" })] };
+    const succeeds = resolveAction(state(), withEffects, CONSTANTS, () => 0.5);
+    expect(succeeds.enemies.find((e) => e.npcId === 9001)?.currentHp).toBe(0);
+
+    const fails = resolveAction(state(), withEffects, CONSTANTS, () => 0.9);
+    expect(fails.enemies.find((e) => e.npcId === 9001)?.currentHp).toBeGreaterThan(0);
+  });
+
+  it("instantDeath with enemyAll targeting rolls independently per enemy", () => {
+    const withEffects: Action = { ...action, effects: [instantDeathEffect({ deathRate: 1000, targetType: "enemyAll" })] };
+    const result = resolveAction(
+      state({ enemies: [enemy({ npcId: 9001, currentHp: 50000 }), enemy({ npcId: 9002, currentHp: 30000 })] }),
+      withEffects,
+      CONSTANTS,
+      () => 0.1,
+    );
+    expect(result.enemies.find((e) => e.npcId === 9001)?.currentHp).toBe(0);
+    expect(result.enemies.find((e) => e.npcId === 9002)?.currentHp).toBe(0);
+  });
+
+  it("omitting effects entirely resolves the same as an empty array (defaults to [])", () => {
+    const result = resolveAction(state(), action, CONSTANTS);
+    expect(result.enemies.find((e) => e.npcId === 9001)?.currentHp).toBeGreaterThan(0);
   });
 });
 
