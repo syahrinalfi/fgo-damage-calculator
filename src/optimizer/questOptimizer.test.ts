@@ -489,4 +489,31 @@ describe("optimizeQuest", () => {
       withoutOption.map((r) => ({ score: r.best.score, actions: r.best.actions })),
     );
   });
+
+  it("integrates the bench axis with the auto Order-Change resolver: a benched sub-member is a real swap target the search can find and prefer", () => {
+    // servant 4's cards deal far more damage than anyone else's — strictly dominant, so the
+    // best line for the {1,2,3} front-line / {4} bench formation must swap 4 in and actually
+    // play at least one of its cards, not just carry a no-op orderChange in the candidate list.
+    const highDamageForFour = (handCard: HandCard): DerivedHitContext => ({
+      ...resolveHitContext(handCard),
+      npDamageMultiplier: handCard.servantId === 4 ? 100 : 1,
+    });
+
+    const results = optimizeQuest({
+      shortlist: [candidate(1), candidate(2), candidate(3), candidate(4)],
+      cePool: [],
+      waves: [wave()],
+      costBudget: 1000,
+      constants: CONSTANTS,
+      resolveHitContext: highDamageForFour,
+      maxBenchCount: 1,
+      hasOrderChangeMysticCodeSkill: true,
+      randomFn: () => 0,
+    });
+
+    const benchedFour = results.find((r) => r.party.length === 4 && r.party.some((m) => m.build.servantId === 4 && !m.isFrontLine));
+    expect(benchedFour).toBeDefined();
+    expect(benchedFour?.best.actions.some((a) => a.type === "orderChange")).toBe(true);
+    expect(benchedFour?.best.actions.some((a) => (a.type === "playCard" || a.type === "castNp") && a.servantId === 4)).toBe(true);
+  });
 });
