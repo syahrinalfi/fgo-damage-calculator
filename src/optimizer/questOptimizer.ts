@@ -1,9 +1,12 @@
-import type { Servant as ServantModule } from "@atlasacademy/api-connector";
+import type { NoblePhantasm, Servant as ServantModule } from "@atlasacademy/api-connector";
 import type { ServantBuild } from "../account/types.js";
 import type { BattleState, EquippedCraftEssence, HandCard } from "../battle/battleState.js";
 import type { Action, DerivedHitContext } from "../battle/action.js";
 import type { BattleConstants } from "../battle/gameConstants.js";
 import { FRONT_LINE_SERVANT_COUNT } from "../battle/cardDeck.js";
+import { resolveCardHitContext } from "../battle/hitContextResolver.js";
+import { resolveOrderChangeSwapOptions } from "../battle/orderChangeSwapResolver.js";
+import { resolveSkillActivationOptions, type ServantSkillSource } from "../battle/skillActivationResolver.js";
 import type { Wave } from "../quest/types.js";
 import { buildInitialBattleState, type PartyMemberSpec } from "./battleStateBuilder.js";
 import { enumerateCeAssignments, enumeratePartyFormations } from "./candidateGeneration.js";
@@ -30,13 +33,22 @@ export interface QuestOptimizerOptions {
   readonly constants: BattleConstants;
   /**
    * Resolves one hand slot's already-level-resolved hit context (`npDamageMultiplier`/
-   * `offensiveNPRate`/`baseStarRate`/etc.) — this project has no automatic resolver from raw
-   * `NiceServant`/`NiceCard`/enemy-trait data to a `DerivedHitContext` yet (a genuinely
-   * separate, unbuilt piece — every `Action`-builder in this project treats this as
-   * "already-resolved input," and this function is no exception), so the caller supplies it.
-   * `.card.position` is ignored (`buildCardOrderCandidates` overwrites it per ordering).
+   * `offensiveNPRate`/`baseStarRate`/etc.) — hand-rolled by the caller, or omit this and
+   * supply `npGainByServantId` instead to let `optimizeQuest` build it automatically via
+   * `resolveCardHitContext` (`../battle/hitContextResolver.js`). Exactly one of the two must
+   * end up available (supplying neither throws; supplying both prefers this explicit
+   * resolver, since a manual override always wins over the automatic path). `.card.position`
+   * is ignored either way (`buildCardOrderCandidates` overwrites it per ordering).
    */
-  readonly resolveHitContext: (handCard: HandCard) => DerivedHitContext;
+  readonly resolveHitContext?: (handCard: HandCard) => DerivedHitContext;
+  /**
+   * Raw NP-gain data source for the automatic hit-context resolver (`resolveCardHitContext`)
+   * — supply this *instead of* `resolveHitContext` to auto-resolve every hand slot's
+   * `DerivedHitContext` from account/NP data rather than hand-rolling the resolver. Ignored
+   * when `resolveHitContext` is supplied. See that option's own doc comment for the
+   * "exactly one of the two" requirement.
+   */
+  readonly npGainByServantId?: (servantId: number) => NoblePhantasm.NoblePhantasmGain;
   /**
    * Resolves this party candidate's available (off-cooldown) skill/Mystic Code skill
    * activations (research/09 §4's "skill-usage plan per turn" axis) as fully-resolved
@@ -53,6 +65,17 @@ export interface QuestOptimizerOptions {
    */
   readonly resolveSkillOptions?: (state: BattleState) => readonly SkillActivation[];
   /**
+   * Raw skill data source for the automatic skill-usage resolver
+   * (`resolveSkillActivationOptions`, `../battle/skillActivationResolver.js`) — supply this
+   * *instead of* `resolveSkillOptions` to auto-resolve every fielded servant's off-cooldown
+   * skills from raw `NiceSkill` data rather than hand-rolling the resolver. Ignored when
+   * `resolveSkillOptions` is supplied; omitting both this and `resolveSkillOptions` searches
+   * without the skill-usage axis at all, unchanged from before either option existed.
+   */
+  readonly skillSources?: readonly ServantSkillSource[];
+  /** Passthrough for the automatic skill-usage resolver's own `defaultTargetServantId` config — see that resolver's doc comment. Ignored unless `skillSources` is actually used (i.e. `resolveSkillOptions` is omitted). */
+  readonly defaultTargetServantId?: (actingServantId: number) => number;
+  /**
    * Resolves this party candidate's available (off-cooldown, live-sub-member) Order Change
    * swaps (research/09 §4's final "Order-Change-timing" axis) as fully-resolved
    * `OrderChangeSwap`s — same "already-resolved input" convention as `resolveHitContext`/
@@ -65,6 +88,16 @@ export interface QuestOptimizerOptions {
    * this option existed.
    */
   readonly resolveOrderChangeOptions?: (state: BattleState) => readonly OrderChangeSwap[];
+  /**
+   * Raw flag for the automatic Order-Change resolver (`resolveOrderChangeSwapOptions`,
+   * `../battle/orderChangeSwapResolver.js`) — supply this *instead of*
+   * `resolveOrderChangeOptions` to auto-enumerate every front-line × bench swap once the
+   * account's equipped Mystic Code's 3rd skill slot (`hasOrderChangeMysticCodeSkill: true`)
+   * is off cooldown, rather than hand-rolling the resolver. Ignored when
+   * `resolveOrderChangeOptions` is supplied; omitting both searches without the Order-Change
+   * axis at all, unchanged from before either option existed.
+   */
+  readonly hasOrderChangeMysticCodeSkill?: boolean;
   /**
    * Maximum benched sub-members to field alongside the exactly-`FRONT_LINE_SERVANT_COUNT`
    * front-line servants (research/00 §4's "up to 3 sub-members") — every party size from
@@ -152,9 +185,32 @@ function toActionSequenceResult(multiTurnResult: MultiTurnResult): ActionSequenc
 }
 
 export function optimizeQuest(options: QuestOptimizerOptions): readonly QuestOptimizerCandidate[] {
+  if (options.resolveHitContext === undefined && options.npGainByServantId === undefined) {
+    throw new RangeError("optimizeQuest requires either options.resolveHitContext or options.npGainByServantId to be supplied");
+  }
+
   const targetSlot = options.targetEnemySlotIndex ?? 0;
   const scoreFn = options.scoreFn ?? damageDealtAtSlot(targetSlot);
   const randomFn = options.randomFn ?? Math.random;
+
+  // Each optional axis prefers an explicit caller-supplied resolver over its raw-data
+  // auto-resolver counterpart (`../battle/skillActivationResolver.js`/`orderChangeSwapResolver.js`)
+  // — a manual override always wins. Neither depends on the per-turn `state` a formation's
+  // candidates are built from, so both are resolved once per `optimizeQuest` call rather than
+  // rebuilt per party/turn.
+  const resolveSkillOptionsFn =
+    options.resolveSkillOptions ??
+    (options.skillSources === undefined
+      ? undefined
+      : (state: BattleState) =>
+          resolveSkillActivationOptions(state, options.skillSources as readonly ServantSkillSource[], {
+            ...(options.defaultTargetServantId !== undefined ? { defaultTargetServantId: options.defaultTargetServantId } : {}),
+          }));
+  const resolveOrderChangeOptionsFn =
+    options.resolveOrderChangeOptions ??
+    (options.hasOrderChangeMysticCodeSkill === undefined
+      ? undefined
+      : (state: BattleState) => resolveOrderChangeSwapOptions(state, options.hasOrderChangeMysticCodeSkill as boolean));
 
   const formations = enumeratePartyFormations(options.shortlist, FRONT_LINE_SERVANT_COUNT, options.maxBenchCount ?? 0);
 
@@ -201,16 +257,28 @@ export function optimizeQuest(options: QuestOptimizerOptions): readonly QuestOpt
         const targetEnemy = state.enemies[targetSlot];
         if (targetEnemy === undefined) return [];
 
+        // Prefers the explicit `resolveHitContext` over the raw-data auto path — same
+        // manual-wins-over-automatic precedence as the skill/order-change axes above. The
+        // eager check at the top of this function already guarantees one of the two exists.
+        const resolveHitContext: (handCard: HandCard) => DerivedHitContext =
+          options.resolveHitContext ??
+          ((handCard) => {
+            const npGainByServantId = options.npGainByServantId as (servantId: number) => NoblePhantasm.NoblePhantasmGain;
+            const actingServant = state.servants.find((s) => s.servantId === handCard.servantId);
+            if (actingServant === undefined) {
+              throw new RangeError(`No servant with servantId ${handCard.servantId} in this BattleState`);
+            }
+            return resolveCardHitContext(handCard, actingServant, npGainByServantId(handCard.servantId), targetEnemy, randomFn);
+          });
+
         const buildForHand = (hand: BattleState["handCards"]): ReturnType<typeof buildCardOrderCandidates> => {
-          const contextTemplates = hand.map(options.resolveHitContext);
+          const contextTemplates = hand.map(resolveHitContext);
           const cardCandidates = buildCardOrderCandidates(hand, contextTemplates, targetEnemy.npcId);
-          return options.resolveSkillOptions === undefined
-            ? cardCandidates
-            : buildSkillAndCardOrderCandidates(options.resolveSkillOptions(state), cardCandidates);
+          return resolveSkillOptionsFn === undefined ? cardCandidates : buildSkillAndCardOrderCandidates(resolveSkillOptionsFn(state), cardCandidates);
         };
-        return options.resolveOrderChangeOptions === undefined
+        return resolveOrderChangeOptionsFn === undefined
           ? buildForHand(state.handCards)
-          : buildOrderChangeCandidates(options.resolveOrderChangeOptions(state), state.handCards, buildForHand);
+          : buildOrderChangeCandidates(resolveOrderChangeOptionsFn(state), state.handCards, buildForHand);
       };
 
       let best: ActionSequenceResult | undefined;

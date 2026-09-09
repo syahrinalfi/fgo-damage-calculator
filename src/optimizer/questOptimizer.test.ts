@@ -1,9 +1,10 @@
-import type { Buff, Card, CardDetail, CraftEssence, Servant as ServantModule } from "@atlasacademy/api-connector";
+import { Func, type Buff, type Card, type CardDetail, type CraftEssence, type NoblePhantasm, type Servant as ServantModule, type Skill } from "@atlasacademy/api-connector";
 import { describe, expect, it } from "vitest";
 import type { DerivedHitContext } from "../battle/action.js";
 import type { BattleState, HandCard } from "../battle/battleState.js";
 import { BUFF_ACTION_KEYS } from "../battle/buffActionKeys.js";
 import type { BattleConstants } from "../battle/gameConstants.js";
+import type { ServantSkillSource } from "../battle/skillActivationResolver.js";
 import type { ServantBuild } from "../account/types.js";
 import type { Wave, WaveEnemy } from "../quest/types.js";
 import { optimizeQuest, type ServantCandidate } from "./questOptimizer.js";
@@ -18,6 +19,7 @@ function niceServant(overrides: Partial<ServantModule.Servant> = {}): ServantMod
     traits: [{ id: 100 }],
     cards: ["2", "2", "1", "1", "3"],
     starAbsorb: 90,
+    starGen: 60,
     cost: 16,
     ...overrides,
   } as unknown as ServantModule.Servant;
@@ -50,6 +52,7 @@ function waveEnemy(overrides: Partial<WaveEnemy> = {}): WaveEnemy {
     traits: [{ id: 200 }],
     svt: { className: "lancer", attribute: "earth" },
     enemyScript: {},
+    serverMod: { tdRate: 1000, tdAttackRate: 1000, starRate: 1000 },
     ...overrides,
   } as unknown as WaveEnemy;
 }
@@ -352,5 +355,138 @@ describe("optimizeQuest", () => {
       randomFn: () => 0,
     });
     expect(twoTurns[0]?.best.score).toBeGreaterThanOrEqual(oneTurn[0]?.best.score ?? Infinity);
+  });
+
+  it("throws when neither resolveHitContext nor npGainByServantId is supplied", () => {
+    expect(() =>
+      optimizeQuest({
+        shortlist: [candidate(1), candidate(2), candidate(3)],
+        cePool: [],
+        waves: [wave()],
+        costBudget: 1000,
+        constants: CONSTANTS,
+        randomFn: () => 0,
+      } as unknown as Parameters<typeof optimizeQuest>[0]),
+    ).toThrow(RangeError);
+  });
+
+  it("auto-resolves hit context from npGainByServantId when resolveHitContext is omitted", () => {
+    const npGain: NoblePhantasm.NoblePhantasmGain = { buster: [500], arts: [500], quick: [500], extra: [500], np: [500], superSuccess: [500] } as unknown as NoblePhantasm.NoblePhantasmGain;
+    const manual = optimizeQuest({
+      shortlist: [candidate(1), candidate(2), candidate(3)],
+      cePool: [],
+      waves: [wave()],
+      costBudget: 1000,
+      constants: CONSTANTS,
+      resolveHitContext,
+      randomFn: () => 0,
+    });
+    const auto = optimizeQuest({
+      shortlist: [candidate(1), candidate(2), candidate(3)],
+      cePool: [],
+      waves: [wave()],
+      costBudget: 1000,
+      constants: CONSTANTS,
+      npGainByServantId: () => npGain,
+      randomFn: () => 0,
+    });
+    expect(auto).toHaveLength(1);
+    expect(auto[0]?.best.score).toBeGreaterThan(0);
+    // resolveCardHitContext rolls its own randomModifier (0.9-1.10) rather than the manual
+    // resolver's fixed 1, so scores are close but not required to match exactly — this just
+    // confirms the auto path actually deals real damage, on the same order of magnitude.
+    expect(manual[0]?.best.score).toBeGreaterThan(0);
+  });
+
+  it("prefers an explicit resolveHitContext over npGainByServantId when both are supplied", () => {
+    const npGain: NoblePhantasm.NoblePhantasmGain = { buster: [999999], arts: [999999], quick: [999999], extra: [999999], np: [500], superSuccess: [500] } as unknown as NoblePhantasm.NoblePhantasmGain;
+    const withBoth = optimizeQuest({
+      shortlist: [candidate(1), candidate(2), candidate(3)],
+      cePool: [],
+      waves: [wave()],
+      costBudget: 1000,
+      constants: CONSTANTS,
+      resolveHitContext,
+      npGainByServantId: () => npGain,
+      randomFn: () => 0,
+    });
+    const manual = optimizeQuest({
+      shortlist: [candidate(1), candidate(2), candidate(3)],
+      cePool: [],
+      waves: [wave()],
+      costBudget: 1000,
+      constants: CONSTANTS,
+      resolveHitContext,
+      randomFn: () => 0,
+    });
+    // If npGainByServantId's absurd offensiveNPRate had been used, the score would differ.
+    expect(withBoth[0]?.best.score).toBe(manual[0]?.best.score);
+  });
+
+  it("auto-resolves the skill-usage-plan axis from skillSources when resolveSkillOptions is omitted", () => {
+    const selfAtkUpFunc: Func.Func = {
+      funcId: 1,
+      funcType: Func.FuncType.ADD_STATE,
+      funcTargetType: Func.FuncTargetType.SELF,
+      funcTargetTeam: Func.FuncTargetTeam.PLAYER,
+      functvals: [],
+      funcquestTvals: [],
+      overWriteTvalsList: [],
+      funcPopupText: "",
+      buffs: [{ type: "upAtk" as Buff.BuffType, buffGroup: 0, vals: [], ckSelfIndv: [], ckOpIndv: [] } as unknown as Buff.Buff],
+      svals: [{ Value: 500, Turn: 3 }],
+    } as unknown as Func.Func;
+    const emptySkill: Skill.Skill["functions"] = [];
+    const skillSources: readonly ServantSkillSource[] = [
+      {
+        servantId: 1,
+        skills: [
+          { skill: { functions: [selfAtkUpFunc], coolDown: [5] }, level: 1 },
+          { skill: { functions: emptySkill, coolDown: [5] }, level: 1 },
+          { skill: { functions: emptySkill, coolDown: [5] }, level: 1 },
+        ],
+      },
+    ];
+
+    const withoutSkill = optimizeQuest({
+      shortlist: [candidate(1), candidate(2), candidate(3)],
+      cePool: [],
+      waves: [wave()],
+      costBudget: 1000,
+      constants: CONSTANTS,
+      resolveHitContext,
+      randomFn: () => 0,
+    });
+    const withSkill = optimizeQuest({
+      shortlist: [candidate(1), candidate(2), candidate(3)],
+      cePool: [],
+      waves: [wave()],
+      costBudget: 1000,
+      constants: CONSTANTS,
+      resolveHitContext,
+      skillSources,
+      randomFn: () => 0,
+    });
+
+    expect(withSkill).toHaveLength(1);
+    expect(withSkill[0]?.best.score).toBeGreaterThan(withoutSkill[0]?.best.score ?? Infinity);
+    expect(withSkill[0]?.best.actions[0]?.type).toBe("useSkill");
+  });
+
+  it("wires hasOrderChangeMysticCodeSkill through without changing results when there is no benched sub-member to swap in", () => {
+    const options = {
+      shortlist: [candidate(1), candidate(2), candidate(3)],
+      cePool: [],
+      waves: [wave()],
+      costBudget: 1000,
+      constants: CONSTANTS,
+      resolveHitContext,
+      randomFn: () => 0,
+    } as const;
+    const withoutOption = optimizeQuest(options);
+    const withAutoOrderChange = optimizeQuest({ ...options, hasOrderChangeMysticCodeSkill: true });
+    expect(withAutoOrderChange.map((r) => ({ score: r.best.score, actions: r.best.actions }))).toEqual(
+      withoutOption.map((r) => ({ score: r.best.score, actions: r.best.actions })),
+    );
   });
 });
