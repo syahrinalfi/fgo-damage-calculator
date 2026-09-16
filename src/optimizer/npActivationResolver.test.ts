@@ -92,6 +92,19 @@ function enemy(npcId: number, overrides: Partial<EnemyInstance> = {}): EnemyInst
   };
 }
 
+function trackedBuff(vals: readonly number[]) {
+  return {
+    type: "downAtk" as Buff.BuffType,
+    amount: 0,
+    ckSelfIndv: [],
+    ckOpIndv: [],
+    buffGroup: 0,
+    vals: new Set(vals),
+    turnsRemaining: null,
+    usesRemaining: null,
+  };
+}
+
 function state(enemies: readonly EnemyInstance[] = [enemy(9001)]): BattleState {
   return {
     waves: [],
@@ -208,6 +221,79 @@ describe("resolveNpAttackOption", () => {
     expect(option?.resolveForNpChainBonus?.(1).context.npDamageMultiplier).toBe(9);
   });
 
+  it("resolves damageNpStateIndividualFix from active buff classification traits", () => {
+    const damage = func({
+      funcType: Func.FuncType.DAMAGE_NP_STATE_INDIVIDUAL_FIX,
+      funcTargetType: Func.FuncTargetType.ENEMY_ALL,
+      svals: dataVals([{ Value: 3000, Target: 3011, Correction: 1500 }]),
+      svals2: dataVals([{ Value: 3000, Target: 3011, Correction: 2000 }]),
+      svals3: dataVals([{ Value: 3000, Target: 3011, Correction: 2000 }]),
+    });
+    const option = resolveNpAttackOption(
+      state([
+        enemy(9001, { activeBuffs: [trackedBuff([3011])] }),
+        enemy(9002, { activeBuffs: [trackedBuff([3012])] }),
+      ]),
+      1,
+      np({ effectFlags: ["attackEnemyAll" as NoblePhantasm.NoblePhantasmEffectFlag], npDistribution: [100], functions: [damage] }),
+      9001,
+      () => 0.5,
+    );
+    expect(option?.targetHitContexts?.map((target) => ({
+      effective: target.hitContexts[0]?.isSuperEffective,
+      modifier: target.hitContexts[0]?.superEffectiveModifier,
+    }))).toEqual([
+      { effective: true, modifier: 1.5 },
+      { effective: false, modifier: 1.5 },
+    ]);
+    expect(option?.resolveForNpChainBonus?.(1).targetHitContexts?.[0]?.hitContexts[0]?.superEffectiveModifier).toBe(2);
+  });
+
+  it("requires every listed trait for damageNpAndOrCheckIndividuality", () => {
+    const damage = func({
+      funcType: Func.FuncType.DAMAGE_NP_AND_OR_CHECK_INDIVIDUALITY,
+      funcTargetType: Func.FuncTargetType.ENEMY_ALL,
+      svals: dataVals([{ Value: 3000, Correction: 2000, AndCheckIndividualityList: [108, 1000] }]),
+      svals2: dataVals([{ Value: 3000, Correction: 2000, AndCheckIndividualityList: [108, 1000] }]),
+      svals3: dataVals([{ Value: 3000, Correction: 2000, AndCheckIndividualityList: [108, 1000] }]),
+    });
+    const option = resolveNpAttackOption(
+      state([
+        enemy(9001, { traits: new Set([108, 1000]) }),
+        enemy(9002, { traits: new Set([108]) }),
+      ]),
+      1,
+      np({ effectFlags: ["attackEnemyAll" as NoblePhantasm.NoblePhantasmEffectFlag], npDistribution: [100], functions: [damage] }),
+      9001,
+      () => 0.5,
+    );
+    expect(option?.targetHitContexts?.map((target) => target.hitContexts[0]?.isSuperEffective)).toEqual([true, false]);
+    expect(option?.context.superEffectiveModifier).toBe(2);
+  });
+
+  it("resolves damageNpRare from the enemy servant rarity", () => {
+    const damage = func({
+      funcType: Func.FuncType.DAMAGE_NP_RARE,
+      funcTargetType: Func.FuncTargetType.ENEMY_ALL,
+      svals: dataVals([{ Value: 3000, Correction: 1500, TargetRarityList: [1, 2] }]),
+      svals2: dataVals([{ Value: 3000, Correction: 1625, TargetRarityList: [1, 2] }]),
+      svals3: dataVals([{ Value: 3000, Correction: 1625, TargetRarityList: [1, 2] }]),
+    });
+    const option = resolveNpAttackOption(
+      state([
+        enemy(9001, { rarity: 1 }),
+        enemy(9002, { rarity: 3 }),
+      ]),
+      1,
+      np({ effectFlags: ["attackEnemyAll" as NoblePhantasm.NoblePhantasmEffectFlag], npDistribution: [100], functions: [damage] }),
+      9001,
+      () => 0.5,
+    );
+    expect(option?.targetHitContexts?.map((target) => target.hitContexts[0]?.isSuperEffective)).toEqual([true, false]);
+    expect(option?.context.superEffectiveModifier).toBe(1.5);
+    expect(option?.resolveForNpChainBonus?.(1).context.superEffectiveModifier).toBe(1.625);
+  });
+
   it("rejects conditional damage variants with missing condition parameters", () => {
     const individualWithoutTarget = func({
       funcType: Func.FuncType.DAMAGE_NP_INDIVIDUAL,
@@ -223,8 +309,32 @@ describe("resolveNpAttackOption", () => {
       svals2: dataVals([{ Value: 6000 }]),
       svals3: dataVals([{ Value: 6000 }]),
     });
+    const stateIndividualWithoutTrait = func({
+      funcType: Func.FuncType.DAMAGE_NP_STATE_INDIVIDUAL_FIX,
+      funcTargetType: Func.FuncTargetType.ENEMY,
+      svals: dataVals([{ Value: 4500, Correction: 1500 }]),
+      svals2: dataVals([{ Value: 4500, Correction: 1500 }]),
+      svals3: dataVals([{ Value: 4500, Correction: 1500 }]),
+    });
+    const andTraitsWithoutList = func({
+      funcType: Func.FuncType.DAMAGE_NP_AND_OR_CHECK_INDIVIDUALITY,
+      funcTargetType: Func.FuncTargetType.ENEMY,
+      svals: dataVals([{ Value: 4500, Correction: 2000 }]),
+      svals2: dataVals([{ Value: 4500, Correction: 2000 }]),
+      svals3: dataVals([{ Value: 4500, Correction: 2000 }]),
+    });
+    const rarityWithoutList = func({
+      funcType: Func.FuncType.DAMAGE_NP_RARE,
+      funcTargetType: Func.FuncTargetType.ENEMY,
+      svals: dataVals([{ Value: 4500, Correction: 1500 }]),
+      svals2: dataVals([{ Value: 4500, Correction: 1500 }]),
+      svals3: dataVals([{ Value: 4500, Correction: 1500 }]),
+    });
     expect(resolveNpAttackOption(state(), 1, np({ functions: [individualWithoutTarget] }), 9001, () => 0.5)).toBeUndefined();
     expect(resolveNpAttackOption(state(), 1, np({ functions: [lowHpWithoutMaximumBonus] }), 9001, () => 0.5)).toBeUndefined();
+    expect(resolveNpAttackOption(state(), 1, np({ functions: [stateIndividualWithoutTrait] }), 9001, () => 0.5)).toBeUndefined();
+    expect(resolveNpAttackOption(state(), 1, np({ functions: [andTraitsWithoutList] }), 9001, () => 0.5)).toBeUndefined();
+    expect(resolveNpAttackOption(state(), 1, np({ functions: [rarityWithoutList] }), 9001, () => 0.5)).toBeUndefined();
   });
 
   it("supports a non-damaging support NP as an effect-only attack slot", () => {
