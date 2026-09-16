@@ -4,6 +4,7 @@ import type { KeyValueStorage } from "../account/rosterStore.js";
 import {
   JsonManualQuestRepository,
   manualQuestToWaves,
+  type ManualEnemyInput,
   type ManualQuestDraft,
 } from "./manualQuest.js";
 
@@ -21,8 +22,8 @@ function draft(overrides: Partial<ManualQuestDraft> = {}): ManualQuestDraft {
     region: Region.NA,
     waves: [{
       enemies: [
-        { className: "lancer", attribute: "earth", hp: 100000, traits: [200], rarity: 5 },
-        { className: "caster", attribute: "sky", hp: 50000 },
+        { className: "lancer" as ManualEnemyInput["className"], attribute: "earth" as ManualEnemyInput["attribute"], hp: 100000, traits: [200], rarity: 5 },
+        { className: "caster" as ManualEnemyInput["className"], attribute: "sky" as ManualEnemyInput["attribute"], hp: 50000 },
       ],
     }],
     ...overrides,
@@ -55,8 +56,8 @@ describe("manualQuestToWaves", () => {
   it("rejects missing waves, empty waves, too many initial enemies, and invalid HP", () => {
     expect(() => manualQuestToWaves(draft({ waves: [] }))).toThrow(/at least one wave/);
     expect(() => manualQuestToWaves(draft({ waves: [{ enemies: [] }] }))).toThrow(/1 through 3 enemies/);
-    expect(() => manualQuestToWaves(draft({ waves: [{ enemies: Array.from({ length: 4 }, () => ({ className: "saber", attribute: "human", hp: 1 })) }] }))).toThrow(/1 through 3 enemies/);
-    expect(() => manualQuestToWaves(draft({ waves: [{ enemies: [{ className: "saber", attribute: "human", hp: 0 }] }] }))).toThrow(/positive/);
+    expect(() => manualQuestToWaves(draft({ waves: [{ enemies: Array.from({ length: 4 }, (): ManualEnemyInput => ({ className: "saber" as ManualEnemyInput["className"], attribute: "human" as ManualEnemyInput["attribute"], hp: 1 })) }] }))).toThrow(/1 through 3 enemies/);
+    expect(() => manualQuestToWaves(draft({ waves: [{ enemies: [{ className: "saber" as ManualEnemyInput["className"], attribute: "human" as ManualEnemyInput["attribute"], hp: 0 }] }] }))).toThrow(/positive/);
   });
 });
 

@@ -25,5 +25,5 @@ export {
   addSupportPreset,
   removeSupportPreset,
 } from "./roster.js";
-export type { RosterRepository } from "./rosterStore.js";
-export { InMemoryRosterRepository } from "./rosterStore.js";
+export type { RosterRepository, KeyValueStorage } from "./rosterStore.js";
+export { InMemoryRosterRepository, JsonRosterRepository } from "./rosterStore.js";
