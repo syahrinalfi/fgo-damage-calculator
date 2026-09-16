@@ -24,6 +24,14 @@ export type { PartyMemberSpec, InitialBattleStateOptions } from "./battleStateBu
 export { buildInitialBattleState } from "./battleStateBuilder.js";
 export type { QuestOptimizerPreferences, QuestResultAttribution, RankedQuestCandidate } from "./resultRanking.js";
 export { attributeQuestCandidate, rankQuestCandidates, selectDiverseQuestCandidates } from "./resultRanking.js";
+export type { ReliabilityConfig, ReliabilityEstimate, ReliabilityTrialOptions } from "./reliability.js";
+export {
+  MAX_RELIABILITY_TRIALS,
+  createSeededRandom,
+  estimateClearReliability,
+  estimateQuestCandidateReliability,
+  validateReliabilityConfig,
+} from "./reliability.js";
 export type { ServantCandidate, QuestOptimizerOptions, QuestOptimizerCandidate } from "./questOptimizer.js";
 export type { MinimumTurnOptimizerOptions, MinimumTurnOptimizerResult } from "./questOptimizer.js";
 export { optimizeQuest, optimizeQuestMinimumTurns } from "./questOptimizer.js";

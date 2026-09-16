@@ -26,6 +26,7 @@ import {
   type QuestOptimizerPreferences,
   type RankedQuestCandidate,
 } from "./resultRanking.js";
+import { createSeededRandom, estimateQuestCandidateReliability, validateReliabilityConfig, type ReliabilityConfig } from "./reliability.js";
 
 /** One shortlisted servant a caller wants the search to consider fielding — not yet tied to a CE or front-line/bench role, both decided per enumerated combination. */
 export interface ServantCandidate {
@@ -381,6 +382,8 @@ export interface MinimumTurnOptimizerOptions extends Omit<QuestOptimizerOptions,
   /** Progressive widening stops at this many damage dealers. Defaults to the largest fieldable party. */
   readonly maxAttackers?: number;
   readonly maxResults?: number;
+  /** Optional seeded finalist replay. Omit to skip the additional probability pass. */
+  readonly reliability?: ReliabilityConfig;
 }
 
 export interface MinimumTurnOptimizerResult {
@@ -392,24 +395,43 @@ export interface MinimumTurnOptimizerResult {
 
 /** Iterative-deepening Clear Quest search. Three turns is only a preset; the first actual full-quest clear wins, bounded by the product's 6-turn offensive-only cap. */
 export function optimizeQuestMinimumTurns(options: MinimumTurnOptimizerOptions): MinimumTurnOptimizerResult {
-  const { maxTurns = 6, maxAttackers = FRONT_LINE_SERVANT_COUNT + (options.maxBenchCount ?? 0), maxResults = 5, ...questOptions } = options;
+  const {
+    maxTurns = 6,
+    maxAttackers = FRONT_LINE_SERVANT_COUNT + (options.maxBenchCount ?? 0),
+    maxResults = 5,
+    reliability,
+    ...questOptions
+  } = options;
   if (!Number.isInteger(maxTurns) || maxTurns < 1 || maxTurns > 6) {
     throw new RangeError(`maxTurns must be an integer from 1 through 6, got ${maxTurns}`);
   }
   if (!Number.isInteger(maxAttackers) || maxAttackers < 1) {
     throw new RangeError(`maxAttackers must be a positive integer, got ${maxAttackers}`);
   }
+  if (reliability !== undefined) validateReliabilityConfig(reliability);
+  const searchRandomFn = questOptions.randomFn ?? (reliability === undefined ? undefined : createSeededRandom(reliability.seed));
   let closest: readonly QuestOptimizerCandidate[] = [];
   for (let turnCount = 1; turnCount <= maxTurns; turnCount += 1) {
     for (let attackerLimit = 1; attackerLimit <= maxAttackers; attackerLimit += 1) {
-      const candidates = optimizeQuest({ ...questOptions, turnCount, maxAttackerCount: attackerLimit });
+      const candidates = optimizeQuest({
+        ...questOptions,
+        ...(searchRandomFn === undefined ? {} : { randomFn: searchRandomFn }),
+        turnCount,
+        maxAttackerCount: attackerLimit,
+      });
       const cleared = candidates.filter((candidate) => isQuestCleared(candidate.best.finalState));
       if (cleared.length > 0) {
+        const evaluated = reliability === undefined
+          ? cleared
+          : cleared.map((candidate) => ({
+              ...candidate,
+              reliability: estimateQuestCandidateReliability(candidate, options.constants, reliability),
+            }));
         return {
           minimumTurns: turnCount,
           searchedThroughTurn: turnCount,
           attackerLimitUsed: attackerLimit,
-          candidates: selectDiverseQuestCandidates(cleared, options.preferences, maxResults),
+          candidates: selectDiverseQuestCandidates(evaluated, options.preferences, maxResults),
         };
       }
       if (attackerLimit === maxAttackers) closest = candidates;

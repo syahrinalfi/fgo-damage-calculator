@@ -731,6 +731,8 @@ describe("optimizeQuestMinimumTurns", () => {
     } as const;
     expect(() => optimizeQuestMinimumTurns({ ...base, maxTurns: 0 })).toThrow(RangeError);
     expect(() => optimizeQuestMinimumTurns({ ...base, maxTurns: 7 })).toThrow(RangeError);
+    expect(() => optimizeQuestMinimumTurns({ ...base, reliability: { trialCount: 0, seed: 1 } })).toThrow(RangeError);
+    expect(() => optimizeQuestMinimumTurns({ ...base, reliability: { trialCount: 1, seed: 1.5 } })).toThrow(RangeError);
   });
 
   it("stops at the first horizon that clears every configured wave", () => {
@@ -773,6 +775,27 @@ describe("optimizeQuestMinimumTurns", () => {
     expect(result.candidates.every((candidate) => candidate.attribution.attackerIds.length > 0)).toBe(true);
     expect(result.candidates.every((candidate) => candidate.attribution.primaryAttackerId !== undefined)).toBe(true);
     expect(new Set(result.candidates.map((candidate) => candidate.strategyKey)).size).toBe(result.candidates.length);
+  });
+
+  it("estimates finalist reliability with reproducible seeded trials", () => {
+    const target = waveEnemy({ hp: 1 });
+    const options = {
+      shortlist: [candidate(1), candidate(2), candidate(3)],
+      cePool: [],
+      waves: [wave({ initialEnemies: [target], enemyPool: [target] })],
+      costBudget: 1000,
+      constants: CONSTANTS,
+      resolveHitContext,
+      maxTurns: 1,
+      reliability: { trialCount: 8, seed: 42 },
+    } as const;
+    const first = optimizeQuestMinimumTurns(options);
+    const second = optimizeQuestMinimumTurns(options);
+    expect(first.candidates[0]?.reliability?.trialCount).toBe(8);
+    expect(first.candidates[0]?.reliability).toEqual(second.candidates[0]?.reliability);
+    expect(first.candidates.map((candidate) => candidate.strategyKey)).toEqual(
+      second.candidates.map((candidate) => candidate.strategyKey),
+    );
   });
 
   it("uses Event CE preference to choose among otherwise equivalent strategies", () => {

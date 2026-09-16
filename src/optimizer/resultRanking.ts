@@ -3,6 +3,7 @@ import type { BattleState } from "../battle/battleState.js";
 import type { BattleConstants } from "../battle/gameConstants.js";
 import { isQuestCleared } from "../battle/turnLoop.js";
 import type { PartyMemberSpec } from "./battleStateBuilder.js";
+import type { ReliabilityEstimate } from "./reliability.js";
 import { simulateActionSequence, type ActionSequenceResult, type SequenceScoreFn } from "./turnSearch.js";
 
 export interface QuestResultAttribution {
@@ -21,6 +22,7 @@ export interface RankedQuestCandidate {
   readonly attribution: QuestResultAttribution;
   /** Stable grouping key that ignores face-card order, crit RNG, and CE assignment noise. */
   readonly strategyKey: string;
+  readonly reliability?: ReliabilityEstimate;
 }
 
 export interface QuestOptimizerPreferences {
@@ -162,6 +164,13 @@ export function rankQuestCandidates(
     const bCleared = isQuestCleared(b.best.finalState);
     if (aCleared !== bCleared) return aCleared ? -1 : 1;
     if (!aCleared && a.best.score !== b.best.score) return b.best.score - a.best.score;
+    if (
+      a.reliability !== undefined &&
+      b.reliability !== undefined &&
+      a.reliability.clearProbability !== b.reliability.clearProbability
+    ) {
+      return b.reliability.clearProbability - a.reliability.clearProbability;
+    }
     if (a.attribution.attackerIds.length !== b.attribution.attackerIds.length) {
       return a.attribution.attackerIds.length - b.attribution.attackerIds.length;
     }
