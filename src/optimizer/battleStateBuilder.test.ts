@@ -1,4 +1,4 @@
-import type { CraftEssence, Servant as ServantModule } from "@atlasacademy/api-connector";
+import { Buff, Func, type CraftEssence, type Servant as ServantModule, type Skill } from "@atlasacademy/api-connector";
 import { describe, expect, it } from "vitest";
 import type { ServantBuild } from "../account/types.js";
 import type { EquippedCraftEssence } from "../battle/battleState.js";
@@ -26,6 +26,32 @@ function craftEssence(overrides: Partial<CraftEssence.CraftEssence> = {}): Craft
     cost: 12,
     ...overrides,
   } as unknown as CraftEssence.CraftEssence;
+}
+
+function passiveSkill(
+  condLimitCount: number,
+  priority: number,
+  functions: readonly Func.Func[],
+): Skill.Skill {
+  return { condLimitCount, priority, functions } as unknown as Skill.Skill;
+}
+
+function gainNp(value: number): Func.Func {
+  return {
+    funcType: Func.FuncType.GAIN_NP,
+    funcTargetType: Func.FuncTargetType.SELF,
+    svals: [{ Value: value }],
+    buffs: [],
+  } as unknown as Func.Func;
+}
+
+function selfBuff(type: Buff.BuffType, value: number): Func.Func {
+  return {
+    funcType: Func.FuncType.ADD_STATE,
+    funcTargetType: Func.FuncTargetType.SELF,
+    svals: [{ Value: value, Turn: -1, Count: -1 }],
+    buffs: [{ type, ckSelfIndv: [], ckOpIndv: [], buffGroup: 0, vals: [] }],
+  } as unknown as Func.Func;
 }
 
 function build(overrides: Partial<ServantBuild> = {}): ServantBuild {
@@ -119,5 +145,41 @@ describe("buildInitialBattleState", () => {
     const b = buildInitialBattleState(party, [wave()], { costBudget: 100, randomFn: () => 0.5 });
     expect(a.handCards).toEqual(b.handCards);
     expect(a.cardBag).toEqual(b.cardBag);
+  });
+
+  it("selects the highest CE passive tier allowed by the owned limit-break count", () => {
+    const ce = craftEssence({
+      skills: [
+        passiveSkill(0, 1, [gainNp(8000)]),
+        passiveSkill(2, 2, [gainNp(9000)]),
+        passiveSkill(4, 3, [gainNp(10000)]),
+      ],
+    });
+    const gaugeAt = (limitBreakCount: 0 | 1 | 2 | 3 | 4) => buildInitialBattleState([
+      member(1, true, { data: ce, level: 1, limitBreakCount }),
+      member(2, true),
+      member(3, true),
+    ], [wave()], { costBudget: 100 }).servants[0]?.currentNpGauge;
+
+    expect(gaugeAt(0)).toBe(8000);
+    expect(gaugeAt(1)).toBe(8000);
+    expect(gaugeAt(2)).toBe(9000);
+    expect(gaugeAt(3)).toBe(9000);
+    expect(gaugeAt(4)).toBe(10000);
+  });
+
+  it("applies supported CE passive buffs before turn 1", () => {
+    const ce = craftEssence({
+      skills: [passiveSkill(0, 1, [selfBuff(Buff.BuffType.UP_ATK, 200)])],
+    });
+    const state = buildInitialBattleState([
+      member(1, true, { data: ce, level: 1, limitBreakCount: 0 }),
+      member(2, true),
+      member(3, true),
+    ], [wave()], { costBudget: 100 });
+
+    expect(state.servants[0]?.activeBuffs).toEqual([
+      expect.objectContaining({ type: Buff.BuffType.UP_ATK, amount: 200 }),
+    ]);
   });
 });
