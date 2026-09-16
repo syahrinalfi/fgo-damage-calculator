@@ -9,7 +9,7 @@ import {
   type ServantCandidate,
 } from "./questOptimizer.js";
 
-export type UpgradeKind = "skillLevel" | "ceLevel" | "npLevel" | "npStrengthening" | "ceMlb";
+export type UpgradeKind = "skillLevel" | "ceLevel" | "npLevel" | "npStrengthening" | "ceMlb" | "ownedServantBuild";
 
 export interface UpgradeScenario {
   readonly id: string;
@@ -17,7 +17,7 @@ export interface UpgradeScenario {
   readonly kind: UpgradeKind;
   readonly servantId: number;
   /** Product effort tier: NP level-up before Interlude/Rank-Up strengthening. */
-  readonly effortTier: 1 | 2 | 3;
+  readonly effortTier: 1 | 2 | 3 | 4;
   readonly steps: number;
   readonly from?: number;
   readonly to?: number;
@@ -42,6 +42,8 @@ export interface UpgradeAdvisorReport {
 export interface UpgradeAdvisorOptions {
   readonly maxRecommendations?: number;
   readonly scenarios?: readonly UpgradeScenario[];
+  /** Actual owned roster candidates to test at natural-max build potential; NP and append investment stay account-accurate. */
+  readonly ownedServantCandidates?: readonly ServantCandidate[];
   readonly evaluate?: (options: MinimumTurnOptimizerOptions) => MinimumTurnOptimizerResult;
 }
 
@@ -267,13 +269,108 @@ function strengtheningScenarios(options: MinimumTurnOptimizerOptions): readonly 
   });
 }
 
+function potentialStrengtheningKeys(candidate: ServantCandidate): string[] {
+  const noblePhantasms = candidate.niceServant.noblePhantasms ?? [];
+  const selected = candidate.build.selectedNpId === undefined
+    ? undefined
+    : noblePhantasms.find((np) => np.id === candidate.build.selectedNpId);
+  const unconditional = noblePhantasms.filter((np) => np.condQuestId === 0);
+  const baseline = selected ?? (unconditional.length === 1 ? unconditional[0] : undefined);
+  const existing = new Set(candidate.build.unlockedStrengthenings ?? []);
+  if (baseline !== undefined) {
+    for (const noblePhantasm of noblePhantasms) {
+      if (noblePhantasm.num === baseline.num && noblePhantasm.condQuestId !== 0) {
+        existing.add(npStrengtheningKey(noblePhantasm));
+      }
+    }
+  }
+  return [...existing];
+}
+
+function potentialOwnedCandidate(candidate: ServantCandidate): ServantCandidate {
+  return {
+    ...candidate,
+    build: {
+      ...candidate.build,
+      level: Math.max(candidate.build.level, candidate.niceServant.lvMax),
+      ascension: 4,
+      skillLevels: [10, 10, 10],
+      appendSkillLevels: { ...candidate.build.appendSkillLevels },
+      npLevel: candidate.build.npLevel,
+      fou: {
+        atk: Math.max(candidate.build.fou.atk, 1000),
+        hp: Math.max(candidate.build.fou.hp, 1000),
+      },
+      unlockedStrengthenings: potentialStrengtheningKeys(candidate),
+    },
+  };
+}
+
+function samePotentialBuild(current: ServantCandidate, potential: ServantCandidate): boolean {
+  return current.build.level === potential.build.level &&
+    current.build.ascension === potential.build.ascension &&
+    current.build.skillLevels.every((level, index) => level === potential.build.skillLevels[index]) &&
+    current.build.fou.atk === potential.build.fou.atk &&
+    current.build.fou.hp === potential.build.fou.hp &&
+    current.build.unlockedStrengthenings?.length === potential.build.unlockedStrengthenings?.length &&
+    (current.build.unlockedStrengthenings ?? []).every((key) => potential.build.unlockedStrengthenings?.includes(key));
+}
+
+function maximizeOwnedSkillSource(
+  sources: readonly ServantSkillSource[] | undefined,
+  servantId: number,
+): readonly ServantSkillSource[] | undefined {
+  return sources?.map((source) => source.servantId === servantId
+    ? {
+        ...source,
+        skills: source.skills.map((slot) => ({ ...slot, level: 10 as SkillLevel })) as unknown as ServantSkillSource["skills"],
+      }
+    : source);
+}
+
+function ownedServantBuildScenarios(
+  options: MinimumTurnOptimizerOptions,
+  ownedServantCandidates: readonly ServantCandidate[],
+): readonly UpgradeScenario[] {
+  const seen = new Set<number>();
+  return ownedServantCandidates.flatMap((owned): readonly UpgradeScenario[] => {
+    const servantId = owned.build.servantId;
+    if (seen.has(servantId)) return [];
+    seen.add(servantId);
+    const potential = potentialOwnedCandidate(owned);
+    const shortlistIndex = options.shortlist.findIndex((candidate) => candidate.build.servantId === servantId);
+    if (shortlistIndex >= 0 && samePotentialBuild(options.shortlist[shortlistIndex] as ServantCandidate, potential)) return [];
+    const shortlist = shortlistIndex >= 0
+      ? options.shortlist.map((candidate, index) => index === shortlistIndex ? potential : candidate)
+      : [...options.shortlist, potential];
+    const skillSources = maximizeOwnedSkillSource(options.skillSources, servantId);
+    return [{
+      id: `ownedServantBuild:${servantId}`,
+      label: `Build owned servant ${servantId} to natural-max potential while keeping NP${owned.build.npLevel}`,
+      kind: "ownedServantBuild",
+      servantId,
+      effortTier: 4,
+      steps: 1,
+      options: {
+        ...options,
+        shortlist,
+        ...(skillSources === undefined ? {} : { skillSources }),
+      },
+    }];
+  });
+}
+
 /** Generates isolated, immutable upgrade scenarios from the actual shortlisted builds. */
-export function buildUpgradeScenarios(options: MinimumTurnOptimizerOptions): readonly UpgradeScenario[] {
+export function buildUpgradeScenarios(
+  options: MinimumTurnOptimizerOptions,
+  advisorOptions: Pick<UpgradeAdvisorOptions, "ownedServantCandidates"> = {},
+): readonly UpgradeScenario[] {
   return [
     ...skillLevelScenarios(options),
     ...ceUpgradeScenarios(options),
     ...npLevelScenarios(options),
     ...strengtheningScenarios(options),
+    ...ownedServantBuildScenarios(options, advisorOptions.ownedServantCandidates ?? []),
   ];
 }
 
@@ -296,7 +393,7 @@ export function findClearUpgradeRecommendations(
     return { baseline, testedScenarioCount: 0, recommendations: [] };
   }
 
-  const scenarios = advisorOptions.scenarios ?? buildUpgradeScenarios(options);
+  const scenarios = advisorOptions.scenarios ?? buildUpgradeScenarios(options, advisorOptions);
   const recommendations = scenarios.flatMap((scenario): readonly UpgradeRecommendation[] => {
     const result = evaluate(scenario.options);
     return result.minimumTurns === null ? [] : [{ ...scenario, result }];
