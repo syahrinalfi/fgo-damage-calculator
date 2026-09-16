@@ -4,6 +4,7 @@ import { allocateCritStars } from "../battle/critStarLottery.js";
 import { drawCardBagHand } from "../battle/cardBag.js";
 import { buildCombinedCardDeck } from "../battle/cardDeck.js";
 import { buildEnemyInstance, buildServantInstance, type BattleState, type EquippedCraftEssence, type HandCard } from "../battle/battleState.js";
+import { applyCraftEssencePassives } from "../battle/craftEssencePassive.js";
 import type { Wave } from "../quest/types.js";
 
 /**
@@ -55,7 +56,12 @@ export interface InitialBattleStateOptions {
  * party in, one `BattleState` out," independently testable without a real shortlist).
  */
 export function buildInitialBattleState(party: readonly PartyMemberSpec[], waves: readonly Wave[], options: InitialBattleStateOptions): BattleState {
-  const servants = party.map((member) => buildServantInstance(member.niceServant, member.build, member.isFrontLine, member.equippedCe));
+  const baseServants = party.map((member) => buildServantInstance(member.niceServant, member.build, member.isFrontLine, member.equippedCe));
+  const { servants, startingStars } = applyCraftEssencePassives(baseServants, party.map((member) => ({
+    servantId: member.build.servantId,
+    isFrontLine: member.isFrontLine,
+    ...(member.equippedCe === undefined ? {} : { equippedCe: member.equippedCe }),
+  })));
   const costSpent = party.reduce((sum, member) => sum + member.niceServant.cost + (member.equippedCe?.data.cost ?? 0), 0);
   const initialWave = waves[0];
   const enemies = initialWave === undefined ? [] : initialWave.initialEnemies.map(buildEnemyInstance);
@@ -63,7 +69,7 @@ export function buildInitialBattleState(party: readonly PartyMemberSpec[], waves
   const randomFn = options.randomFn ?? Math.random;
   const fullDeck = buildCombinedCardDeck(servants);
   const { hand, nextBag } = drawCardBagHand<HandCard>([], fullDeck, 5, randomFn);
-  const handCardStars = allocateCritStars(hand, servants, 0, randomFn);
+  const handCardStars = allocateCritStars(hand, servants, startingStars, randomFn);
 
   return {
     waves,
