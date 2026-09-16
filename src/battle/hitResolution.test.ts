@@ -175,6 +175,27 @@ describe("resolveHit", () => {
     expect(result.starDropChance).toBeGreaterThan(0);
   });
 
+  it("ignoreDefense bypasses DEF-up but remains blocked by Evade", () => {
+    const defenseUp = makeBuff({ type: "upDefence" as ActiveBuffInstance["type"], amount: 500 });
+    const defender = makeUnit({ activeBuffs: [defenseUp] });
+    const defended = resolveHit(makeUnit(), defender, 100_000, 100_000, CONSTANTS, CONTEXT);
+    const pierced = resolveHit(makeUnit(), defender, 100_000, 100_000, CONSTANTS, { ...CONTEXT, ignoreDefense: true });
+    const undefended = resolveHit(makeUnit(), makeUnit(), 100_000, 100_000, CONSTANTS, CONTEXT);
+    expect(pierced.damage).toBe(undefended.damage);
+    expect(pierced.damage).toBeGreaterThan(defended.damage);
+
+    const defenseDown = makeUnit({
+      activeBuffs: [makeBuff({ type: "downDefence" as ActiveBuffInstance["type"], amount: 200 })],
+    });
+    expect(resolveHit(makeUnit(), defenseDown, 100_000, 100_000, CONSTANTS, { ...CONTEXT, ignoreDefense: true }).damage)
+      .toBeGreaterThan(undefended.damage);
+
+    const evading = makeUnit({
+      activeBuffs: [defenseUp, makeBuff({ type: "avoidance" as ActiveBuffInstance["type"], buffGroup: 200 })],
+    });
+    expect(resolveHit(makeUnit(), evading, 100_000, 100_000, CONSTANTS, { ...CONTEXT, ignoreDefense: true }).damage).toBe(0);
+  });
+
   it("marks a hit Overkill when damage exceeds the defender's remaining HP, and reflects it in NP gain", () => {
     const attacker = makeUnit();
     const defender = makeUnit();

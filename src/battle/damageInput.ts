@@ -1,6 +1,6 @@
 import type { Card } from "@atlasacademy/api-connector";
 import type { DamageInput, ExtraCardChainType } from "../engine/damage.js";
-import { BUFF_ACTION_KEYS } from "./buffActionKeys.js";
+import { BUFF_ACTION_KEYS, getBuffConstant } from "./buffActionKeys.js";
 import { resolveCardTerm } from "./cardTerm.js";
 import type { BattleConstants } from "./gameConstants.js";
 import { resolveUnitActionModifier, resolveUnitFlatActionTotal } from "./modifiers.js";
@@ -36,6 +36,8 @@ export interface DamageResolutionContext {
   isBusterChain: boolean;
   /** Whether this hit is one of a Mighty Chain's 3 cards (research/06 §7.4, `CHAINBONUS_MIGHTY_ATK_RATE`) — see `DamageInput.isMightyChain`. */
   isMightyChain: boolean;
+  /** Ignore positive ordinary DEF modifiers while retaining DEF-down; does not bypass damage cut, special defense, Evade, or Invincible. */
+  ignoreDefense?: boolean;
 }
 
 /**
@@ -56,6 +58,10 @@ export function resolveDamageInput(
   const defenderContext = { holderTraits: defender.traits, targetTraits: attacker.traits };
   const cardTerm = resolveCardTerm(constants, context.card.type, context.card.position);
   const leadCardTerm = resolveCardTerm(constants, context.chainLeadCardType, 1);
+  const defensePlusTypes = getBuffConstant(constants.buff, BUFF_ACTION_KEYS.DEFENCE)?.plusTypes ?? [];
+  const defenseBuffs = context.ignoreDefense
+    ? defender.activeBuffs.filter((instance) => !defensePlusTypes.includes(instance.type))
+    : defender.activeBuffs;
 
   const cardMod =
     resolveUnitActionModifier(constants.buff, BUFF_ACTION_KEYS.COMMAND_ATK, attacker.activeBuffs, traitContext) -
@@ -87,7 +93,7 @@ export function resolveDamageInput(
     attributeModifier: resolveAttributeTriangleModifier(constants, attacker.attribute, defender.attribute),
     randomModifier: context.randomModifier,
     atkMod: resolveUnitActionModifier(constants.buff, BUFF_ACTION_KEYS.ATK, attacker.activeBuffs, traitContext),
-    defMod: resolveUnitActionModifier(constants.buff, BUFF_ACTION_KEYS.DEFENCE, defender.activeBuffs, defenderContext),
+    defMod: resolveUnitActionModifier(constants.buff, BUFF_ACTION_KEYS.DEFENCE, defenseBuffs, defenderContext),
     isCrit: context.isCrit,
     extraCardChainType: context.extraCardChainType,
     specialDefMod: resolveUnitActionModifier(

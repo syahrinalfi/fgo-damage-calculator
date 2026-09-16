@@ -146,6 +146,87 @@ describe("resolveNpAttackOption", () => {
     expect(option?.targetHitContexts?.map((target) => target.hitContexts[0]?.starEnemyServerMod)).toEqual([0.9, 1.1]);
   });
 
+  it("marks damageNpPierce hit contexts to ignore ordinary defense", () => {
+    const damage = func({
+      funcType: Func.FuncType.DAMAGE_NP_PIERCE,
+      funcTargetType: Func.FuncTargetType.ENEMY,
+      svals: dataVals([{ Value: 4500 }]),
+      svals2: dataVals([{ Value: 4500 }]),
+      svals3: dataVals([{ Value: 4500 }]),
+    });
+    const option = resolveNpAttackOption(state(), 1, np({ functions: [damage] }), 9001, () => 0.5);
+    expect(option?.context.ignoreDefense).toBe(true);
+    expect(option?.hitContexts?.every((context) => context.ignoreDefense)).toBe(true);
+  });
+
+  it("resolves damageNpIndividual super-effective damage independently per target and OC stage", () => {
+    const damage = func({
+      funcType: Func.FuncType.DAMAGE_NP_INDIVIDUAL,
+      funcTargetType: Func.FuncTargetType.ENEMY_ALL,
+      svals: dataVals([{ Value: 3000, Target: 2002, Correction: 1500 }]),
+      svals2: dataVals([{ Value: 3000, Target: 2002, Correction: 2000 }]),
+      svals3: dataVals([{ Value: 3000, Target: 2002, Correction: 2000 }]),
+    });
+    const option = resolveNpAttackOption(
+      state([
+        enemy(9001, { traits: new Set([2002]) }),
+        enemy(9002, { traits: new Set([1000]) }),
+      ]),
+      1,
+      np({ effectFlags: ["attackEnemyAll" as NoblePhantasm.NoblePhantasmEffectFlag], npDistribution: [100], functions: [damage] }),
+      9001,
+      () => 0.5,
+    );
+    expect(option?.targetHitContexts?.map((target) => ({
+      targetNpcId: target.targetNpcId,
+      isSuperEffective: target.hitContexts[0]?.isSuperEffective,
+      modifier: target.hitContexts[0]?.superEffectiveModifier,
+    }))).toEqual([
+      { targetNpcId: 9001, isSuperEffective: true, modifier: 1.5 },
+      { targetNpcId: 9002, isSuperEffective: false, modifier: 1.5 },
+    ]);
+    expect(option?.resolveForNpChainBonus?.(1).targetHitContexts?.[0]?.hitContexts[0]?.superEffectiveModifier).toBe(2);
+  });
+
+  it("scales damageNpHpratioLow linearly from the caster's current HP ratio", () => {
+    const damage = func({
+      funcType: Func.FuncType.DAMAGE_NP_HPRATIO_LOW,
+      funcTargetType: Func.FuncTargetType.ENEMY,
+      svals: dataVals([{ Value: 6000, Target: 4000 }]),
+      svals2: dataVals([{ Value: 6000, Target: 6000 }]),
+      svals3: dataVals([{ Value: 6000, Target: 6000 }]),
+    });
+    const halfHpState = { ...state(), servants: [servant({ currentHp: 7500, maxHp: 15000 })] };
+    const option = resolveNpAttackOption(
+      halfHpState,
+      1,
+      np({ npDistribution: [100], functions: [damage] }),
+      9001,
+      () => 0.5,
+    );
+    expect(option?.context.npDamageMultiplier).toBe(8);
+    expect(option?.resolveForNpChainBonus?.(1).context.npDamageMultiplier).toBe(9);
+  });
+
+  it("rejects conditional damage variants with missing condition parameters", () => {
+    const individualWithoutTarget = func({
+      funcType: Func.FuncType.DAMAGE_NP_INDIVIDUAL,
+      funcTargetType: Func.FuncTargetType.ENEMY,
+      svals: dataVals([{ Value: 4500 }]),
+      svals2: dataVals([{ Value: 4500 }]),
+      svals3: dataVals([{ Value: 4500 }]),
+    });
+    const lowHpWithoutMaximumBonus = func({
+      funcType: Func.FuncType.DAMAGE_NP_HPRATIO_LOW,
+      funcTargetType: Func.FuncTargetType.ENEMY,
+      svals: dataVals([{ Value: 6000 }]),
+      svals2: dataVals([{ Value: 6000 }]),
+      svals3: dataVals([{ Value: 6000 }]),
+    });
+    expect(resolveNpAttackOption(state(), 1, np({ functions: [individualWithoutTarget] }), 9001, () => 0.5)).toBeUndefined();
+    expect(resolveNpAttackOption(state(), 1, np({ functions: [lowHpWithoutMaximumBonus] }), 9001, () => 0.5)).toBeUndefined();
+  });
+
   it("supports a non-damaging support NP as an effect-only attack slot", () => {
     const partyCharge = func({ funcType: Func.FuncType.GAIN_NP, funcTargetType: Func.FuncTargetType.PT_ALL, svals: dataVals([{ Value: 1000 }]), svals2: dataVals([{ Value: 1000 }]), svals3: dataVals([{ Value: 1000 }]) });
     const option = resolveNpAttackOption(

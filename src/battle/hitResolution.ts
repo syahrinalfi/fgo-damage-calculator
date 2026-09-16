@@ -47,6 +47,8 @@ export interface HitResolutionContext {
   npEnemyServerMod: number;
   baseStarRate: number;
   starEnemyServerMod: number;
+  /** Inherent Ignore Defense on this attack; only positive ordinary DEF modifiers are bypassed. */
+  ignoreDefense?: boolean;
   /** Optimizer-only counterfactual replay switch: preserve gauge/star/effect sequencing while forcing this hit's damage to zero. */
   suppressDamage?: boolean;
 }
@@ -107,6 +109,7 @@ export function resolveHit(
     isNP: context.isNP,
     isBusterChain: context.isBusterChain,
     isMightyChain: context.isMightyChain,
+    ...(context.ignoreDefense === undefined ? {} : { ignoreDefense: context.ignoreDefense }),
   });
   const damage = defense.blocked || context.suppressDamage ? 0 : calculateHitDamage(damageInput);
   const isOverkill = damage > defenderHp;

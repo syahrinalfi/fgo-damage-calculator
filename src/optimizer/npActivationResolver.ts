@@ -8,6 +8,12 @@ import type { NpAttackOption, ResolvedNpAttack } from "./cardOrderCandidates.js"
 
 const IGNORED_NP_FUNCTIONS = new Set<Func.FuncType>([Func.FuncType.NONE, Func.FuncType.HASTEN_NPTURN, Func.FuncType.DISPLAY_BUFFSTRING]);
 const NP_COLORS = new Set<Card>([Card.BUSTER, Card.ARTS, Card.QUICK]);
+const DIRECT_DAMAGE_NP_FUNCTIONS = new Set<Func.FuncType>([
+  Func.FuncType.DAMAGE_NP,
+  Func.FuncType.DAMAGE_NP_PIERCE,
+  Func.FuncType.DAMAGE_NP_INDIVIDUAL,
+  Func.FuncType.DAMAGE_NP_HPRATIO_LOW,
+]);
 
 function selectedEffects(func: Func.Func, npLevel: ServantInstance["npLevel"], stage: OverchargeStage): readonly SkillEffect[] | undefined {
   if (IGNORED_NP_FUNCTIONS.has(func.funcType)) return [];
@@ -29,7 +35,7 @@ function buildResolvedAttack(
   stage: OverchargeStage,
   randomModifier: number,
 ): ResolvedNpAttack | undefined {
-  const damageEntries = np.functions.map((func, index) => ({ func, index })).filter(({ func }) => func.funcType === Func.FuncType.DAMAGE_NP);
+  const damageEntries = np.functions.map((func, index) => ({ func, index })).filter(({ func }) => DIRECT_DAMAGE_NP_FUNCTIONS.has(func.funcType));
   if (damageEntries.length > 1) return undefined;
   const damageEntry = damageEntries[0];
   const isSupport = np.effectFlags.includes("support" as NoblePhantasm.NoblePhantasmEffectFlag);
@@ -71,8 +77,18 @@ function buildResolvedAttack(
     };
   }
 
-  const rawDamage = npFunctionSvalsAt(damageEntry.func, servant.npLevel, stage)?.Value;
+  const damageValues = npFunctionSvalsAt(damageEntry.func, servant.npLevel, stage);
+  const rawDamage = damageValues?.Value;
   if (rawDamage === undefined) return undefined;
+  const isIndividualDamage = damageEntry.func.funcType === Func.FuncType.DAMAGE_NP_INDIVIDUAL;
+  const isLowHpDamage = damageEntry.func.funcType === Func.FuncType.DAMAGE_NP_HPRATIO_LOW;
+  const individualTarget = damageValues?.Target;
+  const individualCorrection = damageValues?.Correction;
+  if (isIndividualDamage && (individualTarget === undefined || individualCorrection === undefined)) return undefined;
+  const lowHpMaximumBonus = damageValues?.Target;
+  if (isLowHpDamage && lowHpMaximumBonus === undefined) return undefined;
+  const hpRatio = servant.maxHp <= 0 ? 0 : Math.min(1, Math.max(0, servant.currentHp / servant.maxHp));
+  const effectiveRawDamage = isLowHpDamage ? rawDamage + (lowHpMaximumBonus as number) * (1 - hpRatio) : rawDamage;
   const targets = targetEnemies(state, targetEnemy, damageEntry.func.funcTargetType);
   const distributionTotal = np.npDistribution.reduce((sum, rate) => sum + rate, 0);
   if (
@@ -85,18 +101,20 @@ function buildResolvedAttack(
     return undefined;
   }
   const hitRates = np.npDistribution.map((rate) => rate / 100);
+  const ignoreDefense = damageEntry.func.funcType === Func.FuncType.DAMAGE_NP_PIERCE;
   const contextsFor = (enemy: EnemyInstance) =>
     hitRates.map((hitRate) => ({
       card: { type: cardType, position: 1 },
-      npDamageMultiplier: (rawDamage / 1000) * hitRate,
+      npDamageMultiplier: (effectiveRawDamage / 1000) * hitRate,
       randomModifier,
-      isSuperEffective: false,
-      superEffectiveModifier: 1,
+      isSuperEffective: isIndividualDamage && enemy.traits.has(individualTarget as number),
+      superEffectiveModifier: isIndividualDamage ? (individualCorrection as number) / 1000 : 1,
       isNP: true,
       offensiveNPRate,
       npEnemyServerMod: enemy.serverMod.tdRate / 1000,
       baseStarRate: servant.starGen,
       starEnemyServerMod: enemy.serverMod.starRate / 1000,
+      ...(ignoreDefense ? { ignoreDefense: true } : {}),
     }));
   const targetHitContexts = targets.map((enemy) => ({ targetNpcId: enemy.npcId, hitContexts: contextsFor(enemy) }));
   const primaryContexts = targetHitContexts.find((target) => target.targetNpcId === targetEnemy.npcId)?.hitContexts;
@@ -110,7 +128,12 @@ function buildResolvedAttack(
   };
 }
 
-/** Converts one explicitly-selected NiceNp version into a mixed attack-chain option. Unsupported/partially modeled NPs return `undefined` rather than silently under-simulating. */
+/**
+ * Converts one explicitly-selected NiceNp version into a mixed attack-chain option.
+ * Supported direct damage families are ordinary damage, Ignore Defense, trait special
+ * damage, and low-HP scaling. Other/partially modeled variants return `undefined` rather
+ * than silently under-simulating.
+ */
 export function resolveNpAttackOption(
   state: BattleState,
   servantId: number,
