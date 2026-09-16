@@ -1,4 +1,5 @@
 import type { BattleState } from "../battle/battleState.js";
+import { isQuestCleared } from "../battle/turnLoop.js";
 import type { SequenceScoreFn } from "./turnSearch.js";
 
 /**
@@ -32,5 +33,17 @@ export function negativeRemainingHpAtSlot(slotIndex: number): SequenceScoreFn {
   return (finalState: BattleState, _initialState: BattleState) => {
     const enemy = finalState.enemies[slotIndex];
     return enemy === undefined ? 0 : -enemy.currentHp;
+  };
+}
+
+/** Normalized whole-quest progress in [0,1]: completed waves first, then damage progress within the active wave. */
+export function questProgress(): SequenceScoreFn {
+  return (finalState: BattleState, _initialState: BattleState) => {
+    if (finalState.waves.length === 0) return 0;
+    if (isQuestCleared(finalState)) return 1;
+    const maxHp = finalState.enemies.reduce((sum, enemy) => sum + enemy.maxHp, 0);
+    const remainingHp = finalState.enemies.reduce((sum, enemy) => sum + Math.max(enemy.currentHp, 0), 0);
+    const activeWaveProgress = maxHp === 0 ? 0 : Math.min(1, Math.max(0, (maxHp - remainingHp) / maxHp));
+    return (finalState.currentWaveIndex + activeWaveProgress) / finalState.waves.length;
   };
 }

@@ -29,11 +29,11 @@ function colorOf(cardType: Card): "buster" | "arts" | "quick" {
 }
 
 /**
- * Classifies one turn's 3 played command cards (research/03 §3: a chain is always exactly
- * 3 non-NP cards — NPs are additive and resolved outside the chain, research/03 §6.5) into
- * its `ChainType` and Brave-Chain status. Throws if given anything other than exactly 3
- * cards, or if any card isn't a Buster/Arts/Quick type (an NP/Extra card has no chain color
- * of its own and can't itself be one of the 3 chain slots).
+ * Classifies one turn's exactly 3 selected attack slots into its `ChainType` and
+ * Brave-Chain status. A selected NP is outside the random five-card bag but still occupies
+ * one attack slot and contributes its real Arts/Buster/Quick color and owner. `Card.NP` and
+ * Extra remain invalid here: callers represent NP with its real color plus `isNp: true`,
+ * while Extra Attack is the automatic fourth action after a Brave Chain.
  *
  * `chainType` is `"mightyChain"` when the 3 cards are one of each color in any order
  * (research/06 §7.4 — order and servant don't matter for whether Mighty Chain triggers,

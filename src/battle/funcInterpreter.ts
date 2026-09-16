@@ -257,6 +257,11 @@ function selectOverchargeSvals(func: Func.Func, stage: OverchargeStage): readonl
   }
 }
 
+/** Returns one NP function's already-OC/NP-level-selected raw value object. */
+export function npFunctionSvalsAt(func: Func.Func, npLevel: NpLevel, stage: OverchargeStage): DataVal.DataVal | undefined {
+  return selectOverchargeSvals(func, stage)?.[npLevel - 1];
+}
+
 /**
  * The NP-function counterpart to `resolveSkillEffects` above (research/09 §4/§7's own
  * "still-unbuilt follow-up") — resolves every `Func` in a `NiceNp.functions[]` into the
@@ -288,8 +293,7 @@ export function resolveNpEffects(np: Pick<NoblePhantasm.NoblePhantasm, "function
   const effects: SkillEffect[] = [];
   const unmodeled: Func.FuncType[] = [];
   for (const func of np.functions) {
-    const svalsArray = selectOverchargeSvals(func, stage);
-    const svals = svalsArray?.[npLevel - 1];
+    const svals = npFunctionSvalsAt(func, npLevel, stage);
     if (svals === undefined) {
       unmodeled.push(func.funcType);
       continue;

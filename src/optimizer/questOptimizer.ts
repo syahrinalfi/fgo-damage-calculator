@@ -1,18 +1,20 @@
-import type { NoblePhantasm, Servant as ServantModule } from "@atlasacademy/api-connector";
+import { Card, type NoblePhantasm, type Servant as ServantModule } from "@atlasacademy/api-connector";
 import type { ServantBuild } from "../account/types.js";
-import type { BattleState, EquippedCraftEssence, HandCard } from "../battle/battleState.js";
+import type { BattleState, EnemyInstance, EquippedCraftEssence, HandCard } from "../battle/battleState.js";
 import type { Action, DerivedHitContext } from "../battle/action.js";
 import type { BattleConstants } from "../battle/gameConstants.js";
 import { FRONT_LINE_SERVANT_COUNT } from "../battle/cardDeck.js";
 import { resolveCardHitContext } from "../battle/hitContextResolver.js";
 import { resolveOrderChangeSwapOptions } from "../battle/orderChangeSwapResolver.js";
 import { resolveSkillActivationOptions, type ServantSkillSource } from "../battle/skillActivationResolver.js";
+import { isQuestCleared } from "../battle/turnLoop.js";
 import type { Wave } from "../quest/types.js";
 import { buildInitialBattleState, type PartyMemberSpec } from "./battleStateBuilder.js";
 import { enumerateCeAssignments, enumeratePartyFormations } from "./candidateGeneration.js";
-import { buildCardOrderCandidates } from "./cardOrderCandidates.js";
+import { buildAttackChainCandidates, type NpAttackOption } from "./cardOrderCandidates.js";
+import { resolveNpAttackOption } from "./npActivationResolver.js";
 import { searchMultiTurnActionSequences, type MultiTurnResult } from "./multiTurnSearch.js";
-import { damageDealtAtSlot } from "./objectives.js";
+import { questProgress } from "./objectives.js";
 import { buildOrderChangeCandidates, type OrderChangeSwap } from "./orderChangeCandidates.js";
 import { buildSkillAndCardOrderCandidates, type SkillActivation } from "./skillUsageCandidates.js";
 import { searchBestActionSequence, type ActionSequenceCandidate, type ActionSequenceResult, type SequenceScoreFn } from "./turnSearch.js";
@@ -73,6 +75,10 @@ export interface QuestOptimizerOptions {
    * without the skill-usage axis at all, unchanged from before either option existed.
    */
   readonly skillSources?: readonly ServantSkillSource[];
+  /** Caller-resolved NP cards available to the three-slot attack-chain search. Return the servant's chosen NP version even before charge skills resolve; unavailable no-charge branches are pruned by the simulator while charged branches remain searchable. */
+  readonly resolveNpOptions?: (state: BattleState, targetEnemy: EnemyInstance) => readonly NpAttackOption[];
+  /** Explicit selected NiceNp version per servant for the automatic NP resolver. This never guesses strengthening availability; account/UI code must choose the version matching the user's unlocked state. Ignored when `resolveNpOptions` is supplied. */
+  readonly npByServantId?: (servantId: number) => NoblePhantasm.NoblePhantasm | undefined;
   /** Passthrough for the automatic skill-usage resolver's own `defaultTargetServantId` config — see that resolver's doc comment. Ignored unless `skillSources` is actually used (i.e. `resolveSkillOptions` is omitted). */
   readonly defaultTargetServantId?: (actingServantId: number) => number;
   /**
@@ -128,9 +134,9 @@ export interface QuestOptimizerOptions {
    * greedy score would be wrong for exactly the scenario this option exists for.
    */
   readonly turnCount?: number;
-  /** Which of `initialState.enemies` the default `damageDealtAtSlot` objective targets and every combination's `playCard` `Action`s attack — defaults to `0` (the first/only enemy). */
+  /** Initially selected enemy slot. Omit to use the rightmost living slot (view order 1..N, fallback priority N..1) on every wave. */
   readonly targetEnemySlotIndex?: number;
-  /** Overrides the default `damageDealtAtSlot(targetEnemySlotIndex)` objective. */
+  /** Overrides the default normalized whole-quest progress objective. */
   readonly scoreFn?: SequenceScoreFn;
   readonly commandSealsRemaining?: number;
   readonly fieldTraits?: ReadonlySet<number>;
@@ -189,8 +195,7 @@ export function optimizeQuest(options: QuestOptimizerOptions): readonly QuestOpt
     throw new RangeError("optimizeQuest requires either options.resolveHitContext or options.npGainByServantId to be supplied");
   }
 
-  const targetSlot = options.targetEnemySlotIndex ?? 0;
-  const scoreFn = options.scoreFn ?? damageDealtAtSlot(targetSlot);
+  const scoreFn = options.scoreFn ?? questProgress();
   const randomFn = options.randomFn ?? Math.random;
 
   // Each optional axis prefers an explicit caller-supplied resolver over its raw-data
@@ -254,7 +259,10 @@ export function optimizeQuest(options: QuestOptimizerOptions): readonly QuestOpt
       // once with `initialState` itself, so behavior is unchanged from before this option
       // existed.
       const buildCandidatesForState = (state: BattleState): readonly ActionSequenceCandidate[] => {
-        const targetEnemy = state.enemies[targetSlot];
+        const configuredTarget = options.targetEnemySlotIndex === undefined ? undefined : state.enemies[options.targetEnemySlotIndex];
+        const targetEnemy = configuredTarget?.currentHp !== undefined && configuredTarget.currentHp > 0
+          ? configuredTarget
+          : [...state.enemies].reverse().find((enemy) => enemy.currentHp > 0);
         if (targetEnemy === undefined) return [];
 
         // Prefers the explicit `resolveHitContext` over the raw-data auto path — same
@@ -271,9 +279,26 @@ export function optimizeQuest(options: QuestOptimizerOptions): readonly QuestOpt
             return resolveCardHitContext(handCard, actingServant, npGainByServantId(handCard.servantId), targetEnemy, randomFn);
           });
 
-        const buildForHand = (hand: BattleState["handCards"]): ReturnType<typeof buildCardOrderCandidates> => {
+        const buildForHand = (hand: BattleState["handCards"]): ReturnType<typeof buildAttackChainCandidates> => {
           const contextTemplates = hand.map(resolveHitContext);
-          const cardCandidates = buildCardOrderCandidates(hand, contextTemplates, targetEnemy.npcId);
+          const npOptions =
+            options.resolveNpOptions?.(state, targetEnemy) ??
+            (options.npByServantId === undefined
+              ? []
+              : state.servants.flatMap((servant) => {
+                  if (!servant.isFrontLine) return [];
+                  const np = options.npByServantId?.(servant.servantId);
+                  if (np === undefined) return [];
+                  const resolved = resolveNpAttackOption(state, servant.servantId, np, targetEnemy.npcId, randomFn);
+                  return resolved === undefined ? [] : [resolved];
+                }));
+          const cardCandidates = buildAttackChainCandidates(
+            hand,
+            contextTemplates,
+            npOptions,
+            targetEnemy.npcId,
+            (servantId) => resolveHitContext({ card: Card.EXTRA, servantId }),
+          );
           return resolveSkillOptionsFn === undefined ? cardCandidates : buildSkillAndCardOrderCandidates(resolveSkillOptionsFn(state), cardCandidates);
         };
         return resolveOrderChangeOptionsFn === undefined
@@ -305,4 +330,32 @@ export function optimizeQuest(options: QuestOptimizerOptions): readonly QuestOpt
   }
 
   return results.sort((a, b) => b.best.score - a.best.score);
+}
+
+export interface MinimumTurnOptimizerOptions extends Omit<QuestOptimizerOptions, "turnCount"> {
+  readonly maxTurns?: number;
+}
+
+export interface MinimumTurnOptimizerResult {
+  readonly minimumTurns: number | null;
+  readonly searchedThroughTurn: number;
+  readonly candidates: readonly QuestOptimizerCandidate[];
+}
+
+/** Iterative-deepening Clear Quest search. Three turns is only a preset; the first actual full-quest clear wins, bounded by the product's 6-turn offensive-only cap. */
+export function optimizeQuestMinimumTurns(options: MinimumTurnOptimizerOptions): MinimumTurnOptimizerResult {
+  const { maxTurns = 6, ...questOptions } = options;
+  if (!Number.isInteger(maxTurns) || maxTurns < 1 || maxTurns > 6) {
+    throw new RangeError(`maxTurns must be an integer from 1 through 6, got ${maxTurns}`);
+  }
+  let closest: readonly QuestOptimizerCandidate[] = [];
+  for (let turnCount = 1; turnCount <= maxTurns; turnCount += 1) {
+    const candidates = optimizeQuest({ ...questOptions, turnCount });
+    const cleared = candidates.filter((candidate) => isQuestCleared(candidate.best.finalState));
+    if (cleared.length > 0) {
+      return { minimumTurns: turnCount, searchedThroughTurn: turnCount, candidates: cleared };
+    }
+    closest = candidates;
+  }
+  return { minimumTurns: null, searchedThroughTurn: maxTurns, candidates: closest };
 }

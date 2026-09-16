@@ -50,8 +50,8 @@ function npGainKeyForCard(card: Card): keyof NoblePhantasm.NoblePhantasmGain | n
  *   a per-class table). Caller supplies the acting servant's own NP's `npGain` object
  *   (`NoblePhantasm.NoblePhantasmGain`) since `ServantInstance` itself doesn't carry NP data.
  * - `npEnemyServerMod`/`starEnemyServerMod`: `targetEnemy.serverMod.tdRate`/`.starRate`
- *   (research/08 §1 — a real, per-quest, per-enemy server-supplied multiplier; `EnemyInstance`
- *   gained a `serverMod` field alongside this resolver, since nothing previously read it).
+ *   divided by 1000 (research/08 §1 — Atlas stores these per-mille while engine formulas
+ *   consume decimal multipliers; `EnemyInstance` retains the raw server values).
  * - `baseStarRate`: `actingServant.starGen` (research/03 §5.1 — `NiceServant.starGen`,
  *   `ServantInstance` gained this field alongside this resolver too, since nothing previously
  *   needed it).
@@ -83,8 +83,8 @@ export function resolveCardHitContext(
     superEffectiveModifier: 1,
     isNP: false,
     offensiveNPRate,
-    npEnemyServerMod: targetEnemy.serverMod.tdRate,
+    npEnemyServerMod: targetEnemy.serverMod.tdRate / 1000,
     baseStarRate: actingServant.starGen,
-    starEnemyServerMod: targetEnemy.serverMod.starRate,
+    starEnemyServerMod: targetEnemy.serverMod.starRate / 1000,
   };
 }

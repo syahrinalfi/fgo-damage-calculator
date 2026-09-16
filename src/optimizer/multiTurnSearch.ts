@@ -1,4 +1,5 @@
 import type { Action } from "../battle/action.js";
+import { ActionUnavailableError } from "../battle/actionError.js";
 import type { BattleState } from "../battle/battleState.js";
 import type { BattleConstants } from "../battle/gameConstants.js";
 import { resolveAction } from "../battle/turnLoop.js";
@@ -76,7 +77,13 @@ export function searchMultiTurnActionSequences(
     const candidates = buildCandidatesForTurn(state, turnIndex);
     const results: MultiTurnResult[] = [];
     for (const candidate of candidates) {
-      const stateAfterActions = simulateActionSequence(state, candidate.actions, constants, randomFn);
+      let stateAfterActions: BattleState;
+      try {
+        stateAfterActions = simulateActionSequence(state, candidate.actions, constants, randomFn);
+      } catch (error) {
+        if (error instanceof ActionUnavailableError) continue;
+        throw error;
+      }
       const stateAfterTurn = resolveAction(stateAfterActions, { type: "endTurn" }, constants, randomFn);
       const nextLabel = label === "" ? candidate.label : `${label}>>${candidate.label}`;
       results.push(...expand(stateAfterTurn, turnIndex + 1, [...chosenTurnActions, candidate.actions], nextLabel));

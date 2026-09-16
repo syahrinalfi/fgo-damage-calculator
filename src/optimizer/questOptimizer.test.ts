@@ -5,9 +5,11 @@ import type { BattleState, HandCard } from "../battle/battleState.js";
 import { BUFF_ACTION_KEYS } from "../battle/buffActionKeys.js";
 import type { BattleConstants } from "../battle/gameConstants.js";
 import type { ServantSkillSource } from "../battle/skillActivationResolver.js";
+import { isQuestCleared } from "../battle/turnLoop.js";
 import type { ServantBuild } from "../account/types.js";
 import type { Wave, WaveEnemy } from "../quest/types.js";
-import { optimizeQuest, type ServantCandidate } from "./questOptimizer.js";
+import { optimizeQuest, optimizeQuestMinimumTurns, type ServantCandidate } from "./questOptimizer.js";
+import type { NpAttackOption } from "./cardOrderCandidates.js";
 import type { SkillActivation } from "./skillUsageCandidates.js";
 
 function niceServant(overrides: Partial<ServantModule.Servant> = {}): ServantModule.Servant {
@@ -87,6 +89,7 @@ const CARD_CONSTANTS = {
   "1": cardPositionEntries({ adjustAtk: 300, adjustTdGauge: 3000, adjustCritical: 1000 }),
   "2": cardPositionEntries({ adjustAtk: 1200, adjustTdGauge: 1000, adjustCritical: 1400 }),
   "3": cardPositionEntries({ adjustAtk: 800, adjustTdGauge: 1000, adjustCritical: 1000 }),
+  "4": cardPositionEntries({ adjustAtk: 1000, adjustTdGauge: 1000, adjustCritical: 1000 }),
 } as unknown as CardDetail.CardConstantMap;
 
 const CONSTANTS: BattleConstants = {
@@ -126,6 +129,23 @@ describe("optimizeQuest", () => {
     expect(results).toHaveLength(1);
     expect(results[0]?.party).toHaveLength(3);
     expect(results[0]?.best.score).toBeGreaterThan(0);
+  });
+
+  it("targets the rightmost enemy slot by default", () => {
+    const left = waveEnemy({ npcId: 9001 });
+    const middle = waveEnemy({ npcId: 9002 });
+    const right = waveEnemy({ npcId: 9003 });
+    const results = optimizeQuest({
+      shortlist: [candidate(1), candidate(2), candidate(3)],
+      cePool: [],
+      waves: [wave({ initialEnemies: [left, middle, right], enemyPool: [left, middle, right] })],
+      costBudget: 1000,
+      constants: CONSTANTS,
+      resolveHitContext,
+      randomFn: () => 0,
+    });
+    const firstAttack = results[0]?.best.actions.find((action) => action.type === "playCard" || action.type === "castNp");
+    expect(firstAttack?.targetNpcId).toBe(9003);
   });
 
   it("tries every 3-of-4 servant subset (C(4,3) = 4) and ranks them descending by score", () => {
@@ -224,6 +244,95 @@ describe("optimizeQuest", () => {
     expect(withSkill).toHaveLength(1);
     expect(withSkill[0]?.best.score).toBeGreaterThan(withoutSkill[0]?.best.score ?? Infinity);
     expect(withSkill[0]?.best.actions[0]?.type).toBe("useSkill");
+  });
+
+  it("finds a legal charge-skill into NP line while pruning the same NP without enough gauge", () => {
+    const resolveSkillOptions = (initialState: BattleState): readonly SkillActivation[] => {
+      const actor = initialState.servants[0];
+      if (actor === undefined) return [];
+      return [
+        {
+          type: "useSkill",
+          servantId: actor.servantId,
+          skillSlot: 1,
+          effects: [{ kind: "gainNp", rawAmount: 10000, targetType: "self" }],
+          cooldownTurns: 5,
+        },
+      ];
+    };
+    const resolveNpOptions = (state: BattleState): readonly NpAttackOption[] => {
+      const actor = state.servants[0];
+      if (actor === undefined) return [];
+      return [
+        {
+          servantId: actor.servantId,
+          cardType: "2" as Card,
+          context: { ...resolveHitContext({ card: "2" as Card, servantId: actor.servantId }), isNP: true, npDamageMultiplier: 100 },
+          targetNpcIds: [9001],
+          label: `NP:${actor.servantId}`,
+        },
+      ];
+    };
+
+    const results = optimizeQuest({
+      shortlist: [candidate(1), candidate(2), candidate(3)],
+      cePool: [],
+      waves: [wave()],
+      costBudget: 1000,
+      constants: CONSTANTS,
+      resolveHitContext,
+      resolveSkillOptions,
+      resolveNpOptions,
+      randomFn: () => 0,
+    });
+
+    expect(results[0]?.best.actions[0]?.type).toBe("useSkill");
+    expect(results[0]?.best.actions.some((action) => action.type === "castNp")).toBe(true);
+  });
+
+  it("auto-resolves a selected raw NiceNp through npByServantId", () => {
+    const damageFunc = {
+      funcId: 1,
+      funcType: Func.FuncType.DAMAGE_NP,
+      funcTargetType: Func.FuncTargetType.ENEMY,
+      funcTargetTeam: Func.FuncTargetTeam.ENEMY,
+      functvals: [],
+      funcquestTvals: [],
+      overWriteTvalsList: [],
+      funcPopupText: "",
+      buffs: [],
+      svals: [{ Value: 100000 }],
+      svals2: [{ Value: 100000 }],
+      svals3: [{ Value: 100000 }],
+    } as unknown as Func.Func;
+    const selectedNp = {
+      id: 1001,
+      num: 1,
+      card: "2",
+      name: "Selected NP",
+      effectFlags: ["attackEnemyOne"],
+      npGain: { buster: [50], arts: [50], quick: [50], extra: [50], defence: [50], np: [80] },
+      npDistribution: [100],
+      functions: [damageFunc],
+    } as unknown as NoblePhantasm.NoblePhantasm;
+    const resolveSkillOptions = (initialState: BattleState): readonly SkillActivation[] => {
+      const actor = initialState.servants[0];
+      return actor === undefined
+        ? []
+        : [{ type: "useSkill", servantId: actor.servantId, skillSlot: 1, effects: [{ kind: "gainNp", rawAmount: 10000, targetType: "self" }], cooldownTurns: 5 }];
+    };
+    const results = optimizeQuest({
+      shortlist: [candidate(1), candidate(2), candidate(3)],
+      cePool: [],
+      waves: [wave()],
+      costBudget: 1000,
+      constants: CONSTANTS,
+      resolveHitContext,
+      resolveSkillOptions,
+      npByServantId: () => selectedNp,
+      randomFn: () => 0.5,
+    });
+    expect(results[0]?.best.actions.some((action) => action.type === "castNp")).toBe(true);
   });
 
   it("wires resolveOrderChangeOptions through without changing results when it resolves to no available swaps", () => {
@@ -332,6 +441,28 @@ describe("optimizeQuest", () => {
     const endTurnCount = results[0]?.best.actions.filter((a) => a.type === "endTurn").length;
     expect(endTurnCount).toBe(2);
     expect(results[0]?.best.finalState.currentTurn).toBe(3);
+  });
+
+  it("carries a multi-turn search into the next wave after the current wave is cleared", () => {
+    const firstEnemy = waveEnemy({ npcId: 9001, hp: 1 });
+    const secondEnemy = waveEnemy({ npcId: 9101, hp: 1 });
+    const results = optimizeQuest({
+      shortlist: [candidate(1), candidate(2), candidate(3)],
+      cePool: [],
+      waves: [
+        wave({ waveNumber: 1, initialEnemies: [firstEnemy], enemyPool: [firstEnemy] }),
+        wave({ waveNumber: 2, initialEnemies: [secondEnemy], enemyPool: [secondEnemy] }),
+      ],
+      costBudget: 1000,
+      constants: CONSTANTS,
+      resolveHitContext,
+      turnCount: 2,
+      randomFn: () => 0,
+    });
+
+    expect(results[0]?.best.finalState.currentWaveIndex).toBe(1);
+    expect(results[0]?.best.finalState.enemies[0]).toMatchObject({ npcId: 9101, currentHp: 0 });
+    expect(isQuestCleared(results[0]?.best.finalState as BattleState)).toBe(true);
   });
 
   it("credits a multi-turn line's total damage across the whole horizon, at least as much as a single turn alone", () => {
@@ -515,5 +646,59 @@ describe("optimizeQuest", () => {
     expect(benchedFour).toBeDefined();
     expect(benchedFour?.best.actions.some((a) => a.type === "orderChange")).toBe(true);
     expect(benchedFour?.best.actions.some((a) => (a.type === "playCard" || a.type === "castNp") && a.servantId === 4)).toBe(true);
+  });
+});
+
+describe("optimizeQuestMinimumTurns", () => {
+  it("enforces the offensive-only product cap of 1 through 6 turns", () => {
+    const base = {
+      shortlist: [candidate(1), candidate(2), candidate(3)],
+      cePool: [],
+      waves: [wave()],
+      costBudget: 1000,
+      constants: CONSTANTS,
+      resolveHitContext,
+      randomFn: () => 0,
+    } as const;
+    expect(() => optimizeQuestMinimumTurns({ ...base, maxTurns: 0 })).toThrow(RangeError);
+    expect(() => optimizeQuestMinimumTurns({ ...base, maxTurns: 7 })).toThrow(RangeError);
+  });
+
+  it("stops at the first horizon that clears every configured wave", () => {
+    const firstEnemy = waveEnemy({ npcId: 9001, hp: 1 });
+    const secondEnemy = waveEnemy({ npcId: 9101, hp: 1 });
+    const result = optimizeQuestMinimumTurns({
+      shortlist: [candidate(1), candidate(2), candidate(3)],
+      cePool: [],
+      waves: [
+        wave({ waveNumber: 1, initialEnemies: [firstEnemy], enemyPool: [firstEnemy] }),
+        wave({ waveNumber: 2, initialEnemies: [secondEnemy], enemyPool: [secondEnemy] }),
+      ],
+      costBudget: 1000,
+      constants: CONSTANTS,
+      resolveHitContext,
+      maxTurns: 6,
+      randomFn: () => 0,
+    });
+    expect(result.minimumTurns).toBe(2);
+    expect(result.candidates.length).toBeGreaterThan(0);
+    expect(result.candidates.every((candidate) => isQuestCleared(candidate.best.finalState))).toBe(true);
+  });
+
+  it("returns closest max-horizon candidates when no clear exists", () => {
+    const boss = waveEnemy({ npcId: 9001, hp: 999999999 });
+    const result = optimizeQuestMinimumTurns({
+      shortlist: [candidate(1), candidate(2), candidate(3)],
+      cePool: [],
+      waves: [wave({ initialEnemies: [boss], enemyPool: [boss] })],
+      costBudget: 1000,
+      constants: CONSTANTS,
+      resolveHitContext,
+      maxTurns: 1,
+      randomFn: () => 0,
+    });
+    expect(result.minimumTurns).toBeNull();
+    expect(result.searchedThroughTurn).toBe(1);
+    expect(result.candidates.length).toBeGreaterThan(0);
   });
 });

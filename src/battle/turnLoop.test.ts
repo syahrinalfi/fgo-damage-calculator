@@ -1,6 +1,7 @@
 import { QuestEnemy as QuestEnemyModule, type Buff, type Card, type CardDetail } from "@atlasacademy/api-connector";
 import { describe, expect, it } from "vitest";
 import type { ActiveBuffInstance } from "../buffs/types.js";
+import { FULL_TD_POINT } from "../engine/constants.js";
 import type { Wave, WaveEnemy } from "../quest/types.js";
 import type { Action, DerivedHitContext } from "./action.js";
 import type { BattleState, EnemyInstance, HandCard, ServantInstance } from "./battleState.js";
@@ -24,11 +25,12 @@ import type {
   RevivalEffect,
   ShortenSkillEffect,
 } from "./skillEffect.js";
-import { resolveAction } from "./turnLoop.js";
+import { isQuestCleared, resolveAction } from "./turnLoop.js";
 
 const BUSTER = "2" as Card;
 const ARTS = "1" as Card;
 const QUICK = "3" as Card;
+const EXTRA = "4" as Card;
 const FIVE_CARD_DECK: readonly Card[] = [BUSTER, BUSTER, ARTS, ARTS, QUICK];
 
 function handCardsFor(cards: readonly Card[], servantId = 1): readonly HandCard[] {
@@ -96,12 +98,21 @@ const BUFF_CONSTANTS = {
 const CARD_CONSTANTS = {
   "1": {
     1: { individuality: [], adjustAtk: 300, adjustTdGauge: 3000, adjustCritical: 1000, addAtk: 0, addTdGauge: 0, addCritical: 0 },
+    2: { individuality: [], adjustAtk: 400, adjustTdGauge: 3000, adjustCritical: 1000, addAtk: 0, addTdGauge: 0, addCritical: 0 },
+    3: { individuality: [], adjustAtk: 500, adjustTdGauge: 3000, adjustCritical: 1000, addAtk: 0, addTdGauge: 0, addCritical: 0 },
   },
   "2": {
     1: { individuality: [], adjustAtk: 1200, adjustTdGauge: 1000, adjustCritical: 1400, addAtk: 300, addTdGauge: 0, addCritical: 50 },
+    2: { individuality: [], adjustAtk: 1400, adjustTdGauge: 1000, adjustCritical: 1400, addAtk: 0, addTdGauge: 0, addCritical: 0 },
+    3: { individuality: [], adjustAtk: 1600, adjustTdGauge: 1000, adjustCritical: 1400, addAtk: 0, addTdGauge: 0, addCritical: 0 },
   },
   "3": {
     1: { individuality: [], adjustAtk: 800, adjustTdGauge: 1000, adjustCritical: 1000, addAtk: 0, addTdGauge: 0, addCritical: 0 },
+    2: { individuality: [], adjustAtk: 960, adjustTdGauge: 1000, adjustCritical: 1000, addAtk: 0, addTdGauge: 0, addCritical: 0 },
+    3: { individuality: [], adjustAtk: 1120, adjustTdGauge: 1000, adjustCritical: 1000, addAtk: 0, addTdGauge: 0, addCritical: 0 },
+  },
+  "4": {
+    1: { individuality: [], adjustAtk: 1000, adjustTdGauge: 1000, adjustCritical: 1000, addAtk: 0, addTdGauge: 0, addCritical: 0 },
   },
   "5": {
     1: { individuality: [], adjustAtk: 1200, adjustTdGauge: 1000, adjustCritical: 0, addAtk: 300, addTdGauge: 0, addCritical: 0 },
@@ -199,6 +210,16 @@ function state(overrides: Partial<BattleState> = {}): BattleState {
     commandSealsRemaining: 3,
     mysticCodeSkillCooldowns: [0, 0, 0],
     ...overrides,
+  };
+}
+
+function npReadyState(overrides: Partial<BattleState> = {}): BattleState {
+  const base = state(overrides);
+  return {
+    ...base,
+    servants: base.servants.map((candidate) =>
+      candidate.servantId === 1 ? { ...candidate, currentNpGauge: Math.max(candidate.currentNpGauge, FULL_TD_POINT) } : candidate,
+    ),
   };
 }
 
@@ -350,7 +371,7 @@ const CARD_CONTEXT: DerivedHitContext = {
   starEnemyServerMod: 0,
 };
 
-const NP_CONTEXT: DerivedHitContext = { ...CARD_CONTEXT, card: { type: "5" as Card, position: 1 }, isNP: true };
+const NP_CONTEXT: DerivedHitContext = { ...CARD_CONTEXT, card: { type: BUSTER, position: 1 }, isNP: true };
 
 /**
  * A Mighty Chain (one of each color) across 3 *different* servants — the default `playCard`
@@ -423,6 +444,53 @@ describe("resolveAction — endTurn", () => {
     expect(result.enemies[0]?.readyToNp).toBe(false);
   });
 
+  it("advances to the next wave and builds its independent enemies when every current enemy is dead", () => {
+    const first = waveEnemy({ npcId: 9001, deck: QuestEnemyModule.DeckType.ENEMY });
+    const secondA = waveEnemy({ npcId: 9101, deck: QuestEnemyModule.DeckType.ENEMY, hp: 80000, atk: 9000 });
+    const secondB = waveEnemy({ npcId: 9102, deck: QuestEnemyModule.DeckType.ENEMY, hp: 120000, atk: 11000 });
+    const result = resolveAction(
+      state({
+        waves: [
+          wave({ waveNumber: 1, initialEnemies: [first], enemyPool: [first] }),
+          wave({ waveNumber: 2, initialEnemies: [secondA, secondB], enemyPool: [secondA, secondB] }),
+        ],
+        currentWaveIndex: 0,
+        enemies: [enemy({ npcId: 9001, currentHp: 0 })],
+      }),
+      END_TURN,
+      CONSTANTS,
+      () => 0,
+    );
+
+    expect(result.currentWaveIndex).toBe(1);
+    expect(result.enemies).toHaveLength(2);
+    expect(result.enemies[0]).toMatchObject({ npcId: 9101, currentHp: 80000, maxHp: 80000, atk: 9000, currentNpTurns: 0 });
+    expect(result.enemies[1]).toMatchObject({ npcId: 9102, currentHp: 120000, maxHp: 120000, atk: 11000, currentNpTurns: 0 });
+    expect(result.currentTurn).toBe(2);
+    expect(result.servants[0]?.skillCooldowns).toEqual([2, 1, 0]);
+  });
+
+  it("does not advance waves while any active enemy remains alive", () => {
+    const firstA = waveEnemy({ npcId: 9001, deck: QuestEnemyModule.DeckType.ENEMY });
+    const firstB = waveEnemy({ npcId: 9002, deck: QuestEnemyModule.DeckType.ENEMY });
+    const second = waveEnemy({ npcId: 9101, deck: QuestEnemyModule.DeckType.ENEMY });
+    const result = resolveAction(
+      state({
+        waves: [
+          wave({ waveNumber: 1, initialEnemies: [firstA, firstB], enemyPool: [firstA, firstB] }),
+          wave({ waveNumber: 2, initialEnemies: [second], enemyPool: [second] }),
+        ],
+        enemies: [enemy({ npcId: 9001, currentHp: 0 }), enemy({ npcId: 9002, currentHp: 1 })],
+      }),
+      END_TURN,
+      CONSTANTS,
+      () => 0,
+    );
+
+    expect(result.currentWaveIndex).toBe(0);
+    expect(result.enemies.map((candidate) => candidate.npcId)).toEqual([9001, 9002]);
+  });
+
   it("draws a fresh 5-card hand from the 3 front-line servants' combined deck when the bag is empty", () => {
     const result = resolveAction(state({ cardBag: [] }), END_TURN, CONSTANTS, () => 0);
     expect(result.handCards).toHaveLength(5);
@@ -470,6 +538,48 @@ describe("resolveAction — endTurn", () => {
   it("does not carry the previous turn's activeCritChanceBonus forward when nothing new was earned", () => {
     const result = resolveAction(state({ activeCritChanceBonus: 0.2, critChanceBonusCarried: 0 }), END_TURN, CONSTANTS, () => 0);
     expect(result.activeCritChanceBonus).toBe(0);
+  });
+});
+
+describe("isQuestCleared", () => {
+  it("returns true only when the final wave exists and every active enemy is dead", () => {
+    const finalEnemy = waveEnemy({ npcId: 9001, deck: QuestEnemyModule.DeckType.ENEMY });
+    expect(
+      isQuestCleared(
+        state({
+          waves: [wave({ waveNumber: 1, initialEnemies: [finalEnemy], enemyPool: [finalEnemy] })],
+          currentWaveIndex: 0,
+          enemies: [enemy({ npcId: 9001, currentHp: 0 })],
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      isQuestCleared(
+        state({
+          waves: [wave({ waveNumber: 1, initialEnemies: [finalEnemy], enemyPool: [finalEnemy] })],
+          currentWaveIndex: 0,
+          enemies: [enemy({ npcId: 9001, currentHp: 1 })],
+        }),
+      ),
+    ).toBe(false);
+    expect(isQuestCleared(state({ waves: [], enemies: [] }))).toBe(false);
+  });
+
+  it("does not treat a cleared intermediate wave as a cleared quest", () => {
+    const first = waveEnemy({ npcId: 9001, deck: QuestEnemyModule.DeckType.ENEMY });
+    const second = waveEnemy({ npcId: 9101, deck: QuestEnemyModule.DeckType.ENEMY });
+    expect(
+      isQuestCleared(
+        state({
+          waves: [
+            wave({ waveNumber: 1, initialEnemies: [first], enemyPool: [first] }),
+            wave({ waveNumber: 2, initialEnemies: [second], enemyPool: [second] }),
+          ],
+          currentWaveIndex: 0,
+          enemies: [enemy({ npcId: 9001, currentHp: 0 })],
+        }),
+      ),
+    ).toBe(false);
   });
 });
 
@@ -789,44 +899,114 @@ describe("resolveAction — playCard", () => {
 });
 
 describe("resolveAction — castNp", () => {
-  const action: Action = { type: "castNp", servantId: 1, targetNpcId: 9001, context: NP_CONTEXT };
+  const action: Action = {
+    type: "castNp",
+    servantId: 1,
+    targetNpcId: 9001,
+    context: NP_CONTEXT,
+    chainCards: [{ type: BUSTER, servantId: 1, isNp: true }, { type: ARTS, servantId: 2 }, { type: QUICK, servantId: 3 }],
+    chainPosition: 1,
+  };
+
+  it("rejects an NP cast when the acting servant has less than 100% gauge", () => {
+    expect(() =>
+      resolveAction(
+        state({ servants: [servant({ servantId: 1, currentNpGauge: FULL_TD_POINT - 1 }), servant({ servantId: 2 }), servant({ servantId: 3 })] }),
+        action,
+        CONSTANTS,
+      ),
+    ).toThrow(RangeError);
+  });
 
   it("deals damage without touching the hand, and increments consecutiveNpChainCount", () => {
-    const result = resolveAction(state({ consecutiveNpChainCount: 1 }), action, CONSTANTS);
+    const result = resolveAction(npReadyState({ consecutiveNpChainCount: 1 }), action, CONSTANTS);
     const targetEnemy = result.enemies.find((e) => e.npcId === 9001);
     expect(targetEnemy?.currentHp).toBeLessThan(50000);
     expect(result.handCards).toEqual(FIVE_CARD_HAND);
     expect(result.consecutiveNpChainCount).toBe(2);
   });
 
-  it("fully resets the caster's NP gauge to 0, regardless of leftover amount", () => {
-    const result = resolveAction(
+  it("applies chain-completion bonuses when an NP occupies the third attack slot", () => {
+    const artsNpLast: Action = {
+      ...action,
+      context: { ...NP_CONTEXT, card: { type: ARTS, position: 1 } },
+      chainCards: [{ type: ARTS, servantId: 2 }, { type: ARTS, servantId: 3 }, { type: ARTS, servantId: 1, isNp: true }],
+      chainPosition: 3,
+    };
+    const result = resolveAction(npReadyState(), artsNpLast, CONSTANTS);
+    expect(result.servants.find((candidate) => candidate.servantId === 2)?.currentNpGauge).toBe(FULL_TD_POINT * 0.2);
+    expect(result.servants.find((candidate) => candidate.servantId === 3)?.currentNpGauge).toBe(FULL_TD_POINT * 0.2);
+  });
+
+  it("consumes the pre-cast gauge first, then preserves refund generated by the NP hit", () => {
+    const atExactly100 = resolveAction(npReadyState(), action, CONSTANTS);
+    const above100 = resolveAction(
       state({ servants: [servant({ servantId: 1, npLevel: 2, currentNpGauge: 14000 }), servant({ servantId: 2 }), servant({ servantId: 3 })] }),
       action,
       CONSTANTS,
     );
-    const actingServant = result.servants.find((s) => s.servantId === 1);
-    expect(actingServant?.currentNpGauge).toBe(0);
+    const exactRefund = atExactly100.servants.find((candidate) => candidate.servantId === 1)?.currentNpGauge ?? 0;
+    const aboveRefund = above100.servants.find((candidate) => candidate.servantId === 1)?.currentNpGauge ?? 0;
+    expect(exactRefund).toBeGreaterThan(0);
+    expect(aboveRefund).toBe(exactRefund);
+  });
+
+  it("applies an AoE NP's damage to every listed target", () => {
+    const aoeAction: Action = { ...action, targetNpcIds: [9001, 9002] };
+    const result = resolveAction(
+      npReadyState({ enemies: [enemy({ npcId: 9001, currentHp: 50000 }), enemy({ npcId: 9002, currentHp: 30000 })] }),
+      aoeAction,
+      CONSTANTS,
+    );
+    expect(result.enemies.find((candidate) => candidate.npcId === 9001)?.currentHp).toBeLessThan(50000);
+    expect(result.enemies.find((candidate) => candidate.npcId === 9002)?.currentHp).toBeLessThan(30000);
+  });
+
+  it("resolves every NP hit separately so later-hit Overkill and refund are retained", () => {
+    const singleHit = resolveAction(npReadyState(), action, CONSTANTS);
+    const twoHitAction: Action = {
+      ...action,
+      hitContexts: [
+        { ...NP_CONTEXT, npDamageMultiplier: NP_CONTEXT.npDamageMultiplier / 2 },
+        { ...NP_CONTEXT, npDamageMultiplier: NP_CONTEXT.npDamageMultiplier / 2 },
+      ],
+    };
+    const twoHits = resolveAction(npReadyState(), twoHitAction, CONSTANTS);
+    const singleRefund = singleHit.servants.find((candidate) => candidate.servantId === 1)?.currentNpGauge ?? 0;
+    const twoHitRefund = twoHits.servants.find((candidate) => candidate.servantId === 1)?.currentNpGauge ?? 0;
+    expect(twoHitRefund).toBeGreaterThan(singleRefund);
+  });
+
+  it("applies pre-damage NP effects after gauge consumption and preserves their gauge gain", () => {
+    const baseline = resolveAction(npReadyState(), action, CONSTANTS);
+    const withPreCharge: Action = {
+      ...action,
+      effectsBeforeDamage: [{ kind: "gainNp", rawAmount: 1000, targetType: "self" }],
+    };
+    const result = resolveAction(npReadyState(), withPreCharge, CONSTANTS);
+    const baselineGauge = baseline.servants.find((candidate) => candidate.servantId === 1)?.currentNpGauge ?? 0;
+    const resultGauge = result.servants.find((candidate) => candidate.servantId === 1)?.currentNpGauge ?? 0;
+    expect(resultGauge).toBe(baselineGauge + 1000);
   });
 
   it("throws when context.isNP is false", () => {
     const wrongFlag: Action = { ...action, context: { ...NP_CONTEXT, isNP: false } };
-    expect(() => resolveAction(state(), wrongFlag, CONSTANTS)).toThrow(RangeError);
+    expect(() => resolveAction(npReadyState(), wrongFlag, CONSTANTS)).toThrow(RangeError);
   });
 
   it("applies effects (e.g. instantDeath) after its own damage/gauge resolution, in array order", () => {
     const withEffects: Action = { ...action, effects: [instantDeathEffect({ deathRate: 600, targetType: "enemyOne" })] };
-    const succeeds = resolveAction(state(), withEffects, CONSTANTS, () => 0.5);
+    const succeeds = resolveAction(npReadyState(), withEffects, CONSTANTS, () => 0.5);
     expect(succeeds.enemies.find((e) => e.npcId === 9001)?.currentHp).toBe(0);
 
-    const fails = resolveAction(state(), withEffects, CONSTANTS, () => 0.9);
+    const fails = resolveAction(npReadyState(), withEffects, CONSTANTS, () => 0.9);
     expect(fails.enemies.find((e) => e.npcId === 9001)?.currentHp).toBeGreaterThan(0);
   });
 
   it("instantDeath with enemyAll targeting rolls independently per enemy", () => {
     const withEffects: Action = { ...action, effects: [instantDeathEffect({ deathRate: 1000, targetType: "enemyAll" })] };
     const result = resolveAction(
-      state({ enemies: [enemy({ npcId: 9001, currentHp: 50000 }), enemy({ npcId: 9002, currentHp: 30000 })] }),
+      npReadyState({ enemies: [enemy({ npcId: 9001, currentHp: 50000 }), enemy({ npcId: 9002, currentHp: 30000 })] }),
       withEffects,
       CONSTANTS,
       () => 0.1,
@@ -840,11 +1020,11 @@ describe("resolveAction — castNp", () => {
     const resistedEnemy = enemy({ npcId: 9001, activeBuffs: [trackedBuff({ type: "upResistInstantdeath" as Buff.BuffType, amount: 500 })] });
 
     // Without the resist buff, a 0.4 roll beats the raw 60% chance (0.4 < 0.6) and the enemy dies.
-    const withoutResist = resolveAction(state({ enemies: [enemy({ npcId: 9001 })] }), withEffects, CONSTANTS, () => 0.4);
+    const withoutResist = resolveAction(npReadyState({ enemies: [enemy({ npcId: 9001 })] }), withEffects, CONSTANTS, () => 0.4);
     expect(withoutResist.enemies.find((e) => e.npcId === 9001)?.currentHp).toBe(0);
 
     // A +50% resist buff halves the effective chance to 30%; the same 0.4 roll now survives.
-    const withResist = resolveAction(state({ enemies: [resistedEnemy] }), withEffects, CONSTANTS, () => 0.4);
+    const withResist = resolveAction(npReadyState({ enemies: [resistedEnemy] }), withEffects, CONSTANTS, () => 0.4);
     expect(withResist.enemies.find((e) => e.npcId === 9001)?.currentHp).toBeGreaterThan(0);
   });
 
@@ -853,10 +1033,10 @@ describe("resolveAction — castNp", () => {
     // deathRate 1000 (100% hit rate) * enemy.deathRate 500 (50% susceptibility) = 50% final chance.
     const halfSusceptible = enemy({ npcId: 9001, deathRate: 500 });
 
-    const survives = resolveAction(state({ enemies: [halfSusceptible] }), withEffects, CONSTANTS, () => 0.6);
+    const survives = resolveAction(npReadyState({ enemies: [halfSusceptible] }), withEffects, CONSTANTS, () => 0.6);
     expect(survives.enemies.find((e) => e.npcId === 9001)?.currentHp).toBeGreaterThan(0);
 
-    const dies = resolveAction(state({ enemies: [halfSusceptible] }), withEffects, CONSTANTS, () => 0.4);
+    const dies = resolveAction(npReadyState({ enemies: [halfSusceptible] }), withEffects, CONSTANTS, () => 0.4);
     expect(dies.enemies.find((e) => e.npcId === 9001)?.currentHp).toBe(0);
   });
 
@@ -865,7 +1045,7 @@ describe("resolveAction — castNp", () => {
     // Base chance is 40%. A roll of 0.5 survives the base chance but not a +50%-boosted one (60%).
     const grantedServant = servant({ servantId: 1, activeBuffs: [trackedBuff({ type: "upGrantInstantdeath" as Buff.BuffType, amount: 500 })] });
     const withGrant = resolveAction(
-      state({ servants: [grantedServant, servant({ servantId: 2 }), servant({ servantId: 3 })], enemies: [enemy({ npcId: 9001 })] }),
+      npReadyState({ servants: [grantedServant, servant({ servantId: 2 }), servant({ servantId: 3 })], enemies: [enemy({ npcId: 9001 })] }),
       withEffects,
       CONSTANTS,
       () => 0.5,
@@ -873,7 +1053,7 @@ describe("resolveAction — castNp", () => {
     expect(withGrant.enemies.find((e) => e.npcId === 9001)?.currentHp).toBe(0);
 
     const cursedEnemy = enemy({ npcId: 9001, activeBuffs: [trackedBuff({ type: "upNonresistInstantdeath" as Buff.BuffType, amount: 500 })] });
-    const withNonresist = resolveAction(state({ enemies: [cursedEnemy] }), withEffects, CONSTANTS, () => 0.5);
+    const withNonresist = resolveAction(npReadyState({ enemies: [cursedEnemy] }), withEffects, CONSTANTS, () => 0.5);
     expect(withNonresist.enemies.find((e) => e.npcId === 9001)?.currentHp).toBe(0);
   });
 
@@ -884,38 +1064,101 @@ describe("resolveAction — castNp", () => {
       maxHp: 50000,
       activeBuffs: [trackedBuff({ type: "guts" as Buff.BuffType, amount: 300, buffGroup: 110, usesRemaining: 1 })],
     });
-    const result = resolveAction(state({ enemies: [gutsEnemy] }), withEffects, CONSTANTS, () => 0);
+    const result = resolveAction(npReadyState({ enemies: [gutsEnemy] }), withEffects, CONSTANTS, () => 0);
     const revived = result.enemies.find((e) => e.npcId === 9001);
     expect(revived?.currentHp).toBe(15000);
     expect(revived?.activeBuffs).toHaveLength(0);
   });
 
   it("omitting effects entirely resolves the same as an empty array (defaults to [])", () => {
-    const result = resolveAction(state(), action, CONSTANTS);
+    const result = resolveAction(npReadyState(), action, CONSTANTS);
     expect(result.enemies.find((e) => e.npcId === 9001)?.currentHp).toBeGreaterThan(0);
   });
 
   it("forceInstantDeath unconditionally zeroes the caster's own HP, no roll needed (a self-sacrifice NP cost)", () => {
     const withEffects: Action = { ...action, effects: [forceInstantDeathEffect()] };
-    const result = resolveAction(state(), withEffects, CONSTANTS, () => 0.99);
+    const result = resolveAction(npReadyState(), withEffects, CONSTANTS, () => 0.99);
     expect(result.servants.find((s) => s.servantId === 1)?.currentHp).toBe(0);
   });
 
   it("delayNpTurn subtracts rawTurns from the targeted enemy's currentNpTurns, floored at 0", () => {
     const withEffects: Action = { ...action, effects: [delayNpTurnEffect({ rawTurns: 2, targetType: "enemyOne" })] };
-    const result = resolveAction(state({ enemies: [enemy({ npcId: 9001, currentNpTurns: 1, npTurnLimit: 5 })] }), withEffects, CONSTANTS);
+    const result = resolveAction(npReadyState({ enemies: [enemy({ npcId: 9001, currentNpTurns: 1, npTurnLimit: 5 })] }), withEffects, CONSTANTS);
     expect(result.enemies.find((e) => e.npcId === 9001)?.currentNpTurns).toBe(0);
   });
 
   it("delayNpTurn with enemyAll targeting delays every enemy's currentNpTurns", () => {
     const withEffects: Action = { ...action, effects: [delayNpTurnEffect({ rawTurns: 1, targetType: "enemyAll" })] };
     const result = resolveAction(
-      state({ enemies: [enemy({ npcId: 9001, currentNpTurns: 3, npTurnLimit: 5 }), enemy({ npcId: 9002, currentNpTurns: 4, npTurnLimit: 5 })] }),
+      npReadyState({ enemies: [enemy({ npcId: 9001, currentNpTurns: 3, npTurnLimit: 5 }), enemy({ npcId: 9002, currentNpTurns: 4, npTurnLimit: 5 })] }),
       withEffects,
       CONSTANTS,
     );
     expect(result.enemies.find((e) => e.npcId === 9001)?.currentNpTurns).toBe(2);
     expect(result.enemies.find((e) => e.npcId === 9002)?.currentNpTurns).toBe(3);
+  });
+});
+
+describe("resolveAction — playExtraCard", () => {
+  const chainCards = [{ type: BUSTER, servantId: 1, isNp: true as const }, { type: ARTS, servantId: 1 }, { type: QUICK, servantId: 1 }];
+  const action: Action = {
+    type: "playExtraCard",
+    servantId: 1,
+    targetNpcId: 9001,
+    context: { ...CARD_CONTEXT, card: { type: EXTRA, position: 1 } },
+    chainCards,
+  };
+
+  it("resolves the automatic fourth attack without consuming another hand card", () => {
+    const result = resolveAction(state(), action, CONSTANTS);
+    expect(result.enemies[0]?.currentHp).toBeLessThan(50000);
+    expect(result.handCards).toEqual(FIVE_CARD_HAND);
+  });
+
+  it("rejects an Extra Attack unless all three selected slots belong to the same servant", () => {
+    const notBrave: Action = { ...action, chainCards: [{ type: BUSTER, servantId: 1 }, { type: ARTS, servantId: 2 }, { type: QUICK, servantId: 1 }] };
+    expect(() => resolveAction(state(), notBrave, CONSTANTS)).toThrow(RangeError);
+  });
+});
+
+describe("resolveAction — multi-enemy automatic targeting", () => {
+  const chain = [{ type: BUSTER, servantId: 1 }, { type: ARTS, servantId: 1 }, { type: QUICK, servantId: 2 }];
+  const multiEnemyState = () =>
+    state({
+      enemies: [enemy({ npcId: 9001 }), enemy({ npcId: 9002 }), enemy({ npcId: 9003, currentHp: 1, maxHp: 1 })],
+      handCards: [{ card: BUSTER, servantId: 1 }, { card: ARTS, servantId: 1 }, { card: QUICK, servantId: 2 }, { card: BUSTER, servantId: 3 }, { card: ARTS, servantId: 3 }],
+      handCardStars: [0, 0, 0, 0, 0],
+    });
+
+  it("keeps consecutive face cards from the same servant Overkilling, then switches a different servant to priority 3→2→1", () => {
+    const first: Action = { type: "playCard", servantId: 1, handCardIndex: 0, targetNpcId: 9003, context: { ...CARD_CONTEXT, card: { type: BUSTER, position: 1 } }, chainCards: chain, chainPosition: 1 };
+    const second: Action = { type: "playCard", servantId: 1, handCardIndex: 0, targetNpcId: 9003, context: { ...CARD_CONTEXT, card: { type: ARTS, position: 2 } }, chainCards: chain, chainPosition: 2 };
+    const third: Action = { type: "playCard", servantId: 2, handCardIndex: 0, targetNpcId: 9003, context: { ...CARD_CONTEXT, card: { type: QUICK, position: 3 } }, chainCards: chain, chainPosition: 3 };
+    const afterFirst = resolveAction(multiEnemyState(), first, CONSTANTS);
+    const afterSecond = resolveAction(afterFirst, second, CONSTANTS);
+    expect(afterSecond.enemies.find((candidate) => candidate.npcId === 9002)?.currentHp).toBe(50000);
+    const afterThird = resolveAction(afterSecond, third, CONSTANTS);
+    expect(afterThird.enemies.find((candidate) => candidate.npcId === 9002)?.currentHp).toBeLessThan(50000);
+    expect(afterThird.enemies.find((candidate) => candidate.npcId === 9001)?.currentHp).toBe(50000);
+  });
+
+  it("switches from a defeated manually-selected slot 1 to the highest-priority living slot 3", () => {
+    const customChain = [{ type: BUSTER, servantId: 1 }, { type: QUICK, servantId: 2 }, { type: ARTS, servantId: 3 }];
+    const first: Action = { type: "playCard", servantId: 1, handCardIndex: 0, targetNpcId: 9001, context: { ...CARD_CONTEXT, card: { type: BUSTER, position: 1 } }, chainCards: customChain, chainPosition: 1 };
+    const second: Action = { type: "playCard", servantId: 2, handCardIndex: 0, targetNpcId: 9001, context: { ...CARD_CONTEXT, card: { type: QUICK, position: 2 } }, chainCards: customChain, chainPosition: 2 };
+    const initial = multiEnemyState();
+    const lowLeft = { ...initial, enemies: [enemy({ npcId: 9001, currentHp: 1, maxHp: 1 }), enemy({ npcId: 9002 }), enemy({ npcId: 9003 })], handCards: [{ card: BUSTER, servantId: 1 }, { card: QUICK, servantId: 2 }, { card: ARTS, servantId: 3 }] };
+    const result = resolveAction(resolveAction(lowLeft, first, CONSTANTS), second, CONSTANTS);
+    expect(result.enemies.find((candidate) => candidate.npcId === 9003)?.currentHp).toBeLessThan(50000);
+    expect(result.enemies.find((candidate) => candidate.npcId === 9002)?.currentHp).toBe(50000);
+  });
+
+  it("treats an NP boundary as a target-switch boundary even for the same servant", () => {
+    const npChain = [{ type: BUSTER, servantId: 1, isNp: true as const }, { type: BUSTER, servantId: 1 }, { type: ARTS, servantId: 2 }];
+    const npAction: Action = { type: "castNp", servantId: 1, targetNpcId: 9003, targetNpcIds: [9003], context: { ...NP_CONTEXT, npDamageMultiplier: 100 }, chainCards: npChain, chainPosition: 1 };
+    const faceCard: Action = { type: "playCard", servantId: 1, handCardIndex: 0, targetNpcId: 9003, context: { ...CARD_CONTEXT, card: { type: BUSTER, position: 2 } }, chainCards: npChain, chainPosition: 2 };
+    const result = resolveAction(resolveAction(npReadyState({ ...multiEnemyState(), servants: [servant({ servantId: 1, currentNpGauge: FULL_TD_POINT }), servant({ servantId: 2 }), servant({ servantId: 3 })] }), npAction, CONSTANTS), faceCard, CONSTANTS);
+    expect(result.enemies.find((candidate) => candidate.npcId === 9002)?.currentHp).toBeLessThan(50000);
   });
 });
 
@@ -1363,13 +1606,15 @@ describe("resolveAction — break-bar (shift) transitions", () => {
     targetNpcId: 9001,
     context: NP_CONTEXT,
     effects: [instantDeathEffect({ deathRate: 1000, targetType: "enemyOne" })],
+    chainCards: [{ type: BUSTER, servantId: 1, isNp: true }, { type: ARTS, servantId: 2 }, { type: QUICK, servantId: 3 }],
+    chainPosition: 1,
   };
 
   it("swaps a dead enemy for its shift target, keeping the same array slot, when one resolves", () => {
     const bar2 = waveEnemy({ npcId: 9002, deck: QuestEnemyModule.DeckType.SHIFT, hp: 30000, atk: 6000, chargeTurn: 3, deathRate: 500 });
     const bar1 = waveEnemy({ npcId: 9001, deck: QuestEnemyModule.DeckType.ENEMY, enemyScript: { shift: [9002] } });
     const result = resolveAction(
-      state({ waves: [wave({ enemyPool: [bar1, bar2] })], enemies: [enemy({ npcId: 9001, deathRate: 1000 })] }),
+      npReadyState({ waves: [wave({ enemyPool: [bar1, bar2] })], enemies: [enemy({ npcId: 9001, deathRate: 1000 })] }),
       instantDeathAction,
       CONSTANTS,
       () => 0,
@@ -1381,7 +1626,7 @@ describe("resolveAction — break-bar (shift) transitions", () => {
   it("leaves a dead enemy with no shift target as genuinely dead (currentHp stays 0)", () => {
     const bar1 = waveEnemy({ npcId: 9001, deck: QuestEnemyModule.DeckType.ENEMY });
     const result = resolveAction(
-      state({ waves: [wave({ enemyPool: [bar1] })], enemies: [enemy({ npcId: 9001, deathRate: 1000 })] }),
+      npReadyState({ waves: [wave({ enemyPool: [bar1] })], enemies: [enemy({ npcId: 9001, deathRate: 1000 })] }),
       instantDeathAction,
       CONSTANTS,
       () => 0,
@@ -1394,7 +1639,7 @@ describe("resolveAction — break-bar (shift) transitions", () => {
     const bar1 = waveEnemy({ npcId: 9001, deck: QuestEnemyModule.DeckType.ENEMY, enemyScript: { shift: [9002] } });
     // deathRate 0 on the caster's own state.enemies entry means the instant-death roll always fails.
     const result = resolveAction(
-      state({ waves: [wave({ enemyPool: [bar1, bar2] })], enemies: [enemy({ npcId: 9001, deathRate: 0 })] }),
+      npReadyState({ waves: [wave({ enemyPool: [bar1, bar2] })], enemies: [enemy({ npcId: 9001, deathRate: 0 })] }),
       instantDeathAction,
       CONSTANTS,
       () => 0,

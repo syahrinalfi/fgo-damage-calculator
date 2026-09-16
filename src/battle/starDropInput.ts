@@ -23,6 +23,8 @@ export interface StarDropResolutionContext {
   serverRate: number;
   isCrit: boolean;
   isOverkill: boolean;
+  /** NP hits use their own color/base rate but do not receive ordinary first-card or Mighty-chain bonuses themselves. */
+  isNP?: boolean;
   /** Whether this hit is one of a Mighty Chain's 3 cards (research/06 §7.4, `CHAINBONUS_MIGHTY_STARRATE`) — added to `starDropMod` alongside any buff-sourced star-drop-up. */
   isMightyChain: boolean;
 }
@@ -54,13 +56,13 @@ export function resolveStarDropInput(
 
   return {
     baseStarRate: context.baseStarRate,
-    firstCardBonus: leadCardTerm.criticalAdd,
+    firstCardBonus: context.isNP ? 0 : leadCardTerm.criticalAdd,
     cardStarValue: cardTerm.criticalAdjust,
     cardMod,
     serverRate: context.serverRate,
     starDropMod:
       resolveUnitActionModifier(constants.buff, BUFF_ACTION_KEYS.CRITICAL_POINT, attacker.activeBuffs, traitContext) +
-      (context.isMightyChain ? CHAINBONUS_MIGHTY_STARRATE : 0),
+      (!context.isNP && context.isMightyChain ? CHAINBONUS_MIGHTY_STARRATE : 0),
     enemyStarDropMod: resolveUnitActionModifier(
       constants.buff,
       BUFF_ACTION_KEYS.CRITICAL_POINT,

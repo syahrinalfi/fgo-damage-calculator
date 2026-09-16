@@ -167,6 +167,28 @@ describe("searchBestActionSequence", () => {
   it("returns an empty array for an empty candidate list", () => {
     expect(searchBestActionSequence(state(), [], CONSTANTS, () => 1, negativeRemainingHpAtSlot(0))).toEqual([]);
   });
+
+  it("prunes a candidate whose action is unavailable without hiding other valid candidates", () => {
+    const unavailableNp: Action = {
+      type: "castNp",
+      servantId: 1,
+      targetNpcId: 9001,
+      context: { ...BUSTER_CONTEXT, isNP: true, npDamageMultiplier: 4.5 },
+      chainCards: [{ type: BUSTER, servantId: 1, isNp: true }, { type: BUSTER, servantId: 1 }, { type: ARTS, servantId: 1 }],
+      chainPosition: 1,
+    };
+    const results = searchBestActionSequence(
+      state({ servants: [servant({ currentNpGauge: 0 })] }),
+      [
+        { label: "unavailable NP", actions: [unavailableNp] },
+        { label: "available face card", actions: [playAction(0, BUSTER)] },
+      ],
+      CONSTANTS,
+      () => 1,
+      damageDealtAtSlot(0),
+    );
+    expect(results.map((result) => result.label)).toEqual(["available face card"]);
+  });
 });
 
 describe("objectives", () => {

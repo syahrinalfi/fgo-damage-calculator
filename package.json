@@ -3,6 +3,15 @@
   "version": "0.0.1",
   "private": true,
   "type": "module",
+  "exports": {
+    "./account": "./dist/account/index.js",
+    "./battle": "./dist/battle/index.js",
+    "./buffs": "./dist/buffs/index.js",
+    "./data": "./dist/data/index.js",
+    "./engine": "./dist/engine/index.js",
+    "./optimizer": "./dist/optimizer/index.js",
+    "./quest": "./dist/quest/index.js"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",

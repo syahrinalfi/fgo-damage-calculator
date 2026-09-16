@@ -22,7 +22,8 @@ export { servantToBattleUnit, enemyToBattleUnit, buildEnemyInstance, buildServan
 export type { CardBagDrawResult } from "./cardBag.js";
 export { shuffleCards, drawCardBagHand } from "./cardBag.js";
 export { FRONT_LINE_SERVANT_COUNT, CARDS_PER_SERVANT_DECK, buildCombinedCardDeck } from "./cardDeck.js";
-export type { Action, CommandSealEffect, DerivedHitContext } from "./action.js";
+export type { Action, AttackChainCard, CommandSealEffect, DerivedHitContext } from "./action.js";
+export { ActionUnavailableError } from "./actionError.js";
 export type {
   SkillTargetType,
   BuffGrantEffect,
@@ -43,9 +44,9 @@ export type {
   DelayNpTurnEffect,
   SkillEffect,
 } from "./skillEffect.js";
-export { resolveAction, NP_GAUGE_CAP_BY_LEVEL } from "./turnLoop.js";
+export { resolveAction, isQuestCleared, NP_GAUGE_CAP_BY_LEVEL } from "./turnLoop.js";
 export type { FuncInterpretationResult } from "./funcInterpreter.js";
-export { resolveSkillEffects, resolveNpEffects } from "./funcInterpreter.js";
+export { npFunctionSvalsAt, resolveSkillEffects, resolveNpEffects } from "./funcInterpreter.js";
 export { resolveCardHitContext } from "./hitContextResolver.js";
 export type { SkillActivation, SkillSlotSource, ServantSkillSource, ResolveSkillActivationOptionsConfig } from "./skillActivationResolver.js";
 export { resolveSkillActivationOptions } from "./skillActivationResolver.js";

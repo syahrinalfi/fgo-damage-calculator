@@ -118,6 +118,7 @@ export function resolveHit(
     isCrit: context.isCrit,
     isOverkill,
     isMightyChain: context.isMightyChain,
+    isNP: context.isNP,
   });
   const npGain = calculateAttackingNpGain(npGainInput);
 
@@ -129,6 +130,7 @@ export function resolveHit(
     isCrit: context.isCrit,
     isOverkill,
     isMightyChain: context.isMightyChain,
+    isNP: context.isNP,
   });
   const starDropChance = calculateStarDropChance(starDropInput);
 

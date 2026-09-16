@@ -4,13 +4,14 @@ import type { Action, DerivedHitContext } from "../battle/action.js";
 import type { BattleState, EnemyInstance, HandCard, ServantInstance } from "../battle/battleState.js";
 import { BUFF_ACTION_KEYS } from "../battle/buffActionKeys.js";
 import type { BattleConstants } from "../battle/gameConstants.js";
-import { buildCardOrderCandidates } from "./cardOrderCandidates.js";
+import { buildAttackChainCandidates, buildCardOrderCandidates, type NpAttackOption } from "./cardOrderCandidates.js";
 import { damageDealtAtSlot } from "./objectives.js";
 import { searchBestActionSequence } from "./turnSearch.js";
 
 const BUSTER = "2" as Card;
 const ARTS = "1" as Card;
 const QUICK = "3" as Card;
+const EXTRA = "4" as Card;
 
 function handCard(card: Card, servantId: number): HandCard {
   return { card, servantId };
@@ -84,6 +85,79 @@ describe("buildCardOrderCandidates — unit", () => {
         expect(i + 1).toBe(action.chainPosition);
       }
     }
+  });
+});
+
+describe("buildAttackChainCandidates — mixed face cards and NP", () => {
+  const hand = [handCard(BUSTER, 1), handCard(ARTS, 1), handCard(QUICK, 2)];
+  const templates = hand.map((candidate) => contextTemplate(candidate.card));
+  const npContext: DerivedHitContext = { ...contextTemplate(BUSTER), isNP: true, npDamageMultiplier: 4.5 };
+  const npOptions: readonly NpAttackOption[] = [
+    { servantId: 1, cardType: BUSTER, context: npContext, targetNpcIds: [9001], label: "NP1" },
+  ];
+
+  it("enumerates exactly three attack slots from the five-card hand plus ready NP options", () => {
+    const result = buildAttackChainCandidates(hand, templates, npOptions, 9001);
+    expect(result).toHaveLength(24); // 4P3: three face cards + one NP source.
+    expect(result.every((candidate) => candidate.actions.length === 3)).toBe(true);
+  });
+
+  it("represents NP as one selected slot rather than an additional fourth attack", () => {
+    const result = buildAttackChainCandidates(hand, templates, npOptions, 9001, (servantId) => ({
+      ...contextTemplate(EXTRA),
+      card: { type: EXTRA, position: 1 },
+      isNP: false,
+      offensiveNPRate: servantId === 1 ? 700 : 500,
+    }));
+    const withNp = result.find((candidate) => candidate.actions.some((action) => action.type === "castNp"));
+    expect(withNp).toBeDefined();
+    expect(withNp?.actions.filter((action) => action.type === "castNp")).toHaveLength(1);
+    const selected = (withNp?.actions ?? []).filter((action) => action.type === "playCard" || action.type === "castNp");
+    expect(selected).toHaveLength(3);
+    for (const [index, action] of selected.entries()) {
+      if (action.type !== "playCard" && action.type !== "castNp") throw new Error("expected an attack action");
+      expect(action.chainPosition).toBe(index + 1);
+      expect(action.chainCards).toHaveLength(3);
+    }
+  });
+
+  it("appends one automatic Extra Attack after an NP-inclusive Brave Chain", () => {
+    const result = buildAttackChainCandidates(hand, templates, npOptions, 9001, () => ({
+      ...contextTemplate(EXTRA),
+      card: { type: EXTRA, position: 1 },
+      isNP: false,
+    }));
+    const brave = result.find((candidate) => {
+      const selected = candidate.actions.filter((action) => action.type === "playCard" || action.type === "castNp");
+      return selected.length === 3 && selected.every((action) => action.servantId === 1) && selected.some((action) => action.type === "castNp");
+    });
+    expect(brave).toBeDefined();
+    expect(brave?.actions).toHaveLength(4);
+    expect(brave?.actions[3]).toMatchObject({ type: "playExtraCard", servantId: 1, targetNpcId: 9001 });
+  });
+
+  it("resolves consecutive NP options with increasing NP-Chain Overcharge bonuses", () => {
+    const secondNpContext: DerivedHitContext = { ...npContext, card: { type: ARTS, position: 1 } };
+    const dynamicOptions: readonly NpAttackOption[] = [
+      {
+        ...npOptions[0]!,
+        resolveForNpChainBonus: (bonus) => ({ context: { ...npContext, npDamageMultiplier: 10 + bonus } }),
+      },
+      {
+        servantId: 2,
+        cardType: ARTS,
+        context: secondNpContext,
+        targetNpcIds: [9001],
+        label: "NP2",
+        resolveForNpChainBonus: (bonus) => ({ context: { ...secondNpContext, npDamageMultiplier: 20 + bonus } }),
+      },
+    ];
+    const result = buildAttackChainCandidates(hand, templates, dynamicOptions, 9001);
+    const npChain = result.find(
+      (candidate) => candidate.actions[0]?.type === "castNp" && candidate.actions[0].servantId === 1 && candidate.actions[1]?.type === "castNp" && candidate.actions[1].servantId === 2,
+    );
+    expect(npChain?.actions[0]).toMatchObject({ type: "castNp", context: { npDamageMultiplier: 10 } });
+    expect(npChain?.actions[1]).toMatchObject({ type: "castNp", context: { npDamageMultiplier: 21 } });
   });
 });
 

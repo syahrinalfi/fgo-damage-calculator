@@ -2,7 +2,7 @@ export type { ActionSequenceCandidate, ActionSequenceResult, SequenceScoreFn } f
 export { simulateActionSequence, searchBestActionSequence } from "./turnSearch.js";
 export type { PerTurnCandidateBuilder, MultiTurnResult } from "./multiTurnSearch.js";
 export { searchMultiTurnActionSequences } from "./multiTurnSearch.js";
-export { damageDealtAtSlot, negativeRemainingHpAtSlot } from "./objectives.js";
+export { damageDealtAtSlot, negativeRemainingHpAtSlot, questProgress } from "./objectives.js";
 export {
   enumerateServantSubsets,
   enumerateCeAssignments,
@@ -12,7 +12,9 @@ export {
   enumeratePartyFormations,
 } from "./candidateGeneration.js";
 export type { OrderChangeChoice, PartyFormation } from "./candidateGeneration.js";
-export { buildCardOrderCandidates } from "./cardOrderCandidates.js";
+export type { NpAttackOption, ResolvedNpAttack } from "./cardOrderCandidates.js";
+export { buildAttackChainCandidates, buildCardOrderCandidates } from "./cardOrderCandidates.js";
+export { resolveNpAttackOption } from "./npActivationResolver.js";
 export type { SkillActivation } from "./skillUsageCandidates.js";
 export { buildSkillAndCardOrderCandidates } from "./skillUsageCandidates.js";
 export type { OrderChangeSwap } from "./orderChangeCandidates.js";
@@ -20,4 +22,5 @@ export { buildOrderChangeCandidates, reassignHandCardOwnership } from "./orderCh
 export type { PartyMemberSpec, InitialBattleStateOptions } from "./battleStateBuilder.js";
 export { buildInitialBattleState } from "./battleStateBuilder.js";
 export type { ServantCandidate, QuestOptimizerOptions, QuestOptimizerCandidate } from "./questOptimizer.js";
-export { optimizeQuest } from "./questOptimizer.js";
+export type { MinimumTurnOptimizerOptions, MinimumTurnOptimizerResult } from "./questOptimizer.js";
+export { optimizeQuest, optimizeQuestMinimumTurns } from "./questOptimizer.js";

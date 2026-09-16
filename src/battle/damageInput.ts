@@ -79,7 +79,7 @@ export function resolveDamageInput(
   return {
     servantAtk: attacker.atk,
     npDamageMultiplier: context.npDamageMultiplier,
-    firstCardBonus: leadCardTerm.atkAdd,
+    firstCardBonus: context.isNP ? 0 : leadCardTerm.atkAdd,
     cardDamageValue: cardTerm.atkAdjust,
     cardMod,
     classAtkBonus: resolveClassAttackBonus(constants, attacker.className),

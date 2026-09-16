@@ -1,10 +1,136 @@
-import type { Action, DerivedHitContext } from "../battle/action.js";
+import { Card } from "@atlasacademy/api-connector";
+import type { Action, AttackChainCard, DerivedHitContext } from "../battle/action.js";
 import type { HandCard } from "../battle/battleState.js";
 import { enumerateOrderedSelections } from "./candidateGeneration.js";
 import type { ActionSequenceCandidate } from "./turnSearch.js";
 
-/** A chain is always exactly 3 non-NP cards (research/03 §3) — every existing `Action`/test fixture in this project already bakes in this invariant (`DEFAULT_CHAIN_CARDS`, `chainPosition: 1 | 2 | 3`), so this builder does too rather than taking a configurable count. */
+/** A turn always selects exactly 3 attack slots; each slot may be a dealt command card or an available NP. */
 const CHAIN_LENGTH = 3;
+
+export interface ResolvedNpAttack {
+  readonly context: DerivedHitContext;
+  readonly hitContexts?: readonly DerivedHitContext[];
+  readonly targetHitContexts?: Extract<Action, { type: "castNp" }>["targetHitContexts"];
+  readonly effectsBeforeDamage?: Extract<Action, { type: "castNp" }>["effectsBeforeDamage"];
+  readonly effects?: Extract<Action, { type: "castNp" }>["effects"];
+}
+
+export interface NpAttackOption extends ResolvedNpAttack {
+  readonly servantId: number;
+  readonly cardType: AttackChainCard["type"];
+  readonly targetNpcIds: readonly number[];
+  readonly label: string;
+  /** Re-resolves OC-sensitive multiplier/effects from the number of directly preceding NPs in this attack chain. */
+  readonly resolveForNpChainBonus?: (bonusStages: number) => ResolvedNpAttack;
+}
+
+type AttackSource = { readonly kind: "card"; readonly originalIndex: number } | { readonly kind: "np"; readonly optionIndex: number };
+
+/** Builds exactly three selected attack slots from the dealt hand plus caller-resolved NP options. NP availability is independent from the five-card bag but still consumes one of the three selections. */
+export function buildAttackChainCandidates(
+  handCards: readonly HandCard[],
+  contextTemplates: readonly DerivedHitContext[],
+  npOptions: readonly NpAttackOption[],
+  targetNpcId: number,
+  resolveExtraContext?: (servantId: number) => DerivedHitContext,
+): readonly ActionSequenceCandidate[] {
+  if (handCards.length !== contextTemplates.length) {
+    throw new RangeError(`Expected one context template per hand card, got ${contextTemplates.length} templates for ${handCards.length} cards`);
+  }
+  const npServantIds = new Set<number>();
+  for (const option of npOptions) {
+    if (!option.context.isNP || option.context.card.type !== option.cardType) {
+      throw new RangeError(`NP option ${option.label} must carry an isNP context matching cardType`);
+    }
+    if (option.targetNpcIds.length === 0 || !option.targetNpcIds.includes(targetNpcId)) {
+      throw new RangeError(`NP option ${option.label} must include the primary targetNpcId ${targetNpcId}`);
+    }
+    if (npServantIds.has(option.servantId)) {
+      throw new RangeError(`Only one NP option per servant is allowed, duplicate servantId ${option.servantId}`);
+    }
+    npServantIds.add(option.servantId);
+  }
+
+  const sources: AttackSource[] = [
+    ...handCards.map((_, originalIndex): AttackSource => ({ kind: "card", originalIndex })),
+    ...npOptions.map((_, optionIndex): AttackSource => ({ kind: "np", optionIndex })),
+  ];
+  const orderings = enumerateOrderedSelections(sources, CHAIN_LENGTH);
+  return orderings.map((ordering): ActionSequenceCandidate => {
+    const chainCards: AttackChainCard[] = ordering.map((source) => {
+      if (source.kind === "card") {
+        const handCard = handCards[source.originalIndex] as HandCard;
+        return { type: handCard.card, servantId: handCard.servantId };
+      }
+      const option = npOptions[source.optionIndex] as NpAttackOption;
+      return { type: option.cardType, servantId: option.servantId, isNp: true };
+    });
+    const sequentialIndices = sequentialMixedHandCardIndices(ordering, handCards.length);
+    let consecutiveNpCount = 0;
+    const resolvedNpByPosition = ordering.map((source): ResolvedNpAttack | undefined => {
+      if (source.kind === "card") {
+        consecutiveNpCount = 0;
+        return undefined;
+      }
+      const option = npOptions[source.optionIndex] as NpAttackOption;
+      const resolved = option.resolveForNpChainBonus?.(consecutiveNpCount) ?? option;
+      consecutiveNpCount += 1;
+      if (!resolved.context.isNP || resolved.context.card.type !== option.cardType) {
+        throw new RangeError(`Resolved NP option ${option.label} must carry an isNP context matching cardType`);
+      }
+      return resolved;
+    });
+    const actions: Action[] = ordering.map((source, position) => {
+      const chainPosition = (position + 1) as 1 | 2 | 3;
+      if (source.kind === "np") {
+        const option = npOptions[source.optionIndex] as NpAttackOption;
+        const resolved = resolvedNpByPosition[position] as ResolvedNpAttack;
+        return {
+          type: "castNp",
+          servantId: option.servantId,
+          targetNpcId,
+          targetNpcIds: option.targetNpcIds,
+          context: { ...resolved.context, card: { type: option.cardType, position: 1 } },
+          ...(resolved.hitContexts === undefined ? {} : { hitContexts: resolved.hitContexts }),
+          ...(resolved.targetHitContexts === undefined ? {} : { targetHitContexts: resolved.targetHitContexts }),
+          ...(resolved.effectsBeforeDamage === undefined ? {} : { effectsBeforeDamage: resolved.effectsBeforeDamage }),
+          ...(resolved.effects === undefined ? {} : { effects: resolved.effects }),
+          chainCards,
+          chainPosition,
+        };
+      }
+      const handCard = handCards[source.originalIndex] as HandCard;
+      const template = contextTemplates[source.originalIndex] as DerivedHitContext;
+      return {
+        type: "playCard",
+        servantId: handCard.servantId,
+        handCardIndex: sequentialIndices[position] as number,
+        targetNpcId,
+        context: { ...template, card: { type: handCard.card, position: chainPosition } },
+        chainCards,
+        chainPosition,
+      };
+    });
+    const braveServantId = chainCards[0]?.servantId;
+    if (braveServantId !== undefined && chainCards.every((candidate) => candidate.servantId === braveServantId) && resolveExtraContext !== undefined) {
+      const extraContext = resolveExtraContext(braveServantId);
+      if (extraContext.isNP || extraContext.card.type !== Card.EXTRA) {
+        throw new RangeError(`Extra Attack context for servantId ${braveServantId} must be a non-NP Extra card`);
+      }
+      actions.push({
+        type: "playExtraCard",
+        servantId: braveServantId,
+        targetNpcId,
+        context: { ...extraContext, card: { type: Card.EXTRA, position: 1 } },
+        chainCards,
+      });
+    }
+    const label = ordering
+      .map((source) => (source.kind === "card" ? `${String(handCards[source.originalIndex]?.card)}@${source.originalIndex}` : npOptions[source.optionIndex]?.label ?? "NP"))
+      .join(">");
+    return { label, actions };
+  });
+}
 
 /**
  * The first end-to-end wiring of the enumeration layer (`./candidateGeneration.js`) into
@@ -27,7 +153,7 @@ const CHAIN_LENGTH = 3;
  * recompute each `handCardIndex` against the previous call's result") — a naive candidate
  * builder using each card's *original* hand index for all 3 `Action`s in a sequence would be
  * wrong for the 2nd and 3rd play, since the 1st play's removal shifts every later index down.
- * `sequentialHandCardIndices` below simulates that same removal ahead of time so each `Action`
+ * `sequentialMixedHandCardIndices` below simulates that same removal ahead of time so each `Action`
  * in the returned sequence carries the *correct-at-that-point* `handCardIndex`.
  *
  * Servant-subset/CE-assignment integration (the other 2 enumeration axes,
@@ -42,42 +168,14 @@ export function buildCardOrderCandidates(
   contextTemplates: readonly DerivedHitContext[],
   targetNpcId: number,
 ): readonly ActionSequenceCandidate[] {
-  const originalIndices = handCards.map((_, index) => index);
-  const orderings = enumerateOrderedSelections(originalIndices, CHAIN_LENGTH);
-  return orderings.map((ordering): ActionSequenceCandidate => {
-    const chainCards = ordering.map((originalIndex) => {
-      const handCard = handCards[originalIndex] as HandCard;
-      return { type: handCard.card, servantId: handCard.servantId };
-    });
-    const sequentialIndices = sequentialHandCardIndices(ordering, handCards.length);
-    const actions: Action[] = ordering.map((originalIndex, position) => {
-      const handCard = handCards[originalIndex] as HandCard;
-      const template = contextTemplates[originalIndex] as DerivedHitContext;
-      const chainPosition = (position + 1) as 1 | 2 | 3;
-      return {
-        type: "playCard",
-        servantId: handCard.servantId,
-        handCardIndex: sequentialIndices[position] as number,
-        targetNpcId,
-        context: { ...template, card: { type: handCard.card, position: chainPosition } },
-        chainCards,
-        chainPosition,
-      };
-    });
-    return { label: ordering.map((originalIndex) => `${String(handCards[originalIndex]?.card)}@${originalIndex}`).join(">"), actions };
-  });
+  return buildAttackChainCandidates(handCards, contextTemplates, [], targetNpcId);
 }
 
-/**
- * Given an ordering of *original* hand indices, returns the actual `handCardIndex` each
- * successive `playCard` `Action` must use once earlier plays in the same sequence have
- * already spliced their own card out of `state.handCards` — see this module's own doc
- * comment for why this is necessary at all.
- */
-function sequentialHandCardIndices(originalIndices: readonly number[], handSize: number): readonly number[] {
+function sequentialMixedHandCardIndices(ordering: readonly AttackSource[], handSize: number): readonly (number | undefined)[] {
   const remaining = Array.from({ length: handSize }, (_, index) => index);
-  return originalIndices.map((original) => {
-    const at = remaining.indexOf(original);
+  return ordering.map((source) => {
+    if (source.kind === "np") return undefined;
+    const at = remaining.indexOf(source.originalIndex);
     remaining.splice(at, 1);
     return at;
   });

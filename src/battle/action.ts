@@ -2,6 +2,13 @@ import type { Card } from "@atlasacademy/api-connector";
 import type { HitResolutionContext } from "./hitResolution.js";
 import type { SkillEffect } from "./skillEffect.js";
 
+/** One of the turn's exactly three selected attack slots. NP slots carry their real Arts/Buster/Quick color but are marked separately because their own hit ignores normal card-position/chain bonuses. */
+export interface AttackChainCard {
+  readonly type: Card;
+  readonly servantId: number;
+  readonly isNp?: true;
+}
+
 /**
  * The 5 fields of `HitResolutionContext` this project's turn loop now derives itself
  * (research/09 §7's "next increment"): `isCrit` from the hand slot's crit-star allocation
@@ -36,8 +43,8 @@ export type Action =
       readonly targetNpcId: number;
       readonly context: DerivedHitContext;
       /**
-       * This turn's full 3-card chain selection (research/03 §3: a chain is always exactly
-       * 3 non-NP cards), in play order — used to derive `isBusterChain`/`isMightyChain`/
+       * This turn's full 3-slot attack selection, where each slot may be a dealt command
+       * card or an available NP, in play order — used to derive `isBusterChain`/`isMightyChain`/
        * `extraCardChainType` via `classifyChain` (`./chainDetection.js`), `chainCards[0].type` as
        * `DerivedHitContext.chainLeadCardType` (research/06 §7.2's first-card bonus,
        * `./damageInput.js`), and, together with `chainPosition` below, to detect when the
@@ -46,7 +53,7 @@ export type Action =
        * against the `handCards` slot at `handCardIndex`); throws otherwise, same as the
        * existing `context.card.type` cross-check.
        */
-      readonly chainCards: readonly { readonly type: Card; readonly servantId: number }[];
+      readonly chainCards: readonly AttackChainCard[];
       /**
        * This play's 1-indexed position within `chainCards` (research/06 §7.2's Arts-chain
        * NP-gauge / Quick-chain star bonuses resolve once, when the chain's *last* card is
@@ -61,16 +68,23 @@ export type Action =
       readonly type: "castNp";
       readonly servantId: number;
       readonly targetNpcId: number;
+      /** Every enemy hit by this NP. Omit for the single-target `targetNpcId` path. */
+      readonly targetNpcIds?: readonly number[];
       /**
-       * An NP is never part of a 3-card chain, gets no first-card bonus, and can never
-       * critically hit (research/03 §1.4/§5's all-zero NP card-position stub) —
-       * `isCrit`/`isBusterChain`/`isMightyChain`/`extraCardChainType` are hardcoded
-       * `false`/`false`/`false`/`"none"` and `chainLeadCardType` is set to this NP's own
-       * card type (a deliberate no-op, since
-       * an NP's own `NiceCard.json` entry is itself an all-zero stub) by `resolveCastNp`
-       * rather than derived at all, so `castNp` needs no `chainCards` equivalent.
+       * NP occupies one of the same 3 attack slots and contributes its real Arts/Buster/Quick
+       * color and owner to chain eligibility. Its own hit still cannot crit and does not
+       * receive ordinary card-position, first-card, color-chain, or Mighty bonuses.
        */
       readonly context: DerivedHitContext;
+      /** Per-hit contexts for this NP, typically derived from `npDistribution`; defaults to the single `context` hit. */
+      readonly hitContexts?: readonly DerivedHitContext[];
+      /** Optional per-target hit contexts for AoE NPs whose quest-specific server modifiers differ per enemy. */
+      readonly targetHitContexts?: readonly { readonly targetNpcId: number; readonly hitContexts: readonly DerivedHitContext[] }[];
+      /** The same three-slot attack selection used by `playCard`; this NP occupies `chainPosition` rather than being an additional fourth selection. */
+      readonly chainCards: readonly AttackChainCard[];
+      readonly chainPosition: 1 | 2 | 3;
+      /** Ordered modeled NP functions that occur before the damage function. */
+      readonly effectsBeforeDamage?: readonly SkillEffect[];
       /**
        * This NP's own already-level/Overcharge-resolved non-damage effects beyond its core
        * damage (research/09 §7 — currently just `InstantDeathEffect`, `./skillEffect.js`),
@@ -84,6 +98,14 @@ export type Action =
        * fixed post-damage placement models.
        */
       readonly effects?: readonly SkillEffect[];
+    }
+  | {
+      /** Automatic fourth attack produced by a Brave Chain; never one of the three selected attack slots. */
+      readonly type: "playExtraCard";
+      readonly servantId: number;
+      readonly targetNpcId: number;
+      readonly context: DerivedHitContext;
+      readonly chainCards: readonly AttackChainCard[];
     }
   | {
       readonly type: "useSkill";

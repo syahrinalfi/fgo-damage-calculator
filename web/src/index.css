@@ -1,0 +1,67 @@
+@import "tailwindcss";
+
+:root {
+  /* Cabinet ground */
+  --ground: #101318;
+  --ground-raised: #171b22;
+  --ground-inset: #0a0c10;
+  --rule: #2a2f3a;
+  --ink: #e7ebf3;
+  --ink-dim: #9aa4b6;
+
+  /* Card-type inks (FGO's own buster/arts/quick vocabulary) */
+  --arts: #2f6fe0;
+  --arts-dim: #1c3a75;
+  --buster: #e2402f;
+  --buster-dim: #6e241c;
+  --quick: #2fbf6e;
+  --quick-dim: #17603a;
+
+  --amber: #ffcc33;
+
+  --focus: #6fd7ff;
+
+  --font-ui: system-ui, "Segoe UI", Roboto, sans-serif;
+  --font-num: "JetBrains Mono", ui-monospace, Consolas, monospace;
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  min-height: 100svh;
+  overflow-x: hidden;
+  background: var(--ground);
+  color: var(--ink);
+  font: 16px/1.5 var(--font-ui);
+  -webkit-font-smoothing: antialiased;
+}
+
+#root {
+  min-height: 100svh;
+}
+
+::selection {
+  background: var(--amber);
+  color: #1a1200;
+}
+
+* {
+  scrollbar-color: var(--rule) var(--ground-inset);
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.num {
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+}
+
+summary::-webkit-details-marker {
+  display: none;
+}

@@ -83,8 +83,8 @@ describe("resolveCardHitContext", () => {
 
   it("reads npEnemyServerMod/starEnemyServerMod straight off the target enemy's serverMod", () => {
     const result = resolveCardHitContext(handCard(BUSTER), servant(), NP_GAIN, enemy({ serverMod: { tdRate: 1500, tdAttackRate: 1000, starRate: 300 } }), () => 0);
-    expect(result.npEnemyServerMod).toBe(1500);
-    expect(result.starEnemyServerMod).toBe(300);
+    expect(result.npEnemyServerMod).toBe(1.5);
+    expect(result.starEnemyServerMod).toBe(0.3);
   });
 
   it("reads baseStarRate straight off the acting servant's starGen", () => {

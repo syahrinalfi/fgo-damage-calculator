@@ -24,6 +24,8 @@ export interface AttackingNpGainResolutionContext {
   enemyServerMod: number;
   isCrit: boolean;
   isOverkill: boolean;
+  /** NP hits use their own color/base rate but do not receive ordinary first-card or Mighty-chain bonuses themselves. */
+  isNP?: boolean;
   /** Whether this hit is one of a Mighty Chain's 3 cards (research/06 §7.4, `CHAINBONUS_MIGHTY_NPGAIN_RATE`) — added to `npChargeRateMod` alongside any buff-sourced NP-gain-up. */
   isMightyChain: boolean;
 }
@@ -55,13 +57,13 @@ export function resolveAttackingNpGainInput(
 
   return {
     offensiveNPRate: context.offensiveNPRate,
-    firstCardBonus: leadCardTerm.npGaugeAdd,
+    firstCardBonus: context.isNP ? 0 : leadCardTerm.npGaugeAdd,
     cardNpValue: cardTerm.npGaugeAdjust,
     cardMod,
     enemyServerMod: context.enemyServerMod,
     npChargeRateMod:
       resolveUnitActionModifier(constants.buff, BUFF_ACTION_KEYS.DROP_NP, attacker.activeBuffs, traitContext) +
-      (context.isMightyChain ? CHAINBONUS_MIGHTY_NPGAIN_RATE : 0),
+      (!context.isNP && context.isMightyChain ? CHAINBONUS_MIGHTY_NPGAIN_RATE : 0),
     isCrit: context.isCrit,
     isOverkill: context.isOverkill,
   };

@@ -9,7 +9,8 @@ import {
 } from "../engine/constants.js";
 import { resolveGuts } from "../buffs/index.js";
 import { advanceTurnBuffs, consumeBuffUse, grantBuff, removeBuffsByTrait } from "./buffLifecycle.js";
-import type { Action, CommandSealEffect } from "./action.js";
+import type { Action, AttackChainCard, CommandSealEffect } from "./action.js";
+import { ActionUnavailableError } from "./actionError.js";
 import { buildEnemyInstance, enemyToBattleUnit, servantToBattleUnit, type BattleState, type EnemyInstance, type ServantInstance } from "./battleState.js";
 import { BUFF_ACTION_KEYS } from "./buffActionKeys.js";
 import { buildCombinedCardDeck } from "./cardDeck.js";
@@ -122,9 +123,11 @@ function advanceEnemyForEndTurn(enemy: EnemyInstance): EnemyInstance {
  * a documented, provisional call (same standing as this project's other open-item defaults)
  * rather than a confirmed rule, since no primary/community source addresses it directly.
  *
- * `currentWaveIndex` and wave/death transitions are deliberately untouched by `endTurn` —
- * this project doesn't resolve enemy death transitions (shift/call) yet, so there's nothing
- * correct to compute here. Star *generation* from landed hits now feeds `starsCarried`
+ * When every active enemy is dead after already-resolved break-bar shifts, `endTurn` advances
+ * to the next wave and builds that wave's independent `initialEnemies`. Reinforcement `call`
+ * remains deferred because its trigger semantics are still unresolved; a live shift target
+ * prevents advancement naturally because its replacement `EnemyInstance` has positive HP.
+ * Star *generation* from landed hits now feeds `starsCarried`
  * directly from `applyHit` (research/09 §7, wired in a later pass than this function's own
  * original comment suggested); this function only ever handles the *consumption* side,
  * allocating whatever `starsCarried` already holds across the freshly drawn hand.
@@ -147,7 +150,11 @@ function advanceEnemyForEndTurn(enemy: EnemyInstance): EnemyInstance {
  */
 function resolveEndTurn(state: BattleState, randomFn: () => number): BattleState {
   const servants = state.servants.map(advanceServantForEndTurn);
-  const enemies = state.enemies.map(advanceEnemyForEndTurn);
+  const advancedEnemies = state.enemies.map(advanceEnemyForEndTurn);
+  const nextWaveIndex = state.currentWaveIndex + 1;
+  const nextWave = state.enemies.every((enemy) => enemy.currentHp <= 0) ? state.waves[nextWaveIndex] : undefined;
+  const currentWaveIndex = nextWave === undefined ? state.currentWaveIndex : nextWaveIndex;
+  const enemies = nextWave === undefined ? advancedEnemies : nextWave.initialEnemies.map(buildEnemyInstance);
 
   const fullDeck = buildCombinedCardDeck(servants);
   const { hand, nextBag } = drawCardBagHand(state.cardBag, fullDeck, 5, randomFn);
@@ -163,10 +170,16 @@ function resolveEndTurn(state: BattleState, randomFn: () => number): BattleState
     starsCarried: 0,
     activeCritChanceBonus: state.critChanceBonusCarried,
     critChanceBonusCarried: 0,
+    currentWaveIndex,
     currentTurn: state.currentTurn + 1,
     consecutiveNpChainCount: 0,
     mysticCodeSkillCooldowns: decrementCooldowns(state.mysticCodeSkillCooldowns),
   };
+}
+
+/** True only after the final configured wave exists and all of its active enemies are dead. */
+export function isQuestCleared(state: BattleState): boolean {
+  return state.waves.length > 0 && state.currentWaveIndex === state.waves.length - 1 && state.enemies.every((enemy) => enemy.currentHp <= 0);
 }
 
 function findServant(state: BattleState, servantId: number): ServantInstance {
@@ -195,6 +208,34 @@ function findEnemy(state: BattleState, npcId: number): EnemyInstance {
     throw new RangeError(`No enemy with npcId ${npcId} in this BattleState`);
   }
   return enemy;
+}
+
+/**
+ * Resolves FGO's per-chain auto-target rule. Enemy array order is the player's left-to-right
+ * slots 1..N, while fallback priority is right-to-left (N..1). Consecutive non-NP face cards
+ * from the same servant keep Overkilling the selected corpse; a servant change or any NP
+ * boundary switches to the highest-priority living enemy.
+ */
+function resolveAttackTarget(
+  state: BattleState,
+  requestedNpcId: number,
+  servantId: number,
+  isNp: boolean,
+  previousSlot: AttackChainCard | undefined,
+): EnemyInstance | undefined {
+  const requested = state.enemies.find((candidate) => candidate.npcId === requestedNpcId);
+  if (requested === undefined) {
+    throw new RangeError(`No enemy with npcId ${requestedNpcId} in this BattleState`);
+  }
+  if (requested?.currentHp !== undefined && requested.currentHp > 0) return requested;
+  if (!isNp && requested !== undefined && previousSlot !== undefined && !previousSlot.isNp && previousSlot.servantId === servantId) {
+    return requested;
+  }
+  for (let index = state.enemies.length - 1; index >= 0; index -= 1) {
+    const candidate = state.enemies[index];
+    if (candidate !== undefined && candidate.currentHp > 0) return candidate;
+  }
+  return undefined;
 }
 
 /**
@@ -340,7 +381,6 @@ function resolvePlayCard(
   randomFn: () => number,
 ): BattleState {
   const servant = findServant(state, action.servantId);
-  const enemy = findEnemy(state, action.targetNpcId);
   const handCard = state.handCards[action.handCardIndex];
   if (handCard === undefined) {
     throw new RangeError(`handCardIndex ${action.handCardIndex} is out of range for a ${state.handCards.length}-card hand`);
@@ -355,11 +395,20 @@ function resolvePlayCard(
     throw new RangeError("playCard's context.isNP must be false — NP cards are cast via castNp, not playCard");
   }
   const chainCardAtPosition = action.chainCards[action.chainPosition - 1];
-  if (chainCardAtPosition === undefined || chainCardAtPosition.type !== handCard.card || chainCardAtPosition.servantId !== handCard.servantId) {
+  if (chainCardAtPosition === undefined || chainCardAtPosition.isNp || chainCardAtPosition.type !== handCard.card || chainCardAtPosition.servantId !== handCard.servantId) {
     throw new RangeError("action.chainCards[action.chainPosition - 1] must match the card actually being played (matched by type + servantId)");
   }
 
   const classification = classifyChain(action.chainCards);
+  const enemy = resolveAttackTarget(state, action.targetNpcId, action.servantId, false, action.chainCards[action.chainPosition - 2]);
+  if (enemy === undefined) {
+    return {
+      ...state,
+      handCards: state.handCards.filter((_, index) => index !== action.handCardIndex),
+      handCardStars: state.handCardStars.filter((_, index) => index !== action.handCardIndex),
+      consecutiveNpChainCount: 0,
+    };
+  }
   // `handCardStars` is always kept parallel to `handCards` (same length/order), and `handCard` above already confirmed this index is in range.
   const stars = state.handCardStars[action.handCardIndex] as number;
   // `state.activeCritChanceBonus` (a Quick-led chain's next-turn "+20% crit chance for all
@@ -371,10 +420,12 @@ function resolvePlayCard(
   const chainLeadCardType = (action.chainCards[0] as (typeof action.chainCards)[number]).type;
   const context: HitResolutionContext = {
     ...action.context,
+    npEnemyServerMod: enemy.serverMod.tdRate / 1000,
+    starEnemyServerMod: enemy.serverMod.starRate / 1000,
     isCrit,
     isBusterChain: isBusterChainFrom(classification),
     isMightyChain: isMightyChainFrom(classification),
-    extraCardChainType: extraCardChainTypeFrom(classification),
+    extraCardChainType: "none",
     chainLeadCardType,
   };
 
@@ -426,7 +477,7 @@ function resolvePlayCard(
  */
 function applyChainCompletionBonus(
   state: BattleState,
-  chainCards: readonly { readonly type: Card; readonly servantId: number }[],
+  chainCards: readonly AttackChainCard[],
   classification: ChainClassification,
 ): BattleState {
   let nextState = state;
@@ -453,28 +504,22 @@ function applyChainCompletionBonus(
 }
 
 /**
- * `castNp` — resolves a servant's Noble Phantasm. NP cards are additive and outside the
- * card bag/hand (research/03 §6.5), so unlike `playCard` nothing is removed from
- * `handCards`. Increments `consecutiveNpChainCount` (research/09 §1's NP Chain Bonus) —
+ * `castNp` — resolves a servant's Noble Phantasm. NP cards are available outside the random
+ * card bag/hand but still consume one of the turn's 3 selected attack slots, so unlike
+ * `playCard` nothing is removed from `handCards`. Increments `consecutiveNpChainCount`
+ * (research/09 §1's NP Chain Bonus) —
  * the *effect* of that count on this NP's own Overcharge stage is still the caller's
  * responsibility to fold into `context.npDamageMultiplier` before calling, since deriving
  * it here would need this NP's own `svals`/OC-stage table, which nothing in this codebase
  * reads yet (no skill/NP function-parsing layer exists — research/09 §7).
  *
- * Resets the casting servant's `currentNpGauge` to exactly 0 after resolving — research/04
- * §5.2a, confirmed by the project owner: casting an NP always fully drains the gauge to 0
- * regardless of how far past 100% (or any other bracket) it was sitting at, with no
- * "keep the remainder" carryover. This overrides whatever gauge `applyHit` just added from
- * this same NP's own hits (irrelevant for the caster, since it's zeroed immediately after).
+ * Consumes the casting servant's pre-cast gauge before damage, then preserves refund generated
+ * by the NP's own hit(s). Any amount above 100% is consumed too; only newly generated refund
+ * remains after the cast.
  *
- * `isCrit`/`isBusterChain`/`isMightyChain`/`extraCardChainType` are hardcoded
- * `false`/`false`/`false`/`"none"`, and
- * `chainLeadCardType` is set to this NP's own `context.card.type` (a deliberate no-op — an
- * NP's own `NiceCard.json` entry is itself an all-zero stub, so this lookup always yields a
- * zero `firstCardBonus` regardless), rather than derived from the crit-star lottery/chain
- * classification the way `playCard`'s are — research/03 §1.4/§5: the NP card is an all-zero
- * stub in the per-position modifier table and isn't part of the 3-card chain at all, so none
- * of these mechanics apply to an NP.
+ * The NP's color/owner participates in chain classification, but its own hit hardcodes
+ * crit/chain-derived damage flags off. Chain completion still fires when the NP occupies slot
+ * 3, and a same-servant three-slot selection enables the separate automatic Extra Attack.
  *
  * `action.effects` (default `[]` — `./action.js`'s doc comment) are folded in via
  * `applySkillEffect` strictly *after* the above (damage, gauge reset, NP Chain count) —
@@ -487,28 +532,121 @@ function resolveCastNp(
   randomFn: () => number,
 ): BattleState {
   const servant = findServant(state, action.servantId);
-  const enemy = findEnemy(state, action.targetNpcId);
+  if (servant.currentNpGauge < FULL_TD_POINT) {
+    throw new ActionUnavailableError(`Servant ${action.servantId} needs at least 100% NP gauge to cast, got ${servant.currentNpGauge}`);
+  }
+  const declaredTargetNpcIds = action.targetNpcIds ?? [action.targetNpcId];
+  if (declaredTargetNpcIds.length === 0 || !declaredTargetNpcIds.includes(action.targetNpcId)) {
+    throw new RangeError("castNp targetNpcIds must contain at least the primary targetNpcId");
+  }
+  for (const targetNpcId of declaredTargetNpcIds) {
+    findEnemy(state, targetNpcId);
+  }
   if (!action.context.isNP) {
     throw new RangeError("castNp's context.isNP must be true");
   }
+  const chainCardAtPosition = action.chainCards[action.chainPosition - 1];
+  if (
+    chainCardAtPosition === undefined ||
+    !chainCardAtPosition.isNp ||
+    chainCardAtPosition.type !== action.context.card.type ||
+    chainCardAtPosition.servantId !== action.servantId
+  ) {
+    throw new RangeError("castNp must occupy the matching NP-marked attack-chain slot (matched by type + servantId)");
+  }
+  const classification = classifyChain(action.chainCards);
+  const isAoe = declaredTargetNpcIds.length > 1;
+  const primaryTarget = isAoe
+    ? state.enemies.find((candidate) => candidate.npcId === action.targetNpcId && candidate.currentHp > 0)
+    : resolveAttackTarget(state, action.targetNpcId, action.servantId, true, action.chainCards[action.chainPosition - 2]);
+  const targetNpcIds = isAoe
+    ? declaredTargetNpcIds.filter((npcId) => state.enemies.some((candidate) => candidate.npcId === npcId && candidate.currentHp > 0))
+    : primaryTarget === undefined
+      ? []
+      : [primaryTarget.npcId];
+  if (targetNpcIds.length === 0) return state;
+  const primaryTargetNpcId = primaryTarget?.npcId ?? targetNpcIds[0] as number;
 
-  const context: HitResolutionContext = {
-    ...action.context,
-    isCrit: false,
-    isBusterChain: false,
-    isMightyChain: false,
-    extraCardChainType: "none",
-    chainLeadCardType: action.context.card.type,
+  // NP consumption happens before damage; refund generated by the NP's own hit(s) therefore
+  // remains after the cast instead of being erased with the pre-cast gauge.
+  let nextState: BattleState = {
+    ...state,
+    servants: state.servants.map((candidate) => (candidate.servantId === servant.servantId ? { ...candidate, currentNpGauge: 0 } : candidate)),
+    consecutiveNpChainCount: state.consecutiveNpChainCount + 1,
   };
-  let nextState = applyHit(state, servant, enemy, constants, context, randomFn);
-  const servants = nextState.servants.map((s) => (s.servantId === servant.servantId ? { ...s, currentNpGauge: 0 } : s));
-  nextState = { ...nextState, servants, consecutiveNpChainCount: nextState.consecutiveNpChainCount + 1 };
+
+  for (const effect of action.effectsBeforeDamage ?? []) {
+    nextState = applySkillEffect(nextState, servant.servantId, effect, undefined, primaryTargetNpcId, constants, randomFn);
+  }
+
+  const defaultHitContexts = action.hitContexts ?? [action.context];
+  const targetPlans = targetNpcIds.map((targetNpcId) => ({
+    targetNpcId,
+    hitContexts: action.targetHitContexts?.find((plan) => plan.targetNpcId === targetNpcId)?.hitContexts ?? defaultHitContexts,
+  }));
+  for (const plan of targetPlans) {
+    for (const hitContext of plan.hitContexts) {
+      if (!hitContext.isNP || hitContext.card.type !== action.context.card.type) {
+        throw new RangeError("Every castNp hit context must be NP-typed and match the NP card color");
+      }
+      const currentEnemy = nextState.enemies.find((candidate) => candidate.npcId === plan.targetNpcId);
+      if (currentEnemy === undefined) break; // A just-broken shift bar does not receive the NP's remaining hits.
+      const currentServant = findServant(nextState, action.servantId);
+      const context: HitResolutionContext = {
+        ...hitContext,
+        card: { ...hitContext.card, position: 1 },
+        npEnemyServerMod: currentEnemy.serverMod.tdRate / 1000,
+        starEnemyServerMod: currentEnemy.serverMod.starRate / 1000,
+        isCrit: false,
+        isBusterChain: false,
+        isMightyChain: false,
+        extraCardChainType: "none",
+        chainLeadCardType: (action.chainCards[0] as AttackChainCard).type,
+      };
+      nextState = applyHit(nextState, currentServant, currentEnemy, constants, context, randomFn);
+    }
+  }
 
   for (const effect of action.effects ?? []) {
-    nextState = applySkillEffect(nextState, servant.servantId, effect, undefined, action.targetNpcId, constants, randomFn);
+    nextState = applySkillEffect(nextState, servant.servantId, effect, undefined, primaryTargetNpcId, constants, randomFn);
+  }
+
+  if (action.chainPosition === 3) {
+    nextState = applyChainCompletionBonus(nextState, action.chainCards, classification);
   }
 
   return nextState;
+}
+
+function resolvePlayExtraCard(
+  state: BattleState,
+  action: Extract<Action, { type: "playExtraCard" }>,
+  constants: BattleConstants,
+  randomFn: () => number,
+): BattleState {
+  const servant = findServant(state, action.servantId);
+  if (action.context.isNP || action.context.card.type !== Card.EXTRA) {
+    throw new RangeError("playExtraCard requires a non-NP Extra-card context");
+  }
+  const classification = classifyChain(action.chainCards);
+  if (!classification.isBraveChain || action.chainCards.some((candidate) => candidate.servantId !== action.servantId)) {
+    throw new RangeError("playExtraCard requires a three-slot Brave Chain owned by the acting servant");
+  }
+  const enemy = resolveAttackTarget(state, action.targetNpcId, action.servantId, false, action.chainCards[2]);
+  if (enemy === undefined) return state;
+  const context: HitResolutionContext = {
+    ...action.context,
+    card: { type: Card.EXTRA, position: 1 },
+    npEnemyServerMod: enemy.serverMod.tdRate / 1000,
+    starEnemyServerMod: enemy.serverMod.starRate / 1000,
+    chainLeadCardType: (action.chainCards[0] as AttackChainCard).type,
+    isCrit: false,
+    isBusterChain: isBusterChainFrom(classification),
+    isMightyChain: isMightyChainFrom(classification),
+    extraCardChainType: extraCardChainTypeFrom(classification),
+  };
+  const nextState = applyHit(state, servant, enemy, constants, context, randomFn);
+  return { ...nextState, consecutiveNpChainCount: 0 };
 }
 
 /** Command Seal costs by effect (research/00 §6, confirmed by the project owner). */
@@ -1029,7 +1167,7 @@ function resolveOrderChange(state: BattleState, action: Extract<Action, { type: 
  * Applies one `Action` to `state`, producing the next `BattleState` — research/09 §1's
  * pure function `(BattleState, Action) → BattleState'`.
  *
- * `endTurn`, `playCard`, `castNp`, `useCommandSeal`, `useSkill`, `useMysticCodeSkill`, and
+ * `endTurn`, `playCard`, `castNp`, `playExtraCard`, `useCommandSeal`, `useSkill`, `useMysticCodeSkill`, and
  * `orderChange` are all implemented. `useSkill`/`useMysticCodeSkill` are narrower than a
  * full skill/NP function-array interpreter (research/09 §7): they only apply the 4 modeled
  * `SkillEffect` variants (`./skillEffect.js`) the caller supplies as already-resolved —
@@ -1057,6 +1195,8 @@ export function resolveAction(
       return resolvePlayCard(state, action, constants, randomFn);
     case "castNp":
       return resolveCastNp(state, action, constants, randomFn);
+    case "playExtraCard":
+      return resolvePlayExtraCard(state, action, constants, randomFn);
     case "useCommandSeal":
       return resolveUseCommandSeal(state, action);
     case "useSkill":

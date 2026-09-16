@@ -1,9 +1,10 @@
 import { Card } from "@atlasacademy/api-connector";
 import { describe, expect, it } from "vitest";
+import type { AttackChainCard } from "./action.js";
 import { classifyChain, extraCardChainTypeFrom, isBusterChainFrom, isMightyChainFrom } from "./chainDetection.js";
 
-function card(type: Card, servantId: number): { type: Card; servantId: number } {
-  return { type, servantId };
+function card(type: Card, servantId: number, isNp = false): AttackChainCard {
+  return isNp ? { type, servantId, isNp: true } : { type, servantId };
 }
 
 describe("classifyChain", () => {
@@ -43,6 +44,16 @@ describe("classifyChain", () => {
   it("marks isBraveChain false when any card belongs to a different servant", () => {
     const result = classifyChain([card(Card.BUSTER, 5), card(Card.BUSTER, 5), card(Card.BUSTER, 6)]);
     expect(result.isBraveChain).toBe(false);
+  });
+
+  it("counts an NP's real color and owner for Buster and Brave Chain eligibility", () => {
+    const result = classifyChain([card(Card.BUSTER, 5, true), card(Card.BUSTER, 5), card(Card.BUSTER, 5)]);
+    expect(result).toEqual({ chainType: "busterChain", isBraveChain: true });
+  });
+
+  it("counts an NP's real color toward a Mighty Chain", () => {
+    const result = classifyChain([card(Card.BUSTER, 1, true), card(Card.ARTS, 2), card(Card.QUICK, 3)]);
+    expect(result).toEqual({ chainType: "mightyChain", isBraveChain: false });
   });
 
   it("throws when given anything other than exactly 3 cards", () => {

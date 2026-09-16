@@ -1,4 +1,5 @@
 import type { Action } from "../battle/action.js";
+import { ActionUnavailableError } from "../battle/actionError.js";
 import type { BattleState } from "../battle/battleState.js";
 import type { BattleConstants } from "../battle/gameConstants.js";
 import { resolveAction } from "../battle/turnLoop.js";
@@ -63,9 +64,14 @@ export function searchBestActionSequence(
   scoreFn: SequenceScoreFn,
 ): readonly ActionSequenceResult[] {
   return candidates
-    .map((candidate): ActionSequenceResult => {
-      const finalState = simulateActionSequence(initialState, candidate.actions, constants, randomFn);
-      return { label: candidate.label, actions: candidate.actions, finalState, score: scoreFn(finalState, initialState) };
+    .flatMap((candidate): readonly ActionSequenceResult[] => {
+      try {
+        const finalState = simulateActionSequence(initialState, candidate.actions, constants, randomFn);
+        return [{ label: candidate.label, actions: candidate.actions, finalState, score: scoreFn(finalState, initialState) }];
+      } catch (error) {
+        if (error instanceof ActionUnavailableError) return [];
+        throw error;
+      }
     })
     .sort((a, b) => b.score - a.score);
 }

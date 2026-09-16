@@ -8,25 +8,25 @@ web
 
 ## Stack
 
-TypeScript end-to-end — data layer, simulation/optimizer engine, and (later) UI as a Vite+React web app. Delegated to Claude by the user; rationale: one language across the whole stack, native fetch/JSON handling for the Atlas Academy API, runs directly in the browser without a separate backend service.
+TypeScript end-to-end — data layer, simulation/optimizer engine, and a Vite+React web app. One language is used across the stack for native fetch/JSON handling, direct reuse of the engine in the browser, and operation without a separate backend service.
 
 ## Users
 
 Two audiences sharing one engine:
 - **Newer / low-roster players** stuck on content that feels "too hard" but is often clearable with what they already own, just not built or played optimally. Their question: "can I clear this at all, and how."
-- **Experienced players** optimizing tight farming clears for 90++ (Lv.90+) events and Challenge Quests, where margins are tight and exact skill/card ordering matters. Their question: "what's the fastest/most reliable line."
+- **Experienced players** optimizing tight farming clears for 90++ (Lv.90+) events, raids, and other offensive-clear content where margins are tight and exact skill/card ordering matters. Their question: "what's the fastest/most reliable line."
 
 ## Product Purpose
 
 A data-driven FGO (Fate/Grand Order) damage & NP calculator that evolves into a **fastest-clear farming optimizer** and a **strongest single-target (ST) burst finder**, backed by real Atlas Academy servant/CE/enemy data and the user's actual (possibly unfinished) account state — not hypothetical max-investment numbers.
 
-The optimizer's target turn count is **not hardcoded to 3** — 3-turn is the common/flagship case (matches the most frequent 3-wave farming node), but the engine searches for whichever turn count is actually achievable given the user's real roster/account condition: it may find a faster clear (fewer turns) when the roster is strong, or report the minimum achievable turn count above the target when it isn't reachable, rather than only succeeding/failing against a fixed M=3.
+The optimizer's target turn count is **not hardcoded to 3**. Clear Quest searches iteratively from one turn up to a bounded search horizon; 3T Farming is only a preset. The initial product horizon is at most 6 turns because longer offensive-only plans become increasingly misleading while enemy turns are not simulated. Max Burst is a separate product mode with a different objective: maximize damage against a chosen target, immediately or after a bounded number of setup turns.
 
 Success means the user gets an actionable, per-wave/per-hit plan (servants, skills, card order, NP timing, Order Changes) they can execute in-game, or — when nothing clears yet — a concrete "what would need to change" gap analysis.
 
 ## Positioning
 
-Simulates actual per-hit/per-card damage and NP-gauge mechanics from real, live-fetched servant/CE/enemy data at the user's *actual* entered account state (real skill/NP/append levels, Fou values, bond, CE MLB status) — not a generic stat-based estimator and not assuming maxed investment. Turn-count target is a search parameter, not a fixed assumption, so the same engine handles a 1-wave daily, a standard farming node, or a 4+ wave Challenge Quest without special-casing wave count.
+Simulates actual per-hit/per-card damage and NP-gauge mechanics from real Atlas Academy servant/CE data at the user's *actual* entered account state (real skill/NP/append levels, Fou values, bond, CE MLB status) — not a generic stat-based estimator and not assuming maxed investment. Initial quest input is manual and supports different class, attribute, HP, and optional traits/buffs for every enemy in every wave. The same simulation core serves Clear Quest, Max Burst, and the later Manual/Sandbox surface.
 
 ## Operating Context
 
@@ -34,30 +34,39 @@ Simulates actual per-hit/per-card damage and NP-gauge mechanics from real, live-
 - Region is a user-switchable setting with **fully separate stored account data per region** (JP and NA/EN are independent accounts with independent roster state, not a merged dataset).
 - User's roster (servant levels, skill levels, NP level, ascension/append skills, Fou values, bond level, equipped CE + level/MLB, Mystic Code) is entered and stored manually/locally per account — this is private data Atlas Academy doesn't have.
 - CE inventory is a list of owned copies (not a boolean "own/don't own" set) — duplicates are common and the optimizer must respect actual copy counts.
+- Initial quest setup is manual: the user chooses the wave count and defines each enemy independently. Class, attribute, and HP are required; traits and special buffs are optional advanced inputs. Omitted advanced values use explicitly disclosed neutral defaults.
+- The optimizer may recommend one borrowed support. Its standard idealized build uses Atlas Academy's natural maximum level (no Grails), NP1, Fou +1000 ATK/HP, skills 10/10/10, append skills disabled, and every strengthening available in the selected region unlocked.
+- Borrowed-support CE effects are deliberately ignored in the first milestone. The support starts at 0% NP and may use its NP only if the simulated line legitimately reaches 100%. A later opt-in may attach a specific CE; the optimizer must not silently assume a 50% starting-NP CE.
 
 ## Capabilities and Constraints
 
 Confirmed in scope (see `research/00-project-overview.md` §1 for full detail):
-- 3T-style Farm Optimizer with core/free-slot tagging, Total Cost reporting, Minimum-Cost mode, Prefer-Event-CE mode, Prefer-Bond-CE mode, preferred-attacker constraint, Top-5 distinct results, fallback suggestions.
+- **Clear Quest / Minimum Turn** for manually entered nodes, free quests, raids, and event-farming quests. Search horizons expand from 1 through at most 6 turns; 3T is a preset, not a global default.
+- Clear Quest prefers one necessary attacker, then progressively expands to two or more only when a reliable clear cannot be found. A user-pinned preferred attacker must be the primary damage dealer, not merely present in the party.
+- 3T-style farming preferences: core/free-slot tagging, Total Cost reporting, Minimum-Cost mode, Prefer-Event-CE mode, Prefer-Bond-CE mode, Top-5 distinct strategies, and fallback suggestions. Event CEs are simulated as combat equipment too: starting NP, ATK, NP Damage, and other effects can make an Event CE part of the viable loop rather than merely a reward modifier.
 - Strongest ST Burst Finder, including multi-turn setup strategies (not single-turn-only).
 - Manual/Sandbox Builder reusing the same simulation core as the optimizers.
 - "Not Clearable Yet" Gap Analysis / Build-Up Advisor (smallest concrete upgrade that flips fail→clear).
 
-Explicit non-goals (for now): enemy attack/survivability simulation (data is available, deferred as an explicit phase-2, not a data limitation); gacha/rolling or investment-cost modeling; native/mobile app (web only); hand-curated servant/CE/enemy data.
+Initial ranking policy for Clear Quest is: full quest clear, minimum turns, acceptable reliability, fewer necessary attackers, safety margin, then the selected Event CE/Bond CE/Minimum Cost preference. Attacker count is causal: a servant is an attacker/core only when removing its damage contribution makes the line fail; incidental face-card damage does not automatically make a support an attacker.
 
-Open, unsourced mechanics tracked as implementation-time follow-ups (not blockers): card-draw weighting/guarantee rule, star-carryover-to-next-turn cap, Order Change state-transfer rules, evaded/invincible-blocked hit's gauge/star yield. See `research/09-simulation-and-optimizer-design.md` §7.
+Explicit non-goals for the first milestone: Challenge Quests; enemy attack/survivability simulation; borrowed-support CE search; gacha/rolling or investment-cost modeling; native/mobile app; and automatic quest selection. CQ and enemy turns are deferred because their enemy-AI/RNG and survivability requirements would make offensive-only recommendations misleading, not because Atlas Academy lacks the data.
 
-No git repository exists yet; no code/package.json exists yet — this is the first implementation work after a fully completed research phase (`research/00`–`09`).
+Open, unsourced mechanics tracked as implementation-time follow-ups (not blockers): card-draw weighting/guarantee rule and evaded/invincible-blocked hit's gauge/star yield. Star carryover and Order Change state transfer were resolved during the research follow-ups; see `research/09-simulation-and-optimizer-design.md` §7 and the originating mechanic files.
+
+Current implementation is an engine-first work in progress. The simulator advances waves, enforces legal NP gauge, preserves per-hit NP refund, supports ST/AoE target lists with per-enemy server modifiers, models NP as one of exactly three attack slots, and produces automatic Extra Attacks for Brave Chains. `optimizeQuest` auto-resolves an explicitly selected raw `NiceNp`, including `npDistribution`, modeled functions before/after damage, support NPs, and NP-Chain Overcharge. Multi-enemy chains follow the confirmed target rule: selected target first; same-servant face cards may Overkill; servant/NP boundaries auto-switch by view priority `3 -> 2 -> 1`. `optimizeQuestMinimumTurns` searches horizons 1 through at most 6 and stops at the first full-quest clear, otherwise returning the closest max-horizon lines. Product completion still requires account-driven NP-version selection, broader NP damage-function coverage, scalable pruning/progressive attacker widening, preference ranking, probability/diversity/result attribution, roster/quest input surfaces, and persistent local roster storage.
 
 ## Evidence on Hand
 
 - `research/00-project-overview.md` through `research/09-simulation-and-optimizer-design.md` — ten primary-source-cited research files covering data sources, damage formula, card/hit mechanics, NP gauge/refund, buffs/debuffs, traits/class mechanics, Mystic Codes, enemy mechanics, and the simulation/optimizer design. These are the binding technical spec for implementation.
-- No UI mockups, brand assets, or existing visual work exist yet.
+- `web/` contains an early optimizer-results prototype. Its current visual design is not approved and must not be treated as the future UI baseline; the final information architecture will begin from mode selection (Clear Quest, Max Burst, later Manual/Sandbox), then inputs, preferences, and results.
 
 ## Product Principles
 
-- **Real account state over hypothetical max investment** — every number (skill level, NP level, Fou, bond, CE MLB) reflects what the user actually owns, never assumed maxed.
-- **Turn count is a search target, not a hardcoded assumption** — one generalized engine handles any wave/turn count.
+- **Real owned-account state over hypothetical max investment** — every owned-servant/CE number (skill level, NP level, Fou, bond, CE MLB) reflects what the user actually owns. The one exception is the explicitly disclosed standardized build used when recommending an ideal borrowed support.
+- **Turn count is an outcome within a bounded search horizon** — Clear Quest finds the earliest clear up to the configured cap; 3T is a preset, not a global default.
+- **Objectives are separate; mechanics are shared** — Clear Quest minimizes turns, Max Burst maximizes target damage, and Manual/Sandbox replays user choices through the same simulator.
+- **Prefer one attacker, never force one blindly** — expand to multi-attacker strategies when a single-attacker line cannot clear reliably; reliability outranks attacker-count simplicity.
 - **Community strategies emerge from simulation, not hardcoded patterns** — known lines (Arts loop, Buster loop, etc.) should fall out of simulate+search, used as heuristics to prune the search space, not as the only options.
 - **Primary-source data only** — every formula/number traces to Atlas Academy's API/schema or the `fgo-docs` repo; unsourced mechanics are explicitly flagged, never silently assumed.
 - **Failure is actionable** — when nothing clears, report the closest line and the smallest concrete upgrade that would make it clear, not just "not possible."
