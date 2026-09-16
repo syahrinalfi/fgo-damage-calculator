@@ -199,4 +199,99 @@ describe("upgrade advisor", () => {
     expect(evaluations).toBe(1);
     expect(report.recommendations).toEqual([]);
   });
+
+  it("builds an owned off-shortlist servant to natural-max potential while preserving NP and append levels", () => {
+    const baseNp = np(2001, 101);
+    const strengthenedNp = np(2002, 102, 9200);
+    const rawSkill = { functions: [], coolDown: Array.from({ length: 10 }, () => 5) } as Pick<Skill.Skill, "functions" | "coolDown">;
+    const owned: ServantCandidate = {
+      niceServant: {
+        lvMax: 80,
+        noblePhantasms: [baseNp, strengthenedNp],
+      } as unknown as ServantModule.Servant,
+      build: build({
+        servantId: 2,
+        level: 40,
+        ascension: 2,
+        skillLevels: [4, 6, 8],
+        appendSkillLevels: { 2: 5 },
+        npLevel: 3,
+        fou: { atk: 400, hp: 600 },
+        selectedNpId: baseNp.id,
+        unlockedStrengthenings: [],
+      }),
+    };
+    const base = {
+      ...options(),
+      skillSources: [{
+        servantId: 2,
+        skills: [
+          { skill: rawSkill, level: 4 },
+          { skill: rawSkill, level: 6 },
+          { skill: rawSkill, level: 8 },
+        ],
+      }],
+    } as MinimumTurnOptimizerOptions;
+    const scenarios = buildUpgradeScenarios(base, { ownedServantCandidates: [owned] });
+    const scenario = scenarios.find((candidateScenario) => candidateScenario.kind === "ownedServantBuild");
+    const potential = scenario?.options.shortlist.find((candidate) => candidate.build.servantId === 2)?.build;
+
+    expect(scenario).toMatchObject({ servantId: 2, effortTier: 4, steps: 1 });
+    expect(potential).toMatchObject({
+      level: 80,
+      ascension: 4,
+      skillLevels: [10, 10, 10],
+      appendSkillLevels: { 2: 5 },
+      npLevel: 3,
+      fou: { atk: 1000, hp: 1000 },
+      selectedNpId: baseNp.id,
+      unlockedStrengthenings: ["9200:1"],
+    });
+    expect(scenario?.options.skillSources?.[0]?.skills.map((slot) => slot.level)).toEqual([10, 10, 10]);
+    expect(owned.build).toMatchObject({ level: 40, skillLevels: [4, 6, 8], npLevel: 3 });
+  });
+
+  it("replaces an underbuilt shortlisted owned servant without adding a duplicate or downgrading overinvestment", () => {
+    const owned: ServantCandidate = {
+      niceServant: { lvMax: 90, noblePhantasms: [] } as unknown as ServantModule.Servant,
+      build: build({
+        level: 100,
+        skillLevels: [6, 10, 10],
+        appendSkillLevels: { 2: 10 },
+        npLevel: 2,
+        fou: { atk: 2000, hp: 2000 },
+      }),
+    };
+    const base = options(owned.build);
+    const scenario = buildUpgradeScenarios(base, { ownedServantCandidates: [owned] })
+      .find((candidateScenario) => candidateScenario.kind === "ownedServantBuild");
+
+    expect(scenario?.options.shortlist).toHaveLength(1);
+    expect(scenario?.options.shortlist[0]?.build).toMatchObject({
+      level: 100,
+      skillLevels: [10, 10, 10],
+      appendSkillLevels: { 2: 10 },
+      npLevel: 2,
+      fou: { atk: 2000, hp: 2000 },
+    });
+  });
+
+  it("ranks a proven direct upgrade before building another owned servant", () => {
+    const owned: ServantCandidate = {
+      niceServant: { lvMax: 80, noblePhantasms: [] } as unknown as ServantModule.Servant,
+      build: build({ servantId: 2, level: 40, npLevel: 4 }),
+    };
+    const report = findClearUpgradeRecommendations(options(), {
+      ownedServantCandidates: [owned],
+      evaluate: (candidateOptions) => result(
+        (candidateOptions.shortlist[0]?.build.npLevel ?? 1) >= 2 ||
+        candidateOptions.shortlist.some((candidate) => candidate.build.servantId === 2)
+          ? 3
+          : null,
+      ),
+    });
+
+    expect(report.recommendations[0]).toMatchObject({ kind: "npLevel", servantId: 1, to: 2 });
+    expect(report.recommendations.some((recommendation) => recommendation.kind === "ownedServantBuild" && recommendation.servantId === 2)).toBe(true);
+  });
 });
