@@ -16,6 +16,7 @@ const DIRECT_DAMAGE_NP_FUNCTIONS = new Set<Func.FuncType>([
   Func.FuncType.DAMAGE_NP_STATE_INDIVIDUAL_FIX,
   Func.FuncType.DAMAGE_NP_AND_OR_CHECK_INDIVIDUALITY,
   Func.FuncType.DAMAGE_NP_RARE,
+  Func.FuncType.DAMAGE_NP_INDIVIDUAL_SUM,
 ]);
 
 function selectedEffects(func: Func.Func, npLevel: ServantInstance["npLevel"], stage: OverchargeStage): readonly SkillEffect[] | undefined {
@@ -88,6 +89,7 @@ function buildResolvedAttack(
   const isStateIndividualDamage = damageEntry.func.funcType === Func.FuncType.DAMAGE_NP_STATE_INDIVIDUAL_FIX;
   const isAndTraitDamage = damageEntry.func.funcType === Func.FuncType.DAMAGE_NP_AND_OR_CHECK_INDIVIDUALITY;
   const isRareDamage = damageEntry.func.funcType === Func.FuncType.DAMAGE_NP_RARE;
+  const isIndividualSumDamage = damageEntry.func.funcType === Func.FuncType.DAMAGE_NP_INDIVIDUAL_SUM;
   const individualTarget = damageValues?.Target;
   const individualCorrection = damageValues?.Correction;
   if (isIndividualDamage && (individualTarget === undefined || individualCorrection === undefined)) return undefined;
@@ -96,6 +98,20 @@ function buildResolvedAttack(
   if (isAndTraitDamage && (andTraitTargets === undefined || andTraitTargets.length === 0 || individualCorrection === undefined)) return undefined;
   const rarityTargets = damageValues?.TargetRarityList;
   if (isRareDamage && (rarityTargets === undefined || rarityTargets.length === 0 || individualCorrection === undefined)) return undefined;
+  const sumBaseCorrection = damageValues?.Value2;
+  const sumTargetSide = damageValues?.Target;
+  const sumTargets = damageValues?.TargetList;
+  if (
+    isIndividualSumDamage &&
+    (
+      sumBaseCorrection === undefined ||
+      individualCorrection === undefined ||
+      (sumTargetSide !== 0 && sumTargetSide !== 1) ||
+      sumTargets === undefined ||
+      sumTargets.length === 0 ||
+      damageValues?.IgnoreIndivUnreleaseable === 1
+    )
+  ) return undefined;
   const lowHpMaximumBonus = damageValues?.Target;
   if (isLowHpDamage && lowHpMaximumBonus === undefined) return undefined;
   const hpRatio = servant.maxHp <= 0 ? 0 : Math.min(1, Math.max(0, servant.currentHp / servant.maxHp));
@@ -113,13 +129,33 @@ function buildResolvedAttack(
   }
   const hitRates = np.npDistribution.map((rate) => rate / 100);
   const ignoreDefense = damageEntry.func.funcType === Func.FuncType.DAMAGE_NP_PIERCE;
-  const isConditionalDamage = isIndividualDamage || isStateIndividualDamage || isAndTraitDamage || isRareDamage;
+  const isConditionalDamage = isIndividualDamage || isStateIndividualDamage || isAndTraitDamage || isRareDamage || isIndividualSumDamage;
+  const countIndividualSumMatches = (enemy: EnemyInstance): number => {
+    const unit = sumTargetSide === 1 ? enemy : servant;
+    const targets = sumTargets as readonly number[];
+    const traitCount = targets.reduce((count, trait) => count + (unit.traits.has(trait) ? 1 : 0), 0);
+    const buffCount = unit.activeBuffs.reduce(
+      (count, buff) => count + (targets.some((trait) => buff.vals?.has(trait) ?? false) ? 1 : 0),
+      0,
+    );
+    const total = traitCount + buffCount;
+    const maximum = damageValues?.ParamAddMaxCount;
+    return maximum !== undefined && maximum > 0 ? Math.min(total, maximum) : total;
+  };
   const conditionMatches = (enemy: EnemyInstance): boolean => {
     if (isIndividualDamage) return enemy.traits.has(individualTarget as number);
     if (isStateIndividualDamage) return enemy.activeBuffs.some((buff) => buff.vals?.has(individualTarget as number) ?? false);
     if (isAndTraitDamage) return (andTraitTargets as readonly number[]).every((trait) => enemy.traits.has(trait));
     if (isRareDamage) return enemy.rarity !== undefined && (rarityTargets as readonly number[]).includes(enemy.rarity);
+    if (isIndividualSumDamage) return countIndividualSumMatches(enemy) > 0;
     return false;
+  };
+  const specialEffectiveModifierFor = (enemy: EnemyInstance): number => {
+    if (isIndividualSumDamage) {
+      const count = countIndividualSumMatches(enemy);
+      return count > 0 ? ((sumBaseCorrection as number) + count * (individualCorrection as number)) / 1000 : 1;
+    }
+    return isConditionalDamage ? (individualCorrection as number) / 1000 : 1;
   };
   const contextsFor = (enemy: EnemyInstance) =>
     hitRates.map((hitRate) => ({
@@ -127,7 +163,7 @@ function buildResolvedAttack(
       npDamageMultiplier: (effectiveRawDamage / 1000) * hitRate,
       randomModifier,
       isSuperEffective: isConditionalDamage && conditionMatches(enemy),
-      superEffectiveModifier: isConditionalDamage ? (individualCorrection as number) / 1000 : 1,
+      superEffectiveModifier: specialEffectiveModifierFor(enemy),
       isNP: true,
       offensiveNPRate,
       npEnemyServerMod: enemy.serverMod.tdRate / 1000,
