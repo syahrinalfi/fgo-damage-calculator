@@ -49,15 +49,18 @@ describe("setOwnedServant / removeOwnedServant", () => {
 describe("craft essence inventory", () => {
   it("adds copies with distinct ids", () => {
     const profile = createEmptyRosterProfile(Region.NA);
-    const a = addCraftEssence(profile, 9999, 1, false);
-    const b = addCraftEssence(profile, 9999, 10, true);
+    const a = addCraftEssence(profile, 9999, 1, 0);
+    const b = addCraftEssence(profile, 9999, 10, 4);
     expect(profile.craftEssenceInventory).toHaveLength(2);
     expect(a.id).not.toBe(b.id);
+    expect(a.limitBreakCount).toBe(0);
+    expect(b.limitBreakCount).toBe(4);
+    expect(() => addCraftEssence(profile, 9999, 1, 5 as never)).toThrow(RangeError);
   });
 
   it("unequips a removed CE from every servant and support preset referencing it", () => {
     const profile = createEmptyRosterProfile(Region.NA);
-    const ce = addCraftEssence(profile, 9999, 1, false);
+    const ce = addCraftEssence(profile, 9999, 1, 0);
 
     const servant = makeOwnedServant(1);
     servant.equippedCraftEssenceId = ce.id;

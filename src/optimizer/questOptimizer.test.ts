@@ -12,6 +12,7 @@ import { optimizeQuest, optimizeQuestMinimumTurns, type ServantCandidate } from 
 import type { NpAttackOption } from "./cardOrderCandidates.js";
 import type { SkillActivation } from "./skillUsageCandidates.js";
 import { npStrengtheningKey } from "./npVersionSelection.js";
+import { findClearUpgradeRecommendations } from "./upgradeAdvisor.js";
 
 function niceServant(overrides: Partial<ServantModule.Servant> = {}): ServantModule.Servant {
   return {
@@ -833,5 +834,98 @@ describe("optimizeQuestMinimumTurns", () => {
     expect(result.minimumTurns).toBeNull();
     expect(result.searchedThroughTurn).toBe(1);
     expect(result.candidates.length).toBeGreaterThan(0);
+  });
+});
+
+describe("upgrade advisor integration", () => {
+  it("finds the smallest NP-level increase that turns an actual failed search into a clear", () => {
+    const values = [1000, 100000, 110000, 120000, 130000].map((Value) => ({ Value }));
+    const damage = {
+      funcId: 701,
+      funcType: Func.FuncType.DAMAGE_NP,
+      funcTargetType: Func.FuncTargetType.ENEMY,
+      funcTargetTeam: Func.FuncTargetTeam.ENEMY,
+      functvals: [],
+      funcquestTvals: [],
+      overWriteTvalsList: [],
+      funcPopupText: "",
+      buffs: [],
+      svals: values,
+      svals2: values,
+      svals3: values,
+    } as unknown as Func.Func;
+    const noblePhantasm = {
+      id: 7001,
+      num: 1,
+      npNum: 1,
+      priority: 101,
+      condQuestId: 0,
+      condQuestPhase: 0,
+      strengthStatus: 1,
+      card: "2",
+      name: "Upgrade Test NP",
+      effectFlags: ["attackEnemyOne"],
+      npGain: { buster: [50, 50, 50, 50, 50], arts: [50, 50, 50, 50, 50], quick: [50, 50, 50, 50, 50], extra: [50, 50, 50, 50, 50], defence: [50, 50, 50, 50, 50], np: [80, 80, 80, 80, 80] },
+      npDistribution: [100],
+      functions: [damage],
+    } as unknown as NoblePhantasm.NoblePhantasm;
+    const attacker: ServantCandidate = {
+      niceServant: niceServant({ noblePhantasms: [noblePhantasm] }),
+      build: { ...build(1), selectedNpId: noblePhantasm.id },
+    };
+    const boss = waveEnemy({ hp: 30000 });
+    const report = findClearUpgradeRecommendations({
+      shortlist: [attacker, candidate(2), candidate(3)],
+      cePool: [],
+      waves: [wave({ initialEnemies: [boss], enemyPool: [boss] })],
+      costBudget: 1000,
+      constants: CONSTANTS,
+      resolveHitContext,
+      resolveSkillOptions: (initialState) => {
+        const actor = initialState.servants.find((servant) => servant.servantId === 1);
+        return actor === undefined
+          ? []
+          : [{ type: "useSkill", servantId: 1, skillSlot: 1, effects: [{ kind: "gainNp", rawAmount: 10000, targetType: "self" }], cooldownTurns: 5 }];
+      },
+      maxTurns: 1,
+      maxAttackers: 1,
+      randomFn: () => 0.5,
+    });
+    expect(report.baseline.minimumTurns).toBeNull();
+    expect(report.recommendations[0]).toMatchObject({ kind: "npLevel", servantId: 1, from: 1, to: 2 });
+    expect(report.recommendations[0]?.result.minimumTurns).toBe(1);
+  });
+
+  it("proves an owned CE level-cap upgrade can flip a failed search into a clear", () => {
+    const ceData = {
+      id: 9400999,
+      name: "Advisor Test CE",
+      cost: 12,
+      lvMax: 20,
+      atkGrowth: Array.from({ length: 20 }, (_, index) => index * 10000),
+      hpGrowth: Array.from({ length: 20 }, () => 0),
+      ascensionAdd: { lvMax: { ascension: { 0: 20 }, costume: {} } },
+    } as unknown as CraftEssence.CraftEssence;
+    const boss = waveEnemy({ hp: 30000 });
+    const report = findClearUpgradeRecommendations({
+      shortlist: [candidate(1), candidate(2), candidate(3)],
+      cePool: [{ data: ceData, level: 1, inventoryId: "owned-ce", limitBreakCount: 0 }],
+      waves: [wave({ initialEnemies: [boss], enemyPool: [boss] })],
+      costBudget: 1000,
+      constants: CONSTANTS,
+      resolveHitContext,
+      maxTurns: 1,
+      maxAttackers: 1,
+      randomFn: () => 0.5,
+    });
+    expect(report.baseline.minimumTurns).toBeNull();
+    expect(report.recommendations[0]).toMatchObject({
+      kind: "ceLevel",
+      craftEssenceId: ceData.id,
+      inventoryId: "owned-ce",
+      from: 1,
+      to: 20,
+    });
+    expect(report.recommendations[0]?.result.minimumTurns).toBe(1);
   });
 });

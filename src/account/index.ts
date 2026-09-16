@@ -3,6 +3,7 @@ export type {
   SkillLevel,
   NpLevel,
   AppendSkillSlot,
+  CraftEssenceLimitBreakCount,
   FouValues,
   ServantBuild,
   OwnedServant,

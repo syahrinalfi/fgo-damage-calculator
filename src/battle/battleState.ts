@@ -297,6 +297,10 @@ export function buildEnemyInstance(waveEnemy: WaveEnemy): EnemyInstance {
 export interface EquippedCraftEssence {
   readonly data: CraftEssence.CraftEssence;
   readonly level: number;
+  /** Optional inventory identity used by copy-aware advisor workflows. */
+  readonly inventoryId?: string;
+  /** Optional owned limit-break stage; 4 means MLB. */
+  readonly limitBreakCount?: 0 | 1 | 2 | 3 | 4;
 }
 
 /**

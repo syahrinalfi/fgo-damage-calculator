@@ -1,4 +1,5 @@
 import type {
+  CraftEssenceLimitBreakCount,
   OwnedCommandCode,
   OwnedCraftEssence,
   OwnedMysticCode,
@@ -26,9 +27,12 @@ export function addCraftEssence(
   profile: RosterProfile,
   craftEssenceId: number,
   level: number,
-  limitBroken: boolean,
+  limitBreakCount: CraftEssenceLimitBreakCount,
 ): OwnedCraftEssence {
-  const owned: OwnedCraftEssence = { id: generateId(), craftEssenceId, level, limitBroken };
+  if (!Number.isInteger(limitBreakCount) || limitBreakCount < 0 || limitBreakCount > 4) {
+    throw new RangeError(`limitBreakCount must be an integer from 0 through 4, got ${limitBreakCount}`);
+  }
+  const owned: OwnedCraftEssence = { id: generateId(), craftEssenceId, level, limitBreakCount };
   profile.craftEssenceInventory.push(owned);
   return owned;
 }

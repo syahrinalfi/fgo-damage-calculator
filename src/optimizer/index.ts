@@ -32,6 +32,14 @@ export {
   estimateQuestCandidateReliability,
   validateReliabilityConfig,
 } from "./reliability.js";
+export type {
+  UpgradeAdvisorOptions,
+  UpgradeAdvisorReport,
+  UpgradeKind,
+  UpgradeRecommendation,
+  UpgradeScenario,
+} from "./upgradeAdvisor.js";
+export { buildUpgradeScenarios, findClearUpgradeRecommendations } from "./upgradeAdvisor.js";
 export type { ServantCandidate, QuestOptimizerOptions, QuestOptimizerCandidate } from "./questOptimizer.js";
 export type { MinimumTurnOptimizerOptions, MinimumTurnOptimizerResult } from "./questOptimizer.js";
 export { optimizeQuest, optimizeQuestMinimumTurns } from "./questOptimizer.js";

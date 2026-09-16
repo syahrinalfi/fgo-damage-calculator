@@ -4,6 +4,7 @@ export type AscensionStage = 0 | 1 | 2 | 3 | 4;
 export type SkillLevel = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10;
 export type NpLevel = 1 | 2 | 3 | 4 | 5;
 export type AppendSkillSlot = 1 | 2 | 3;
+export type CraftEssenceLimitBreakCount = 0 | 1 | 2 | 3 | 4;
 
 export interface FouValues {
   atk: number;
@@ -61,7 +62,8 @@ export interface OwnedCraftEssence {
   id: string;
   craftEssenceId: number;
   level: number;
-  limitBroken: boolean;
+  /** Number of completed limit breaks; 4 means MLB. */
+  limitBreakCount: CraftEssenceLimitBreakCount;
 }
 
 /** Command Codes are also owned per-copy; unlike CEs they have no level/MLB state. */
