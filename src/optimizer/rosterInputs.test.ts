@@ -60,7 +60,7 @@ describe("buildRosterOptimizerInputs", () => {
     );
 
     expect(inputs.ownedServantCandidates.map((candidate) => candidate.build.npLevel)).toEqual([3, 5]);
-    expect(inputs.skillSources[0]?.skills.map((slot) => [slot.skill.id, slot.level])).toEqual([
+    expect(inputs.skillSources[0]?.skills.map((slot) => [(slot.skill as Skill.Skill).id, slot.level])).toEqual([
       [102, 4],
       [201, 6],
       [301, 8],
