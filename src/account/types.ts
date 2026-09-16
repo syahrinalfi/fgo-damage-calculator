@@ -23,6 +23,10 @@ export interface ServantBuild {
   skillLevels: [SkillLevel, SkillLevel, SkillLevel];
   appendSkillLevels: Partial<Record<AppendSkillSlot, SkillLevel>>;
   npLevel: NpLevel;
+  /** Exact currently selected NP/form. Required when Atlas exposes multiple unconditional NP forms. */
+  selectedNpId?: number;
+  /** Canonical `questId:phase` keys for cleared NP/skill strengthening quests. */
+  unlockedStrengthenings?: string[];
   fou: FouValues;
   /** References an entry in the owning profile's craftEssenceInventory; unset = no CE equipped. */
   equippedCraftEssenceId?: string;
@@ -37,13 +41,7 @@ export interface ServantBuild {
  */
 export interface OwnedServant extends ServantBuild {
   bondLevel: number;
-  /**
-   * IDs of Rank-Up Quest / Interlude strengthenings this account has actually cleared.
-   * Atlas Academy's exact field for enumerating a servant's available strengthenings is
-   * an open research item (research/00 §4, "NP/skill changes from Rank-Up Quests &
-   * Interludes") — kept as an opaque string set so the engine layer can define its own
-   * id scheme once that's resolved, without another roster schema migration.
-   */
+  /** Rank-Up Quest / Interlude keys this account has actually cleared. */
   unlockedStrengthenings: string[];
 }
 

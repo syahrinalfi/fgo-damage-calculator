@@ -167,6 +167,14 @@ describe("resolveHit", () => {
     expect(result.defeated).toBe(false);
   });
 
+  it("suppresses only damage during optimizer counterfactual replay", () => {
+    const result = resolveHit(makeUnit(), makeUnit(), 100_000, 100_000, CONSTANTS, { ...CONTEXT, suppressDamage: true });
+    expect(result.damage).toBe(0);
+    expect(result.hpAfterDamage).toBe(100_000);
+    expect(result.npGain).toBeGreaterThan(0);
+    expect(result.starDropChance).toBeGreaterThan(0);
+  });
+
   it("marks a hit Overkill when damage exceeds the defender's remaining HP, and reflects it in NP gain", () => {
     const attacker = makeUnit();
     const defender = makeUnit();

@@ -5,7 +5,7 @@ import type { BattleState, EnemyInstance, HandCard, ServantInstance } from "../b
 import { BUFF_ACTION_KEYS } from "../battle/buffActionKeys.js";
 import type { BattleConstants } from "../battle/gameConstants.js";
 import { damageDealtAtSlot } from "./objectives.js";
-import { searchMultiTurnActionSequences, type PerTurnCandidateBuilder } from "./multiTurnSearch.js";
+import { attackingServantIds, searchMultiTurnActionSequences, type PerTurnCandidateBuilder } from "./multiTurnSearch.js";
 import type { ActionSequenceCandidate } from "./turnSearch.js";
 
 const BUSTER = "2" as Card;
@@ -125,7 +125,7 @@ const BUSTER_CONTEXT: DerivedHitContext = {
   starEnemyServerMod: 0,
 };
 
-function playAction(handCardIndex: number, servantId: number, cardType: Card): Action {
+function playAction(handCardIndex: number, servantId: number, cardType: Card): Extract<Action, { type: "playCard" }> {
   return {
     type: "playCard",
     servantId,
@@ -169,6 +169,36 @@ describe("searchMultiTurnActionSequences", () => {
     const buildCandidates: PerTurnCandidateBuilder = () => [passCandidate(), oneBusterCandidate("buster")];
     const results = searchMultiTurnActionSequences(state(), 2, buildCandidates, CONSTANTS, () => 0, damageDealtAtSlot(0));
     expect(results).toHaveLength(4);
+  });
+
+  it("keeps only the strongest frontier when beamWidth bounds a combinatorial search", () => {
+    const buildCandidates: PerTurnCandidateBuilder = () => [passCandidate(), oneBusterCandidate("buster")];
+    const results = searchMultiTurnActionSequences(
+      state(),
+      2,
+      buildCandidates,
+      CONSTANTS,
+      () => 0,
+      damageDealtAtSlot(0),
+      { beamWidth: 2 },
+    );
+    expect(results).toHaveLength(2);
+    expect(results[0]?.label).toBe("buster>>buster");
+  });
+
+  it("identifies distinct damage dealers without counting setup actions", () => {
+    const secondAttacker = playAction(0, 2, BUSTER);
+    expect(attackingServantIds([
+      { type: "useSkill", servantId: 3, skillSlot: 1, effects: [], cooldownTurns: 5 },
+      playAction(0, 1, BUSTER),
+      {
+        type: "playExtraCard",
+        servantId: 2,
+        targetNpcId: secondAttacker.targetNpcId,
+        context: secondAttacker.context,
+        chainCards: secondAttacker.chainCards,
+      },
+    ])).toEqual(new Set([1, 2]));
   });
 
   it("ranks descending by final score — the line that bursts on the last turn scores highest", () => {

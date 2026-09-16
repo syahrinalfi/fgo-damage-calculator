@@ -11,6 +11,7 @@ import type { Wave, WaveEnemy } from "../quest/types.js";
 import { optimizeQuest, optimizeQuestMinimumTurns, type ServantCandidate } from "./questOptimizer.js";
 import type { NpAttackOption } from "./cardOrderCandidates.js";
 import type { SkillActivation } from "./skillUsageCandidates.js";
+import { npStrengtheningKey } from "./npVersionSelection.js";
 
 function niceServant(overrides: Partial<ServantModule.Servant> = {}): ServantModule.Servant {
   return {
@@ -333,6 +334,74 @@ describe("optimizeQuest", () => {
       randomFn: () => 0.5,
     });
     expect(results[0]?.best.actions.some((action) => action.type === "castNp")).toBe(true);
+  });
+
+  it("selects the account-unlocked NP strengthening from the shortlisted servant data", () => {
+    const damageFunc = (value: number) => ({
+      funcId: value,
+      funcType: Func.FuncType.DAMAGE_NP,
+      funcTargetType: Func.FuncTargetType.ENEMY,
+      funcTargetTeam: Func.FuncTargetTeam.ENEMY,
+      functvals: [],
+      funcquestTvals: [],
+      overWriteTvalsList: [],
+      funcPopupText: "",
+      buffs: [],
+      svals: [{ Value: value }],
+      svals2: [{ Value: value }],
+      svals3: [{ Value: value }],
+    }) as unknown as Func.Func;
+    const npBase = {
+      id: 1101,
+      num: 1,
+      npNum: 1,
+      priority: 101,
+      condQuestId: 0,
+      condQuestPhase: 0,
+      strengthStatus: 1,
+      card: "2",
+      name: "Base NP",
+      effectFlags: ["attackEnemyOne"],
+      npGain: { buster: [50], arts: [50], quick: [50], extra: [50], defence: [50], np: [80] },
+      npDistribution: [100],
+      functions: [damageFunc(1000)],
+    } as unknown as NoblePhantasm.NoblePhantasm;
+    const npStrengthened = {
+      ...npBase,
+      id: 1102,
+      priority: 102,
+      condQuestId: 900001,
+      condQuestPhase: 2,
+      strengthStatus: 99,
+      name: "Strengthened NP",
+      functions: [damageFunc(100000)],
+    } as NoblePhantasm.NoblePhantasm;
+    const attacker: ServantCandidate = {
+      niceServant: niceServant({ noblePhantasms: [npBase, npStrengthened] }),
+      build: {
+        ...build(1),
+        selectedNpId: npBase.id,
+        unlockedStrengthenings: [npStrengtheningKey(npStrengthened)],
+      },
+    };
+    const resolveSkillOptions = (initialState: BattleState): readonly SkillActivation[] => {
+      const actor = initialState.servants.find((servant) => servant.servantId === 1);
+      return actor === undefined
+        ? []
+        : [{ type: "useSkill", servantId: actor.servantId, skillSlot: 1, effects: [{ kind: "gainNp", rawAmount: 10000, targetType: "self" }], cooldownTurns: 5 }];
+    };
+    const results = optimizeQuest({
+      shortlist: [attacker, candidate(2), candidate(3)],
+      cePool: [],
+      waves: [wave()],
+      costBudget: 1000,
+      constants: CONSTANTS,
+      resolveHitContext,
+      resolveSkillOptions,
+      randomFn: () => 0.5,
+    });
+    const cast = results[0]?.best.actions.find((action) => action.type === "castNp");
+    expect(cast?.context.npDamageMultiplier).toBe(100);
   });
 
   it("wires resolveOrderChangeOptions through without changing results when it resolves to no available swaps", () => {
@@ -681,8 +750,49 @@ describe("optimizeQuestMinimumTurns", () => {
       randomFn: () => 0,
     });
     expect(result.minimumTurns).toBe(2);
+    expect(result.attackerLimitUsed).toBe(2);
     expect(result.candidates.length).toBeGreaterThan(0);
     expect(result.candidates.every((candidate) => isQuestCleared(candidate.best.finalState))).toBe(true);
+    expect(result.candidates.every((candidate) => candidate.attribution.attackerIds.length <= 2)).toBe(true);
+  });
+
+  it("returns at most five strategy-diverse finalists", () => {
+    const target = waveEnemy({ hp: 1 });
+    const result = optimizeQuestMinimumTurns({
+      shortlist: [candidate(1), candidate(2), candidate(3), candidate(4), candidate(5)],
+      cePool: [],
+      waves: [wave({ initialEnemies: [target], enemyPool: [target] })],
+      costBudget: 1000,
+      constants: CONSTANTS,
+      resolveHitContext,
+      maxTurns: 1,
+      randomFn: () => 0,
+    });
+    expect(result.attackerLimitUsed).toBe(1);
+    expect(result.candidates.length).toBeLessThanOrEqual(5);
+    expect(result.candidates.every((candidate) => candidate.attribution.attackerIds.length > 0)).toBe(true);
+    expect(result.candidates.every((candidate) => candidate.attribution.primaryAttackerId !== undefined)).toBe(true);
+    expect(new Set(result.candidates.map((candidate) => candidate.strategyKey)).size).toBe(result.candidates.length);
+  });
+
+  it("uses Event CE preference to choose among otherwise equivalent strategies", () => {
+    const eventCe = {
+      data: { id: 777, atkGrowth: [0, 0], hpGrowth: [0, 0], cost: 1 } as unknown as CraftEssence.CraftEssence,
+      level: 1,
+    };
+    const target = waveEnemy({ hp: 1 });
+    const result = optimizeQuestMinimumTurns({
+      shortlist: [candidate(1), candidate(2), candidate(3)],
+      cePool: [eventCe],
+      waves: [wave({ initialEnemies: [target], enemyPool: [target] })],
+      costBudget: 1000,
+      constants: CONSTANTS,
+      resolveHitContext,
+      maxTurns: 1,
+      preferences: { eventCeIds: [777] },
+      randomFn: () => 0,
+    });
+    expect(result.candidates[0]?.party.some((member) => member.equippedCe?.data.id === 777)).toBe(true);
   });
 
   it("returns closest max-horizon candidates when no clear exists", () => {

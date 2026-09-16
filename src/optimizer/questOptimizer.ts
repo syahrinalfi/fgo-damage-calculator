@@ -13,11 +13,19 @@ import { buildInitialBattleState, type PartyMemberSpec } from "./battleStateBuil
 import { enumerateCeAssignments, enumeratePartyFormations } from "./candidateGeneration.js";
 import { buildAttackChainCandidates, type NpAttackOption } from "./cardOrderCandidates.js";
 import { resolveNpAttackOption } from "./npActivationResolver.js";
-import { searchMultiTurnActionSequences, type MultiTurnResult } from "./multiTurnSearch.js";
+import { selectNoblePhantasmVersion } from "./npVersionSelection.js";
+import { attackingServantIds, searchMultiTurnActionSequences, type MultiTurnResult } from "./multiTurnSearch.js";
 import { questProgress } from "./objectives.js";
 import { buildOrderChangeCandidates, type OrderChangeSwap } from "./orderChangeCandidates.js";
 import { buildSkillAndCardOrderCandidates, type SkillActivation } from "./skillUsageCandidates.js";
 import { searchBestActionSequence, type ActionSequenceCandidate, type ActionSequenceResult, type SequenceScoreFn } from "./turnSearch.js";
+import {
+  attributeQuestCandidate,
+  rankQuestCandidates,
+  selectDiverseQuestCandidates,
+  type QuestOptimizerPreferences,
+  type RankedQuestCandidate,
+} from "./resultRanking.js";
 
 /** One shortlisted servant a caller wants the search to consider fielding — not yet tied to a CE or front-line/bench role, both decided per enumerated combination. */
 export interface ServantCandidate {
@@ -77,7 +85,7 @@ export interface QuestOptimizerOptions {
   readonly skillSources?: readonly ServantSkillSource[];
   /** Caller-resolved NP cards available to the three-slot attack-chain search. Return the servant's chosen NP version even before charge skills resolve; unavailable no-charge branches are pruned by the simulator while charged branches remain searchable. */
   readonly resolveNpOptions?: (state: BattleState, targetEnemy: EnemyInstance) => readonly NpAttackOption[];
-  /** Explicit selected NiceNp version per servant for the automatic NP resolver. This never guesses strengthening availability; account/UI code must choose the version matching the user's unlocked state. Ignored when `resolveNpOptions` is supplied. */
+  /** Explicit NiceNp override per servant. When omitted, the shortlisted servant's account build selects its legal NP version. Ignored when `resolveNpOptions` is supplied. */
   readonly npByServantId?: (servantId: number) => NoblePhantasm.NoblePhantasm | undefined;
   /** Passthrough for the automatic skill-usage resolver's own `defaultTargetServantId` config — see that resolver's doc comment. Ignored unless `skillSources` is actually used (i.e. `resolveSkillOptions` is omitted). */
   readonly defaultTargetServantId?: (actingServantId: number) => number;
@@ -138,17 +146,20 @@ export interface QuestOptimizerOptions {
   readonly targetEnemySlotIndex?: number;
   /** Overrides the default normalized whole-quest progress objective. */
   readonly scoreFn?: SequenceScoreFn;
+  /** Beam retained after each simulated turn; defaults to a bounded 256-line frontier. */
+  readonly beamWidth?: number;
+  /** Hard cap on distinct servants performing damaging actions across the searched line. */
+  readonly maxAttackerCount?: number;
+  readonly preferences?: QuestOptimizerPreferences;
+  /** Number of coarse finalists that receive expensive causal replay. Defaults to 64. */
+  readonly attributionPoolSize?: number;
   readonly commandSealsRemaining?: number;
   readonly fieldTraits?: ReadonlySet<number>;
   readonly randomFn?: () => number;
 }
 
 /** One party-formation × CE-assignment party candidate (front-line plus any benched sub-members), together with its best found card-play-order line. */
-export interface QuestOptimizerCandidate {
-  readonly party: readonly PartyMemberSpec[];
-  readonly initialState: BattleState;
-  readonly best: ActionSequenceResult;
-}
+export type QuestOptimizerCandidate = RankedQuestCandidate;
 
 /**
  * The top-level "optimize this quest" entry point research/09 §4 originally described,
@@ -159,11 +170,9 @@ export interface QuestOptimizerCandidate {
  * lines, and `searchBestActionSequence` (`./turnSearch.js`) ranks them — this function's own job
  * is purely the outer loop tying those together and picking each party's best line.
  *
- * Returns every valid party combination's best result, **ranked descending by score, not
- * deduplicated** — research/09 §4's "Top-5 diversity" (collapsing near-identical lines to the
- * same 3 core servants) is a caller-side concern the same way `searchBestActionSequence`
- * already leaves ranking-vs-deduplication split; this function returns the full ranked list,
- * the caller decides how many/which to surface. A combination is silently skipped (not
+ * Coarsely ranks valid combinations, causally replays the bounded finalist pool, and returns
+ * those attributed finalists in product ranking order. `optimizeQuestMinimumTurns` then applies
+ * the user-facing Top-5 strategy deduplication. A combination is silently skipped (not
  * included in the result) when either: its `costSpent` exceeds `costBudget` (an invalid line,
  * not worth simulating at all — filtered before `buildCardOrderCandidates` even runs) or the
  * quest's first wave has no enemies to target at all.
@@ -197,6 +206,10 @@ export function optimizeQuest(options: QuestOptimizerOptions): readonly QuestOpt
 
   const scoreFn = options.scoreFn ?? questProgress();
   const randomFn = options.randomFn ?? Math.random;
+  const attributionPoolSize = options.attributionPoolSize ?? 64;
+  if (!Number.isInteger(attributionPoolSize) || attributionPoolSize < 1) {
+    throw new RangeError(`attributionPoolSize must be a positive integer, got ${attributionPoolSize}`);
+  }
 
   // Each optional axis prefers an explicit caller-supplied resolver over its raw-data
   // auto-resolver counterpart (`../battle/skillActivationResolver.js`/`orderChangeSwapResolver.js`)
@@ -231,7 +244,7 @@ export function optimizeQuest(options: QuestOptimizerOptions): readonly QuestOpt
     return computed;
   };
 
-  const results: QuestOptimizerCandidate[] = [];
+  const results: Array<Pick<QuestOptimizerCandidate, "party" | "initialState" | "best">> = [];
   for (const formation of formations) {
     const fielded = [...formation.frontLine, ...formation.bench];
     const ceAssignments = ceAssignmentsForSlotCount(fielded.length);
@@ -283,15 +296,17 @@ export function optimizeQuest(options: QuestOptimizerOptions): readonly QuestOpt
           const contextTemplates = hand.map(resolveHitContext);
           const npOptions =
             options.resolveNpOptions?.(state, targetEnemy) ??
-            (options.npByServantId === undefined
-              ? []
-              : state.servants.flatMap((servant) => {
-                  if (!servant.isFrontLine) return [];
-                  const np = options.npByServantId?.(servant.servantId);
-                  if (np === undefined) return [];
-                  const resolved = resolveNpAttackOption(state, servant.servantId, np, targetEnemy.npcId, randomFn);
-                  return resolved === undefined ? [] : [resolved];
-                }));
+            state.servants.flatMap((servant) => {
+              if (!servant.isFrontLine) return [];
+              const member = party.find((candidate) => candidate.build.servantId === servant.servantId);
+              const np = options.npByServantId?.(servant.servantId) ??
+                (member === undefined
+                  ? undefined
+                  : selectNoblePhantasmVersion(member.niceServant.noblePhantasms ?? [], member.build));
+              if (np === undefined) return [];
+              const resolved = resolveNpAttackOption(state, servant.servantId, np, targetEnemy.npcId, randomFn);
+              return resolved === undefined ? [] : [resolved];
+            });
           const cardCandidates = buildAttackChainCandidates(
             hand,
             contextTemplates,
@@ -309,7 +324,11 @@ export function optimizeQuest(options: QuestOptimizerOptions): readonly QuestOpt
       let best: ActionSequenceResult | undefined;
       if (options.turnCount === undefined) {
         const candidates = buildCandidatesForState(initialState);
-        const ranked = searchBestActionSequence(initialState, candidates, options.constants, randomFn, scoreFn);
+        const maxAttackerCount = options.maxAttackerCount;
+        const eligibleCandidates = maxAttackerCount === undefined
+          ? candidates
+          : candidates.filter((candidate) => attackingServantIds(candidate.actions).size <= maxAttackerCount);
+        const ranked = searchBestActionSequence(initialState, eligibleCandidates, options.constants, randomFn, scoreFn);
         best = ranked[0];
       } else {
         const multiTurnResults = searchMultiTurnActionSequences(
@@ -319,6 +338,10 @@ export function optimizeQuest(options: QuestOptimizerOptions): readonly QuestOpt
           options.constants,
           randomFn,
           scoreFn,
+          {
+            ...(options.beamWidth === undefined ? {} : { beamWidth: options.beamWidth }),
+            ...(options.maxAttackerCount === undefined ? {} : { maxAttackerCount: options.maxAttackerCount }),
+          },
         );
         const bestMultiTurn = multiTurnResults[0];
         best = bestMultiTurn === undefined ? undefined : toActionSequenceResult(bestMultiTurn);
@@ -329,33 +352,73 @@ export function optimizeQuest(options: QuestOptimizerOptions): readonly QuestOpt
     }
   }
 
-  return results.sort((a, b) => b.best.score - a.best.score);
+  const preferredAttackerId = options.preferences?.preferredAttackerId;
+  const eventCeIds = new Set(options.preferences?.eventCeIds ?? []);
+  const bondCeIds = new Set(options.preferences?.bondCeIds ?? []);
+  const coarsePreferenceCount = (candidate: (typeof results)[number], ids: ReadonlySet<number>): number =>
+    candidate.party.filter((member) => member.equippedCe !== undefined && ids.has(member.equippedCe.data.id)).length;
+  const coarseFinalists = [...results]
+    .sort((a, b) => {
+      if (a.best.score !== b.best.score) return b.best.score - a.best.score;
+      if (preferredAttackerId !== undefined) {
+        const aIncludes = a.party.some((member) => member.build.servantId === preferredAttackerId);
+        const bIncludes = b.party.some((member) => member.build.servantId === preferredAttackerId);
+        if (aIncludes !== bIncludes) return aIncludes ? -1 : 1;
+      }
+      const eventDifference = coarsePreferenceCount(b, eventCeIds) - coarsePreferenceCount(a, eventCeIds);
+      if (eventDifference !== 0) return eventDifference;
+      const bondDifference = coarsePreferenceCount(b, bondCeIds) - coarsePreferenceCount(a, bondCeIds);
+      if (bondDifference !== 0) return bondDifference;
+      return options.preferences?.minimizeCost ? a.initialState.costSpent - b.initialState.costSpent : 0;
+    })
+    .slice(0, attributionPoolSize);
+  const attributed = coarseFinalists.map((candidate) => attributeQuestCandidate(candidate, options.constants, randomFn, scoreFn));
+  return rankQuestCandidates(attributed, options.preferences);
 }
 
-export interface MinimumTurnOptimizerOptions extends Omit<QuestOptimizerOptions, "turnCount"> {
+export interface MinimumTurnOptimizerOptions extends Omit<QuestOptimizerOptions, "turnCount" | "maxAttackerCount"> {
   readonly maxTurns?: number;
+  /** Progressive widening stops at this many damage dealers. Defaults to the largest fieldable party. */
+  readonly maxAttackers?: number;
+  readonly maxResults?: number;
 }
 
 export interface MinimumTurnOptimizerResult {
   readonly minimumTurns: number | null;
   readonly searchedThroughTurn: number;
+  readonly attackerLimitUsed: number | null;
   readonly candidates: readonly QuestOptimizerCandidate[];
 }
 
 /** Iterative-deepening Clear Quest search. Three turns is only a preset; the first actual full-quest clear wins, bounded by the product's 6-turn offensive-only cap. */
 export function optimizeQuestMinimumTurns(options: MinimumTurnOptimizerOptions): MinimumTurnOptimizerResult {
-  const { maxTurns = 6, ...questOptions } = options;
+  const { maxTurns = 6, maxAttackers = FRONT_LINE_SERVANT_COUNT + (options.maxBenchCount ?? 0), maxResults = 5, ...questOptions } = options;
   if (!Number.isInteger(maxTurns) || maxTurns < 1 || maxTurns > 6) {
     throw new RangeError(`maxTurns must be an integer from 1 through 6, got ${maxTurns}`);
   }
+  if (!Number.isInteger(maxAttackers) || maxAttackers < 1) {
+    throw new RangeError(`maxAttackers must be a positive integer, got ${maxAttackers}`);
+  }
   let closest: readonly QuestOptimizerCandidate[] = [];
   for (let turnCount = 1; turnCount <= maxTurns; turnCount += 1) {
-    const candidates = optimizeQuest({ ...questOptions, turnCount });
-    const cleared = candidates.filter((candidate) => isQuestCleared(candidate.best.finalState));
-    if (cleared.length > 0) {
-      return { minimumTurns: turnCount, searchedThroughTurn: turnCount, candidates: cleared };
+    for (let attackerLimit = 1; attackerLimit <= maxAttackers; attackerLimit += 1) {
+      const candidates = optimizeQuest({ ...questOptions, turnCount, maxAttackerCount: attackerLimit });
+      const cleared = candidates.filter((candidate) => isQuestCleared(candidate.best.finalState));
+      if (cleared.length > 0) {
+        return {
+          minimumTurns: turnCount,
+          searchedThroughTurn: turnCount,
+          attackerLimitUsed: attackerLimit,
+          candidates: selectDiverseQuestCandidates(cleared, options.preferences, maxResults),
+        };
+      }
+      if (attackerLimit === maxAttackers) closest = candidates;
     }
-    closest = candidates;
   }
-  return { minimumTurns: null, searchedThroughTurn: maxTurns, candidates: closest };
+  return {
+    minimumTurns: null,
+    searchedThroughTurn: maxTurns,
+    attackerLimitUsed: null,
+    candidates: selectDiverseQuestCandidates(closest, options.preferences, maxResults),
+  };
 }

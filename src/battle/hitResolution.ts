@@ -47,6 +47,8 @@ export interface HitResolutionContext {
   npEnemyServerMod: number;
   baseStarRate: number;
   starEnemyServerMod: number;
+  /** Optimizer-only counterfactual replay switch: preserve gauge/star/effect sequencing while forcing this hit's damage to zero. */
+  suppressDamage?: boolean;
 }
 
 /**
@@ -106,7 +108,7 @@ export function resolveHit(
     isBusterChain: context.isBusterChain,
     isMightyChain: context.isMightyChain,
   });
-  const damage = defense.blocked ? 0 : calculateHitDamage(damageInput);
+  const damage = defense.blocked || context.suppressDamage ? 0 : calculateHitDamage(damageInput);
   const isOverkill = damage > defenderHp;
   const hpAfterDamage = defenderHp - damage;
 

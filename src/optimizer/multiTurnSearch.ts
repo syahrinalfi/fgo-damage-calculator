@@ -18,17 +18,10 @@ import { simulateActionSequence, type ActionSequenceCandidate, type SequenceScor
  * `shift` transitions on enemy death (`applyShiftTransitions`) — every mechanic §5's "turn 1:
  * ...unblock a target...; turn 2: execute the burst" scenario needs already exists.
  *
- * **Deliberately a full cross-product search, not a greedy per-turn one** — scoring only
- * happens once, at the very end of the horizon, via the *same* `SequenceScoreFn` shape
- * single-turn search already uses (`(finalState, initialState) => number`). A greedy "pick
- * the best-scoring candidate each turn in isolation" strategy would be actively wrong for the
- * exact scenario §5 describes: a deliberately non-damage-optimal setup turn (buff-stacking, a
- * sacrifice kill to trigger a `call`) that only pays off on a *later* turn would never be
- * picked by a per-turn objective. Consistent with this project's own stated stance elsewhere
- * (`candidateGeneration.ts`'s own doc comment: "combinatorial explosion is the caller's
- * problem, not this module's") — a caller should keep `buildCandidatesForTurn` narrowed to a
- * small candidate set per turn and `turnCount` small (2-3, matching §5's own example), since
- * this grows as the product of every turn's own candidate count.
+ * Search uses a bounded beam rather than materializing the full turn-by-turn cross-product.
+ * Every retained partial line still reaches the next turn before final ranking, so setup lines
+ * remain possible; `beamWidth` is the explicit quality/memory tradeoff instead of recursion or
+ * an unbounded result array.
  */
 
 /** Resolves a `BattleState` to that turn's candidate `ActionSequenceCandidate`s (not including a trailing `endTurn` — this module appends that itself once a candidate is chosen for simulation). Receives the 0-indexed turn number within this multi-turn search (not `BattleState.currentTurn`, which already reflects however many turns preceded this search) so a caller can vary its own per-turn options if needed, though most callers can ignore it and derive everything from `state` alone (skill cooldowns, hand, etc. are already reflected there). */
@@ -42,6 +35,26 @@ export interface MultiTurnResult {
   readonly score: number;
 }
 
+export interface MultiTurnSearchOptions {
+  /** Maximum number of partial lines retained after each turn. Omit for the bounded product default. */
+  readonly beamWidth?: number;
+  /** Maximum number of distinct servants allowed to perform damaging actions across the full horizon. */
+  readonly maxAttackerCount?: number;
+}
+
+const DEFAULT_BEAM_WIDTH = 256;
+
+/** Servants that actually perform a face-card, Extra, or NP attack; setup/support actions do not count. */
+export function attackingServantIds(actions: readonly Action[]): ReadonlySet<number> {
+  return new Set(
+    actions.flatMap((action) =>
+      action.type === "playCard" || action.type === "playExtraCard" || action.type === "castNp"
+        ? [action.servantId]
+        : [],
+    ),
+  );
+}
+
 /**
  * Searches every full `turnCount`-turn action sequence reachable from `initialState`, one
  * `buildCandidatesForTurn` call's worth of candidates per turn, applying each chosen
@@ -52,9 +65,7 @@ export interface MultiTurnResult {
  * ready-made objective like `damageDealtAtSlot` (`./objectives.js`) already generalizes
  * correctly to "total damage this slot took across the whole horizon" with no changes needed).
  *
- * Returns every complete line ranked descending by score, **not deduplicated** — same
- * "caller decides how many/which to surface" split every other search function in this
- * project already leaves to its caller. A turn with no candidates at all
+ * Returns the final retained beam ranked descending by score, **not deduplicated**. A turn with no candidates at all
  * (`buildCandidatesForTurn` returns `[]`) prunes that entire branch (no line continues past a
  * turn with nothing to do) rather than silently ending the horizon early with a partial line.
  */
@@ -65,31 +76,65 @@ export function searchMultiTurnActionSequences(
   constants: BattleConstants,
   randomFn: () => number,
   scoreFn: SequenceScoreFn,
+  options: MultiTurnSearchOptions = {},
 ): readonly MultiTurnResult[] {
   if (turnCount < 0) {
     throw new RangeError(`turnCount must be >= 0, got ${turnCount}`);
   }
 
-  function expand(state: BattleState, turnIndex: number, chosenTurnActions: readonly (readonly Action[])[], label: string): MultiTurnResult[] {
-    if (turnIndex === turnCount) {
-      return [{ label, turnActions: chosenTurnActions, finalState: state, score: scoreFn(state, initialState) }];
-    }
-    const candidates = buildCandidatesForTurn(state, turnIndex);
-    const results: MultiTurnResult[] = [];
-    for (const candidate of candidates) {
-      let stateAfterActions: BattleState;
-      try {
-        stateAfterActions = simulateActionSequence(state, candidate.actions, constants, randomFn);
-      } catch (error) {
-        if (error instanceof ActionUnavailableError) continue;
-        throw error;
-      }
-      const stateAfterTurn = resolveAction(stateAfterActions, { type: "endTurn" }, constants, randomFn);
-      const nextLabel = label === "" ? candidate.label : `${label}>>${candidate.label}`;
-      results.push(...expand(stateAfterTurn, turnIndex + 1, [...chosenTurnActions, candidate.actions], nextLabel));
-    }
-    return results;
+  const beamWidth = options.beamWidth ?? DEFAULT_BEAM_WIDTH;
+  if (!Number.isInteger(beamWidth) || beamWidth < 1) {
+    throw new RangeError(`beamWidth must be a positive integer, got ${beamWidth}`);
+  }
+  if (options.maxAttackerCount !== undefined && (!Number.isInteger(options.maxAttackerCount) || options.maxAttackerCount < 1)) {
+    throw new RangeError(`maxAttackerCount must be a positive integer, got ${options.maxAttackerCount}`);
   }
 
-  return expand(initialState, 0, [], "").sort((a, b) => b.score - a.score);
+  interface FrontierEntry {
+    readonly label: string;
+    readonly turnActions: readonly (readonly Action[])[];
+    readonly state: BattleState;
+    readonly attackerIds: ReadonlySet<number>;
+  }
+
+  let frontier: readonly FrontierEntry[] = [{ label: "", turnActions: [], state: initialState, attackerIds: new Set() }];
+  for (let turnIndex = 0; turnIndex < turnCount; turnIndex += 1) {
+    const expanded: FrontierEntry[] = [];
+    for (const branch of frontier) {
+      for (const candidate of buildCandidatesForTurn(branch.state, turnIndex)) {
+        const attackerIds = new Set([...branch.attackerIds, ...attackingServantIds(candidate.actions)]);
+        if (options.maxAttackerCount !== undefined && attackerIds.size > options.maxAttackerCount) continue;
+        let stateAfterActions: BattleState;
+        try {
+          stateAfterActions = simulateActionSequence(branch.state, candidate.actions, constants, randomFn);
+        } catch (error) {
+          if (error instanceof ActionUnavailableError) continue;
+          throw error;
+        }
+        const stateAfterTurn = resolveAction(stateAfterActions, { type: "endTurn" }, constants, randomFn);
+        expanded.push({
+          label: branch.label === "" ? candidate.label : `${branch.label}>>${candidate.label}`,
+          turnActions: [...branch.turnActions, candidate.actions],
+          state: stateAfterTurn,
+          attackerIds,
+        });
+        if (expanded.length >= beamWidth * 2) {
+          expanded.sort((a, b) => scoreFn(b.state, initialState) - scoreFn(a.state, initialState));
+          expanded.length = beamWidth;
+        }
+      }
+    }
+    expanded.sort((a, b) => scoreFn(b.state, initialState) - scoreFn(a.state, initialState));
+    frontier = expanded.slice(0, beamWidth);
+    if (frontier.length === 0) break;
+  }
+
+  return frontier
+    .map((entry): MultiTurnResult => ({
+      label: entry.label,
+      turnActions: entry.turnActions,
+      finalState: entry.state,
+      score: scoreFn(entry.state, initialState),
+    }))
+    .sort((a, b) => b.score - a.score);
 }
