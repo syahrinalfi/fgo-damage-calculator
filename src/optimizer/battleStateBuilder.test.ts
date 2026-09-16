@@ -45,6 +45,15 @@ function gainNp(value: number): Func.Func {
   } as unknown as Func.Func;
 }
 
+function gainStars(value: number): Func.Func {
+  return {
+    funcType: Func.FuncType.GAIN_STAR,
+    funcTargetType: Func.FuncTargetType.SELF,
+    svals: [{ Value: value }],
+    buffs: [],
+  } as unknown as Func.Func;
+}
+
 function selfBuff(type: Buff.BuffType, value: number): Func.Func {
   return {
     funcType: Func.FuncType.ADD_STATE,
@@ -181,5 +190,18 @@ describe("buildInitialBattleState", () => {
     expect(state.servants[0]?.activeBuffs).toEqual([
       expect.objectContaining({ type: Buff.BuffType.UP_ATK, amount: 200 }),
     ]);
+  });
+
+  it("allocates a front-line CE star bomb to the opening hand but ignores a benched holder", () => {
+    const starCe = craftEssence({ skills: [passiveSkill(0, 1, [gainStars(10)])] });
+    const state = buildInitialBattleState([
+      member(1, true, { data: starCe, level: 1, limitBreakCount: 0 }),
+      member(2, true),
+      member(3, true),
+      member(4, false, { data: starCe, level: 1, limitBreakCount: 0 }),
+    ], [wave()], { costBudget: 200, randomFn: () => 0.5 });
+
+    expect(state.handCardStars.reduce((sum, stars) => sum + stars, 0)).toBe(10);
+    expect(state.starsCarried).toBe(0);
   });
 });

@@ -12,7 +12,7 @@ import { optimizeQuest, optimizeQuestMinimumTurns, type ServantCandidate } from 
 import type { NpAttackOption } from "./cardOrderCandidates.js";
 import type { SkillActivation } from "./skillUsageCandidates.js";
 import { npStrengtheningKey } from "./npVersionSelection.js";
-import { findClearUpgradeRecommendations } from "./upgradeAdvisor.js";
+import { buildUpgradeScenarios, findClearUpgradeRecommendations } from "./upgradeAdvisor.js";
 
 function niceServant(overrides: Partial<ServantModule.Servant> = {}): ServantModule.Servant {
   return {
@@ -115,6 +115,39 @@ function resolveHitContext(handCard: HandCard): DerivedHitContext {
     baseStarRate: 500,
     starEnemyServerMod: 0,
   };
+}
+
+function damagingNp(id: number, multipliers: readonly number[]): NoblePhantasm.NoblePhantasm {
+  const values = multipliers.map((Value) => ({ Value }));
+  const damage = {
+    funcId: id + 1,
+    funcType: Func.FuncType.DAMAGE_NP,
+    funcTargetType: Func.FuncTargetType.ENEMY,
+    funcTargetTeam: Func.FuncTargetTeam.ENEMY,
+    functvals: [],
+    funcquestTvals: [],
+    overWriteTvalsList: [],
+    funcPopupText: "",
+    buffs: [],
+    svals: values,
+    svals2: values,
+    svals3: values,
+  } as unknown as Func.Func;
+  return {
+    id,
+    num: 1,
+    npNum: 1,
+    priority: 101,
+    condQuestId: 0,
+    condQuestPhase: 0,
+    strengthStatus: 1,
+    card: "2",
+    name: "Upgrade Test NP",
+    effectFlags: ["attackEnemyOne"],
+    npGain: { buster: [50, 50, 50, 50, 50], arts: [50, 50, 50, 50, 50], quick: [50, 50, 50, 50, 50], extra: [50, 50, 50, 50, 50], defence: [50, 50, 50, 50, 50], np: [80, 80, 80, 80, 80] },
+    npDistribution: [100],
+    functions: [damage],
+  } as unknown as NoblePhantasm.NoblePhantasm;
 }
 
 describe("optimizeQuest", () => {
@@ -839,36 +872,7 @@ describe("optimizeQuestMinimumTurns", () => {
 
 describe("upgrade advisor integration", () => {
   it("finds the smallest NP-level increase that turns an actual failed search into a clear", () => {
-    const values = [1000, 100000, 110000, 120000, 130000].map((Value) => ({ Value }));
-    const damage = {
-      funcId: 701,
-      funcType: Func.FuncType.DAMAGE_NP,
-      funcTargetType: Func.FuncTargetType.ENEMY,
-      funcTargetTeam: Func.FuncTargetTeam.ENEMY,
-      functvals: [],
-      funcquestTvals: [],
-      overWriteTvalsList: [],
-      funcPopupText: "",
-      buffs: [],
-      svals: values,
-      svals2: values,
-      svals3: values,
-    } as unknown as Func.Func;
-    const noblePhantasm = {
-      id: 7001,
-      num: 1,
-      npNum: 1,
-      priority: 101,
-      condQuestId: 0,
-      condQuestPhase: 0,
-      strengthStatus: 1,
-      card: "2",
-      name: "Upgrade Test NP",
-      effectFlags: ["attackEnemyOne"],
-      npGain: { buster: [50, 50, 50, 50, 50], arts: [50, 50, 50, 50, 50], quick: [50, 50, 50, 50, 50], extra: [50, 50, 50, 50, 50], defence: [50, 50, 50, 50, 50], np: [80, 80, 80, 80, 80] },
-      npDistribution: [100],
-      functions: [damage],
-    } as unknown as NoblePhantasm.NoblePhantasm;
+    const noblePhantasm = damagingNp(7001, [1000, 100000, 110000, 120000, 130000]);
     const attacker: ServantCandidate = {
       niceServant: niceServant({ noblePhantasms: [noblePhantasm] }),
       build: { ...build(1), selectedNpId: noblePhantasm.id },
@@ -893,6 +897,64 @@ describe("upgrade advisor integration", () => {
     });
     expect(report.baseline.minimumTurns).toBeNull();
     expect(report.recommendations[0]).toMatchObject({ kind: "npLevel", servantId: 1, from: 1, to: 2 });
+    expect(report.recommendations[0]?.result.minimumTurns).toBe(1);
+  });
+
+  it("proves a feasible MLB CE can unlock its stronger starting-NP passive and clear", () => {
+    const noblePhantasm = damagingNp(7101, [100000, 100000, 100000, 100000, 100000]);
+    const attacker: ServantCandidate = {
+      niceServant: niceServant({ noblePhantasms: [noblePhantasm] }),
+      build: { ...build(1), selectedNpId: noblePhantasm.id },
+    };
+    const gainNp = (Value: number) => ({
+      funcType: Func.FuncType.GAIN_NP,
+      funcTargetType: Func.FuncTargetType.SELF,
+      svals: [{ Value }],
+      buffs: [],
+    }) as unknown as Func.Func;
+    const ceData = {
+      id: 9400710,
+      name: "MLB Starting NP Test CE",
+      cost: 12,
+      lvMax: 100,
+      atkGrowth: Array.from({ length: 100 }, () => 0),
+      hpGrowth: Array.from({ length: 100 }, () => 0),
+      ascensionAdd: { lvMax: { ascension: { 0: 20, 1: 40, 2: 60, 3: 80, 4: 100 }, costume: {} } },
+      skills: [
+        { num: 1, priority: 1, condLimitCount: 0, functions: [gainNp(8000)] },
+        { num: 1, priority: 2, condLimitCount: 4, functions: [gainNp(10000)] },
+      ],
+    } as unknown as CraftEssence.CraftEssence;
+    const cePool = ["target", "donor-1", "donor-2", "donor-3", "donor-4"].map((inventoryId) => ({
+      data: ceData,
+      level: 1,
+      inventoryId,
+      limitBreakCount: 0 as const,
+    }));
+    const boss = waveEnemy({ hp: 30000 });
+    const options = {
+      shortlist: [attacker, candidate(2), candidate(3)],
+      cePool,
+      waves: [wave({ initialEnemies: [boss], enemyPool: [boss] })],
+      costBudget: 1000,
+      constants: CONSTANTS,
+      resolveHitContext,
+      maxTurns: 1,
+      maxAttackers: 1,
+      randomFn: () => 0.5,
+    };
+    const scenarios = buildUpgradeScenarios(options).filter((scenario) =>
+      scenario.kind === "ceMlb" && scenario.inventoryId === "target",
+    );
+    const report = findClearUpgradeRecommendations(options, { scenarios });
+
+    expect(report.baseline.minimumTurns).toBeNull();
+    expect(report.recommendations[0]).toMatchObject({
+      kind: "ceMlb",
+      craftEssenceId: ceData.id,
+      inventoryId: "target",
+      consumedInventoryIds: ["donor-1", "donor-2", "donor-3", "donor-4"],
+    });
     expect(report.recommendations[0]?.result.minimumTurns).toBe(1);
   });
 
