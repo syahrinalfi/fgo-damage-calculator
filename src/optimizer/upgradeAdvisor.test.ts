@@ -294,4 +294,14 @@ describe("upgrade advisor", () => {
     expect(report.recommendations[0]).toMatchObject({ kind: "npLevel", servantId: 1, to: 2 });
     expect(report.recommendations.some((recommendation) => recommendation.kind === "ownedServantBuild" && recommendation.servantId === 2)).toBe(true);
   });
+
+  it("does not generate a redundant build scenario for an already-maximized shortlisted servant", () => {
+    const owned: ServantCandidate = {
+      niceServant: { lvMax: 90, noblePhantasms: [] } as unknown as ServantModule.Servant,
+      build: build(),
+    };
+    const scenarios = buildUpgradeScenarios(options(owned.build), { ownedServantCandidates: [owned] });
+
+    expect(scenarios.some((scenario) => scenario.kind === "ownedServantBuild")).toBe(false);
+  });
 });

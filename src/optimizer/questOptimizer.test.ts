@@ -977,8 +977,8 @@ describe("upgrade advisor integration", () => {
       constants: CONSTANTS,
       resolveHitContext,
       maxTurns: 1,
-      maxAttackers: 1,
-      randomFn: () => 0.5,
+      maxAttackers: 3,
+      randomFn: () => 0,
     });
     expect(report.baseline.minimumTurns).toBeNull();
     expect(report.recommendations[0]).toMatchObject({
@@ -987,6 +987,66 @@ describe("upgrade advisor integration", () => {
       inventoryId: "owned-ce",
       from: 1,
       to: 20,
+    });
+    expect(report.recommendations[0]?.result.minimumTurns).toBe(1);
+  });
+
+  it("finds an underbuilt owned servant outside the shortlist that can clear at natural-max potential", () => {
+    const noblePhantasm = damagingNp(7201, [100000, 100000, 100000, 100000, 100000]);
+    const owned: ServantCandidate = {
+      niceServant: niceServant({
+        lvMax: 2,
+        atkGrowth: [0, 2000],
+        hpGrowth: [0, 1000],
+        noblePhantasms: [noblePhantasm],
+      }),
+      build: {
+        ...build(4),
+        level: 1,
+        ascension: 0,
+        skillLevels: [1, 1, 1],
+        npLevel: 4,
+        selectedNpId: noblePhantasm.id,
+      },
+    };
+    const startingNpCe = {
+      id: 9400720,
+      name: "Owned Roster Test CE",
+      cost: 12,
+      lvMax: 20,
+      atkGrowth: Array.from({ length: 20 }, () => 0),
+      hpGrowth: Array.from({ length: 20 }, () => 0),
+      skills: [{
+        num: 1,
+        priority: 1,
+        condLimitCount: 0,
+        functions: [{
+          funcType: Func.FuncType.GAIN_NP,
+          funcTargetType: Func.FuncTargetType.SELF,
+          svals: [{ Value: 10000 }],
+          buffs: [],
+        }],
+      }],
+    } as unknown as CraftEssence.CraftEssence;
+    const boss = waveEnemy({ hp: 30000 });
+    const optimizerOptions = {
+      shortlist: [candidate(1), candidate(2), candidate(3)],
+      cePool: [{ data: startingNpCe, level: 1, inventoryId: "starting-np", limitBreakCount: 0 as const }],
+      waves: [wave({ initialEnemies: [boss], enemyPool: [boss] })],
+      costBudget: 1000,
+      constants: CONSTANTS,
+      resolveHitContext,
+      maxTurns: 1,
+      maxAttackers: 3,
+      randomFn: () => 0.5,
+    };
+    const report = findClearUpgradeRecommendations(optimizerOptions, { ownedServantCandidates: [owned] });
+
+    expect(report.baseline.minimumTurns).toBeNull();
+    expect(report.recommendations[0]).toMatchObject({ kind: "ownedServantBuild", servantId: 4 });
+    expect(report.recommendations[0]?.options.shortlist.find((entry) => entry.build.servantId === 4)?.build).toMatchObject({
+      level: 2,
+      npLevel: 4,
     });
     expect(report.recommendations[0]?.result.minimumTurns).toBe(1);
   });

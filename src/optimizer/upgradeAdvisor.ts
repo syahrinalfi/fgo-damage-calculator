@@ -307,13 +307,15 @@ function potentialOwnedCandidate(candidate: ServantCandidate): ServantCandidate 
 }
 
 function samePotentialBuild(current: ServantCandidate, potential: ServantCandidate): boolean {
+  const currentStrengthenings = new Set(current.build.unlockedStrengthenings ?? []);
+  const potentialStrengthenings = new Set(potential.build.unlockedStrengthenings ?? []);
   return current.build.level === potential.build.level &&
     current.build.ascension === potential.build.ascension &&
     current.build.skillLevels.every((level, index) => level === potential.build.skillLevels[index]) &&
     current.build.fou.atk === potential.build.fou.atk &&
     current.build.fou.hp === potential.build.fou.hp &&
-    current.build.unlockedStrengthenings?.length === potential.build.unlockedStrengthenings?.length &&
-    (current.build.unlockedStrengthenings ?? []).every((key) => potential.build.unlockedStrengthenings?.includes(key));
+    currentStrengthenings.size === potentialStrengthenings.size &&
+    [...currentStrengthenings].every((key) => potentialStrengthenings.has(key));
 }
 
 function maximizeOwnedSkillSource(
