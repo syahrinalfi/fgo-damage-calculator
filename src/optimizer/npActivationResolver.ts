@@ -13,6 +13,9 @@ const DIRECT_DAMAGE_NP_FUNCTIONS = new Set<Func.FuncType>([
   Func.FuncType.DAMAGE_NP_PIERCE,
   Func.FuncType.DAMAGE_NP_INDIVIDUAL,
   Func.FuncType.DAMAGE_NP_HPRATIO_LOW,
+  Func.FuncType.DAMAGE_NP_STATE_INDIVIDUAL_FIX,
+  Func.FuncType.DAMAGE_NP_AND_OR_CHECK_INDIVIDUALITY,
+  Func.FuncType.DAMAGE_NP_RARE,
 ]);
 
 function selectedEffects(func: Func.Func, npLevel: ServantInstance["npLevel"], stage: OverchargeStage): readonly SkillEffect[] | undefined {
@@ -82,9 +85,17 @@ function buildResolvedAttack(
   if (rawDamage === undefined) return undefined;
   const isIndividualDamage = damageEntry.func.funcType === Func.FuncType.DAMAGE_NP_INDIVIDUAL;
   const isLowHpDamage = damageEntry.func.funcType === Func.FuncType.DAMAGE_NP_HPRATIO_LOW;
+  const isStateIndividualDamage = damageEntry.func.funcType === Func.FuncType.DAMAGE_NP_STATE_INDIVIDUAL_FIX;
+  const isAndTraitDamage = damageEntry.func.funcType === Func.FuncType.DAMAGE_NP_AND_OR_CHECK_INDIVIDUALITY;
+  const isRareDamage = damageEntry.func.funcType === Func.FuncType.DAMAGE_NP_RARE;
   const individualTarget = damageValues?.Target;
   const individualCorrection = damageValues?.Correction;
   if (isIndividualDamage && (individualTarget === undefined || individualCorrection === undefined)) return undefined;
+  if (isStateIndividualDamage && (individualTarget === undefined || individualCorrection === undefined)) return undefined;
+  const andTraitTargets = damageValues?.AndCheckIndividualityList;
+  if (isAndTraitDamage && (andTraitTargets === undefined || andTraitTargets.length === 0 || individualCorrection === undefined)) return undefined;
+  const rarityTargets = damageValues?.TargetRarityList;
+  if (isRareDamage && (rarityTargets === undefined || rarityTargets.length === 0 || individualCorrection === undefined)) return undefined;
   const lowHpMaximumBonus = damageValues?.Target;
   if (isLowHpDamage && lowHpMaximumBonus === undefined) return undefined;
   const hpRatio = servant.maxHp <= 0 ? 0 : Math.min(1, Math.max(0, servant.currentHp / servant.maxHp));
@@ -102,13 +113,21 @@ function buildResolvedAttack(
   }
   const hitRates = np.npDistribution.map((rate) => rate / 100);
   const ignoreDefense = damageEntry.func.funcType === Func.FuncType.DAMAGE_NP_PIERCE;
+  const isConditionalDamage = isIndividualDamage || isStateIndividualDamage || isAndTraitDamage || isRareDamage;
+  const conditionMatches = (enemy: EnemyInstance): boolean => {
+    if (isIndividualDamage) return enemy.traits.has(individualTarget as number);
+    if (isStateIndividualDamage) return enemy.activeBuffs.some((buff) => buff.vals?.has(individualTarget as number) ?? false);
+    if (isAndTraitDamage) return (andTraitTargets as readonly number[]).every((trait) => enemy.traits.has(trait));
+    if (isRareDamage) return enemy.rarity !== undefined && (rarityTargets as readonly number[]).includes(enemy.rarity);
+    return false;
+  };
   const contextsFor = (enemy: EnemyInstance) =>
     hitRates.map((hitRate) => ({
       card: { type: cardType, position: 1 },
       npDamageMultiplier: (effectiveRawDamage / 1000) * hitRate,
       randomModifier,
-      isSuperEffective: isIndividualDamage && enemy.traits.has(individualTarget as number),
-      superEffectiveModifier: isIndividualDamage ? (individualCorrection as number) / 1000 : 1,
+      isSuperEffective: isConditionalDamage && conditionMatches(enemy),
+      superEffectiveModifier: isConditionalDamage ? (individualCorrection as number) / 1000 : 1,
       isNP: true,
       offensiveNPRate,
       npEnemyServerMod: enemy.serverMod.tdRate / 1000,
@@ -130,9 +149,9 @@ function buildResolvedAttack(
 
 /**
  * Converts one explicitly-selected NiceNp version into a mixed attack-chain option.
- * Supported direct damage families are ordinary damage, Ignore Defense, trait special
- * damage, and low-HP scaling. Other/partially modeled variants return `undefined` rather
- * than silently under-simulating.
+ * Supported direct damage families are ordinary damage, Ignore Defense, trait/state/rarity
+ * special damage, conjunctive-trait damage, and low-HP scaling. Other/partially modeled
+ * variants return `undefined` rather than silently under-simulating.
  */
 export function resolveNpAttackOption(
   state: BattleState,

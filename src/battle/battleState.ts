@@ -81,6 +81,8 @@ export interface HandCard {
  */
 export interface EnemyInstance extends Omit<BattleUnit, "activeBuffs"> {
   readonly npcId: number;
+  /** Servant rarity when the enemy record represents a servant; absent for manual/unknown enemies. */
+  readonly rarity?: number;
   readonly currentHp: number;
   readonly maxHp: number;
   readonly activeBuffs: readonly TrackedBuff[];
@@ -282,6 +284,7 @@ export function buildEnemyInstance(waveEnemy: WaveEnemy): EnemyInstance {
     className: waveEnemy.svt.className,
     attribute: waveEnemy.svt.attribute,
     traits: new Set(waveEnemy.traits.map((trait) => trait.id)),
+    rarity: waveEnemy.svt.rarity,
     currentHp: waveEnemy.hp,
     maxHp: waveEnemy.hp,
     activeBuffs: [],
