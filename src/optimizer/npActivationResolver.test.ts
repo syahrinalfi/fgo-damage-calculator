@@ -294,6 +294,62 @@ describe("resolveNpAttackOption", () => {
     expect(option?.resolveForNpChainBonus?.(1).context.superEffectiveModifier).toBe(1.625);
   });
 
+  it("counts target traits and buff instances for target-side damageNpIndividualSum", () => {
+    const damage = func({
+      funcType: Func.FuncType.DAMAGE_NP_INDIVIDUAL_SUM,
+      funcTargetType: Func.FuncTargetType.ENEMY_ALL,
+      svals: dataVals([{ Value: 3000, Value2: 1000, Target: 1, Correction: 200, TargetList: [2002, 3011], ParamAddMaxCount: 2 }]),
+      svals2: dataVals([{ Value: 3000, Value2: 1000, Target: 1, Correction: 300, TargetList: [2002, 3011], ParamAddMaxCount: 2 }]),
+      svals3: dataVals([{ Value: 3000, Value2: 1000, Target: 1, Correction: 300, TargetList: [2002, 3011], ParamAddMaxCount: 2 }]),
+    });
+    const option = resolveNpAttackOption(
+      state([
+        enemy(9001, { traits: new Set([2002]), activeBuffs: [trackedBuff([3011]), trackedBuff([3011])] }),
+        enemy(9002),
+      ]),
+      1,
+      np({ effectFlags: ["attackEnemyAll" as NoblePhantasm.NoblePhantasmEffectFlag], npDistribution: [100], functions: [damage] }),
+      9001,
+      () => 0.5,
+    );
+    expect(option?.targetHitContexts?.map((target) => ({
+      effective: target.hitContexts[0]?.isSuperEffective,
+      modifier: target.hitContexts[0]?.superEffectiveModifier,
+    }))).toEqual([
+      { effective: true, modifier: 1.4 },
+      { effective: false, modifier: 1 },
+    ]);
+    expect(option?.resolveForNpChainBonus?.(1).targetHitContexts?.[0]?.hitContexts[0]?.superEffectiveModifier).toBe(1.6);
+  });
+
+  it("counts caster traits and buff instances for self-side damageNpIndividualSum", () => {
+    const damage = func({
+      funcType: Func.FuncType.DAMAGE_NP_INDIVIDUAL_SUM,
+      funcTargetType: Func.FuncTargetType.ENEMY,
+      svals: dataVals([{ Value: 6000, Value2: 1000, Target: 0, Correction: 100, TargetList: [2828], ParamAddMaxCount: 12 }]),
+      svals2: dataVals([{ Value: 6000, Value2: 1000, Target: 0, Correction: 100, TargetList: [2828], ParamAddMaxCount: 12 }]),
+      svals3: dataVals([{ Value: 6000, Value2: 1000, Target: 0, Correction: 100, TargetList: [2828], ParamAddMaxCount: 12 }]),
+    });
+    const sumState = {
+      ...state(),
+      servants: [servant({ traits: new Set([2828]), activeBuffs: [trackedBuff([2828]), trackedBuff([2828])] })],
+    };
+    const option = resolveNpAttackOption(sumState, 1, np({ npDistribution: [100], functions: [damage] }), 9001, () => 0.5);
+    expect(option?.context.isSuperEffective).toBe(true);
+    expect(option?.context.superEffectiveModifier).toBe(1.3);
+  });
+
+  it("keeps damageNpIndividualSum fail-closed when unreleaseable individuality metadata is required", () => {
+    const damage = func({
+      funcType: Func.FuncType.DAMAGE_NP_INDIVIDUAL_SUM,
+      funcTargetType: Func.FuncTargetType.ENEMY,
+      svals: dataVals([{ Value: 9000, Value2: 2000, Target: 1, Correction: 0, TargetList: [3021], ParamAddMaxCount: 0, IgnoreIndivUnreleaseable: 1 }]),
+      svals2: dataVals([{ Value: 9000, Value2: 2000, Target: 1, Correction: 0, TargetList: [3021], ParamAddMaxCount: 0, IgnoreIndivUnreleaseable: 1 }]),
+      svals3: dataVals([{ Value: 9000, Value2: 2000, Target: 1, Correction: 0, TargetList: [3021], ParamAddMaxCount: 0, IgnoreIndivUnreleaseable: 1 }]),
+    });
+    expect(resolveNpAttackOption(state(), 1, np({ functions: [damage] }), 9001, () => 0.5)).toBeUndefined();
+  });
+
   it("rejects conditional damage variants with missing condition parameters", () => {
     const individualWithoutTarget = func({
       funcType: Func.FuncType.DAMAGE_NP_INDIVIDUAL,
