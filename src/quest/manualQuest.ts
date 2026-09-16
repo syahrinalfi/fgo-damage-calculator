@@ -24,6 +24,12 @@ export interface ManualQuestDraft {
   readonly waves: readonly ManualWaveInput[];
 }
 
+export interface ManualQuestRepository {
+  list(region: SupportedRegion): Promise<readonly ManualQuestDraft[]>;
+  save(draft: ManualQuestDraft): Promise<void>;
+  remove(region: SupportedRegion, id: string): Promise<void>;
+}
+
 const NEUTRAL_SERVER_MOD = { tdRate: 1000, tdAttackRate: 1000, starRate: 1000 } as const;
 
 function validateEnemy(enemy: ManualEnemyInput, waveIndex: number, enemyIndex: number): void {
@@ -93,7 +99,7 @@ function parseStoredDrafts(raw: string, region: SupportedRegion): readonly Manua
 }
 
 /** Versioned, region-separated persistence for manual quest drafts. */
-export class JsonManualQuestRepository {
+export class JsonManualQuestRepository implements ManualQuestRepository {
   constructor(
     private readonly storage: KeyValueStorage,
     private readonly keyPrefix = "fgo-damage-calculator:quests:v1",

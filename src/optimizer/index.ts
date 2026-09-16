@@ -42,6 +42,8 @@ export type {
 export { buildUpgradeScenarios, findClearUpgradeRecommendations } from "./upgradeAdvisor.js";
 export type { RosterOptimizerInputs } from "./rosterInputs.js";
 export { buildRosterOptimizerInputs } from "./rosterInputs.js";
+export type { RosterStaticDataClient, PersistedOptimizerSession } from "./persistedInputs.js";
+export { loadPersistedOptimizerSession } from "./persistedInputs.js";
 export type { ServantCandidate, QuestOptimizerOptions, QuestOptimizerCandidate } from "./questOptimizer.js";
 export type { MinimumTurnOptimizerOptions, MinimumTurnOptimizerResult } from "./questOptimizer.js";
 export { optimizeQuest, optimizeQuestMinimumTurns } from "./questOptimizer.js";
