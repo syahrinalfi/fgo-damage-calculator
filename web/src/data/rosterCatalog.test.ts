@@ -29,6 +29,7 @@ describe("roster catalog normalization", () => {
     const records = [{
       id: 4001,
       name: "CE",
+      type: "servantEquip",
       lvMax: 100,
       ascensionAdd: { lvMax: { ascension: { 0: 20, 1: 40, 2: 60, 3: 80, 4: 100 } } },
     }] as never[];

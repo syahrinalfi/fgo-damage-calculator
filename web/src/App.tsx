@@ -1,4 +1,5 @@
 import { Region, type SupportedRegion } from "fgo-damage-calculator/data";
+import type { RosterProfile } from "fgo-damage-calculator/account";
 import {
   addManualEnemy,
   addManualWave,
@@ -12,6 +13,8 @@ import {
 } from "fgo-damage-calculator/quest";
 import { useEffect, useMemo, useState } from "react";
 import { createBrowserInputRepositories } from "./data/persistentInputs";
+import { loadRosterCatalog, type RosterCatalogData } from "./data/rosterCatalog";
+import RosterEditor from "./components/RosterEditor";
 
 const CLASS_OPTIONS = [
   "saber", "archer", "lancer", "rider", "caster", "assassin", "berserker",
@@ -99,10 +102,15 @@ function QuestEditor({ draft, onDraftChange }: { readonly draft: ManualQuestDraf
 export default function App() {
   const repositories = useMemo(() => createBrowserInputRepositories(window.localStorage), []);
   const [region, setRegion] = useState<SupportedRegion>(Region.NA);
+  const [stage, setStage] = useState<"quest" | "roster">("quest");
   const [drafts, setDrafts] = useState<readonly ManualQuestDraft[]>([]);
   const [draft, setDraft] = useState<ManualQuestDraft>(() => newDraft(Region.NA));
   const [status, setStatus] = useState<"loading" | "ready" | "saving">("loading");
   const [message, setMessage] = useState<string | null>(null);
+  const [roster, setRoster] = useState<RosterProfile | null>(null);
+  const [rosterCatalog, setRosterCatalog] = useState<RosterCatalogData | null>(null);
+  const [rosterStatus, setRosterStatus] = useState<"loading" | "ready" | "saving">("loading");
+  const [rosterMessage, setRosterMessage] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -116,6 +124,21 @@ export default function App() {
       if (cancelled) return;
       setStatus("ready");
       setMessage(error instanceof Error ? error.message : String(error));
+    });
+    return () => { cancelled = true; };
+  }, [region, repositories]);
+
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([repositories.rosterRepository.load(region), loadRosterCatalog(region)]).then(([stored, catalog]) => {
+      if (cancelled) return;
+      setRoster(stored);
+      setRosterCatalog(catalog);
+      setRosterStatus("ready");
+    }).catch((error: unknown) => {
+      if (cancelled) return;
+      setRosterStatus("ready");
+      setRosterMessage(error instanceof Error ? error.message : String(error));
     });
     return () => { cancelled = true; };
   }, [region, repositories]);
@@ -142,21 +165,37 @@ export default function App() {
     setMessage("Quest removed.");
   }
 
+  async function saveRoster() {
+    if (!roster) return;
+    setRosterStatus("saving");
+    setRosterMessage(null);
+    try {
+      await repositories.rosterRepository.save(roster);
+      setRosterMessage("Roster saved locally.");
+    } catch (error: unknown) {
+      setRosterMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setRosterStatus("ready");
+    }
+  }
+
   return (
     <div className="min-h-svh bg-[var(--ground)] text-[var(--ink)]">
       <header className="border-b border-[var(--rule)] bg-[var(--ground-inset)]">
         <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-5 px-4 py-5 sm:px-8">
           <div><p className="text-xs uppercase tracking-[0.22em] text-[var(--amber)]">Chaldea Operations</p><h1 className="mt-1 text-xl font-semibold">Quest Optimizer</h1></div>
           <nav aria-label="Optimizer modes" className="flex gap-1 rounded-md border border-[var(--rule)] bg-[var(--ground)] p-1 text-sm">
-            <button className="rounded-sm bg-[var(--ink)] px-3 py-2 font-medium text-[var(--ground)]" type="button" aria-current="page">Clear Quest</button>
+            <button className={`rounded-sm px-3 py-2 font-medium ${stage === "quest" ? "bg-[var(--ink)] text-[var(--ground)]" : "text-[var(--ink-dim)]"}`} type="button" aria-current={stage === "quest" ? "page" : undefined} onClick={() => setStage("quest")}>Quest</button>
+            <button className={`rounded-sm px-3 py-2 font-medium ${stage === "roster" ? "bg-[var(--ink)] text-[var(--ground)]" : "text-[var(--ink-dim)]"}`} type="button" aria-current={stage === "roster" ? "page" : undefined} onClick={() => setStage("roster")}>Roster</button>
             <button className="px-3 py-2 text-[var(--ink-dim)]" type="button" disabled>Max Burst</button>
-            <button className="px-3 py-2 text-[var(--ink-dim)]" type="button" disabled>Manual</button>
+            <button className="px-3 py-2 text-[var(--ink-dim)]" type="button" disabled>Preferences</button>
+            <button className="px-3 py-2 text-[var(--ink-dim)]" type="button" disabled>Results</button>
           </nav>
           <fieldset className="flex items-center gap-1 text-sm">
             <legend className="mr-2 inline text-xs uppercase tracking-[0.14em] text-[var(--ink-dim)]">Account</legend>
             {REGION_OPTIONS.map((candidate) => (
               <label key={candidate} className={`cursor-pointer rounded-md border px-3 py-2 ${region === candidate ? "border-[var(--focus)]" : "border-[var(--rule)] text-[var(--ink-dim)]"}`}>
-                <input className="sr-only" type="radio" name="region" value={candidate} checked={region === candidate} onChange={() => { setStatus("loading"); setRegion(candidate); }} />{candidate}
+                <input className="sr-only" type="radio" name="region" value={candidate} checked={region === candidate} onChange={() => { setStatus("loading"); setRosterStatus("loading"); setRosterMessage(null); setRegion(candidate); }} />{candidate}
               </label>
             ))}
           </fieldset>
@@ -169,18 +208,20 @@ export default function App() {
             {drafts.map((stored) => <li key={stored.id}><button className={`w-full rounded-md px-3 py-2 text-left text-sm ${stored.id === draft.id ? "bg-[var(--ground-raised)]" : "text-[var(--ink-dim)] hover:bg-[var(--ground-raised)]"}`} type="button" onClick={() => { setDraft(stored); setMessage(null); }}><span className="block truncate">{stored.name}</span><span className="num text-xs">{stored.waves.length}W</span></button></li>)}
             {drafts.length === 0 && <li className="text-sm text-[var(--ink-dim)]">No saved nodes for {region}.</li>}
           </ul>}
-          <div className="mt-7 border-t border-[var(--rule)] pt-5 text-xs leading-5 text-[var(--ink-dim)]">Roster setup is the next input stage. Quest drafts already persist separately for JP and NA.</div>
+          <div className="mt-7 border-t border-[var(--rule)] pt-5 text-xs leading-5 text-[var(--ink-dim)]">{stage === "quest" ? "Roster setup is the next input stage." : "Quest drafts remain available in the Quest stage."} Both input stages persist separately for JP and NA.</div>
         </aside>
         <div>
-          <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
-            <div><p className="text-xs uppercase tracking-[0.16em] text-[var(--ink-dim)]">Step 1 of 4</p><h2 className="mt-1 text-lg font-semibold">Define the enemy node</h2></div>
-            <div className="flex gap-2">
-              {drafts.some((stored) => stored.id === draft.id) && <button className="rounded-md border border-[var(--rule)] px-4 py-2 text-sm text-[var(--ink-dim)]" type="button" onClick={deleteDraft}>Delete</button>}
-              <button className="rounded-md bg-[var(--amber)] px-4 py-2 text-sm font-semibold text-[#1a1200] disabled:opacity-50" type="button" disabled={status === "saving"} onClick={saveDraft}>{status === "saving" ? "Saving…" : "Save quest"}</button>
+          {stage === "quest" ? <>
+            <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
+              <div><p className="text-xs uppercase tracking-[0.16em] text-[var(--ink-dim)]">Step 1 of 4</p><h2 className="mt-1 text-lg font-semibold">Define the enemy node</h2></div>
+              <div className="flex gap-2">
+                {drafts.some((stored) => stored.id === draft.id) && <button className="rounded-md border border-[var(--rule)] px-4 py-2 text-sm text-[var(--ink-dim)]" type="button" onClick={deleteDraft}>Delete</button>}
+                <button className="rounded-md bg-[var(--amber)] px-4 py-2 text-sm font-semibold text-[#1a1200] disabled:opacity-50" type="button" disabled={status === "saving"} onClick={saveDraft}>{status === "saving" ? "Saving…" : "Save quest"}</button>
+              </div>
             </div>
-          </div>
-          {message && <p role="status" className="mb-4 rounded-md border border-[var(--rule)] bg-[var(--ground-raised)] px-3 py-2 text-sm">{message}</p>}
-          <QuestEditor draft={draft} onDraftChange={setDraft} />
+            {message && <p role="status" className="mb-4 rounded-md border border-[var(--rule)] bg-[var(--ground-raised)] px-3 py-2 text-sm">{message}</p>}
+            <QuestEditor draft={draft} onDraftChange={setDraft} />
+          </> : roster && rosterCatalog ? <RosterEditor profile={roster} catalog={rosterCatalog} status={rosterStatus === "saving" ? "saving" : "ready"} message={rosterMessage} onChange={setRoster} onSave={saveRoster} /> : <p role="status" className="rounded-md border border-[var(--rule)] bg-[var(--ground-raised)] px-3 py-3 text-sm text-[var(--ink-dim)]">{rosterStatus === "loading" ? "Loading Atlas roster catalog…" : rosterMessage ?? "Roster is unavailable."}</p>}
         </div>
       </main>
     </div>
