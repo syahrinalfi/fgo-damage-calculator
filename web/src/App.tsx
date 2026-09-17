@@ -184,7 +184,7 @@ export default function App() {
       <header className="border-b border-[var(--rule)] bg-[var(--ground-inset)]">
         <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-5 px-4 py-5 sm:px-8">
           <div><p className="text-xs uppercase tracking-[0.22em] text-[var(--amber)]">Chaldea Operations</p><h1 className="mt-1 text-xl font-semibold">Quest Optimizer</h1></div>
-          <nav aria-label="Optimizer modes" className="flex gap-1 rounded-md border border-[var(--rule)] bg-[var(--ground)] p-1 text-sm">
+          <nav aria-label="Optimizer modes" className="flex max-w-full flex-wrap gap-1 rounded-md border border-[var(--rule)] bg-[var(--ground)] p-1 text-sm">
             <button className={`rounded-sm px-3 py-2 font-medium ${stage === "quest" ? "bg-[var(--ink)] text-[var(--ground)]" : "text-[var(--ink-dim)]"}`} type="button" aria-current={stage === "quest" ? "page" : undefined} onClick={() => setStage("quest")}>Quest</button>
             <button className={`rounded-sm px-3 py-2 font-medium ${stage === "roster" ? "bg-[var(--ink)] text-[var(--ground)]" : "text-[var(--ink-dim)]"}`} type="button" aria-current={stage === "roster" ? "page" : undefined} onClick={() => setStage("roster")}>Roster</button>
             <button className="px-3 py-2 text-[var(--ink-dim)]" type="button" disabled>Max Burst</button>
@@ -201,7 +201,7 @@ export default function App() {
           </fieldset>
         </div>
       </header>
-      <main className="mx-auto grid max-w-7xl gap-8 px-4 py-7 sm:px-8 lg:grid-cols-[15rem_minmax(0,1fr)]">
+      <main className="mx-auto grid max-w-7xl grid-cols-[minmax(0,1fr)] gap-8 px-4 py-7 sm:px-8 lg:grid-cols-[15rem_minmax(0,1fr)]">
         <aside aria-label="Saved quests" className="lg:border-r lg:border-[var(--rule)] lg:pr-6">
           <div className="mb-4 flex items-center justify-between"><h2 className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--ink-dim)]">Saved nodes</h2><button className="text-sm text-[var(--focus)]" type="button" onClick={() => { setDraft(newDraft(region)); setMessage(null); }}>New</button></div>
           {status === "loading" ? <p className="text-sm text-[var(--ink-dim)]">Loading…</p> : <ul className="space-y-1">
