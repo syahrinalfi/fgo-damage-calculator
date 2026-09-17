@@ -51,7 +51,7 @@ describe("roster editor domain operations", () => {
     const next = addRosterServant(source, servant);
 
     expect(source.ownedServants).toEqual({});
-    expect(next.ownedServants[servant.servantId]).toMatchObject({
+    expect(next.ownedServants[servant.servantId]!).toMatchObject({
       servantId: servant.servantId,
       level: 100,
       ascension: 4,
@@ -62,7 +62,7 @@ describe("roster editor domain operations", () => {
       bondLevel: 0,
       commandCodeIds: [undefined, undefined, undefined, undefined, undefined],
     });
-    expect(next.ownedServants[servant.servantId].selectedNpId).toBe(9001);
+    expect(next.ownedServants[servant.servantId]!.selectedNpId).toBe(9001);
   });
 
   it("re-adding a servant replaces one entry while preserving existing investment", () => {
@@ -80,7 +80,7 @@ describe("roster editor domain operations", () => {
 
   it("requires an explicit NP form when multiple usable forms exist", () => {
     const next = addRosterServant(createEmptyRosterProfile(Region.NA), multiNpServant);
-    expect(next.ownedServants[multiNpServant.servantId].selectedNpId).toBeUndefined();
+    expect(next.ownedServants[multiNpServant.servantId]!.selectedNpId).toBeUndefined();
     expect(validateRoster(next, { servants: [multiNpServant] }).issues).toEqual(expect.arrayContaining([
       expect.objectContaining({ path: `ownedServants.${multiNpServant.servantId}.selectedNpId` }),
     ]));
@@ -149,9 +149,9 @@ describe("roster editor domain operations", () => {
     const next = removeRosterCraftEssence(withCe, "ce-1");
 
     expect(next.craftEssenceInventory).toEqual([]);
-    expect(next.ownedServants[servant.servantId].equippedCraftEssenceId).toBeUndefined();
-    expect(next.ownedServants[servant.servantId].servantId).toBe(servant.servantId);
-    expect(withCe.ownedServants[servant.servantId].equippedCraftEssenceId).toBe("ce-1");
+    expect(next.ownedServants[servant.servantId]!.equippedCraftEssenceId).toBeUndefined();
+    expect(next.ownedServants[servant.servantId]!.servantId).toBe(servant.servantId);
+    expect(withCe.ownedServants[servant.servantId]!.equippedCraftEssenceId).toBe("ce-1");
   });
 
   it("supports unique mystic-code rows and immutable updates", () => {

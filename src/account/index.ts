@@ -27,3 +27,24 @@ export {
 } from "./roster.js";
 export type { RosterRepository, KeyValueStorage } from "./rosterStore.js";
 export { InMemoryRosterRepository, JsonRosterRepository } from "./rosterStore.js";
+export {
+  addRosterCraftEssence,
+  addRosterServant,
+  createRosterServant,
+  removeRosterCraftEssence,
+  removeRosterServant,
+  setRosterMysticCode,
+  updateRosterCraftEssence,
+  updateRosterServant,
+  validateRoster,
+} from "./rosterEditor.js";
+export type {
+  CraftEssenceCatalogEntry,
+  MysticCodeCatalogEntry,
+  OwnedCraftEssenceDraft,
+  OwnedServantPatch,
+  RosterCatalog,
+  RosterValidationIssue,
+  RosterValidationResult,
+  ServantCatalogEntry,
+} from "./rosterEditor.js";
