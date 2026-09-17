@@ -15,7 +15,9 @@ function unique<T>(values: readonly T[]): T[] {
 }
 
 function strengtheningKeys(record: NiceServant): string[] {
-  return unique([...record.relateQuestIds, ...record.trialQuestIds].map((id) => `${id}:1`));
+  return unique([...record.noblePhantasms, ...record.skills]
+    .filter((version) => version.condQuestId !== 0)
+    .map((version) => `${version.condQuestId}:${version.condQuestPhase}`));
 }
 
 export function normalizeServantCatalog(records: readonly NiceServant[]): ServantCatalogEntry[] {
@@ -23,9 +25,10 @@ export function normalizeServantCatalog(records: readonly NiceServant[]): Servan
     .filter((record) => record.type === "normal" || record.type === "heroine")
     .map((record) => ({
       servantId: record.id,
+      collectionNo: record.collectionNo,
       name: record.name,
       levelCap: record.lvMax,
-      npIds: unique(record.noblePhantasms.map((np) => np.id)),
+      npIds: unique(record.noblePhantasms.filter((np) => np.condQuestId === 0).map((np) => np.id)),
       strengtheningKeys: strengtheningKeys(record),
     }))
     .sort((a, b) => a.name.localeCompare(b.name) || a.servantId - b.servantId);
@@ -44,7 +47,12 @@ function levelCaps(record: CraftEssence.CraftEssence): number[] {
 export function normalizeCraftEssenceCatalog(records: readonly CraftEssence.CraftEssence[]): CraftEssenceCatalogEntry[] {
   return records
     .filter((record) => record.type === "servantEquip")
-    .map((record) => ({ craftEssenceId: record.id, name: record.name, levelCaps: levelCaps(record) }))
+    .map((record) => ({
+      craftEssenceId: record.id,
+      collectionNo: record.collectionNo,
+      name: record.name,
+      levelCaps: levelCaps(record),
+    }))
     .sort((a, b) => a.name.localeCompare(b.name) || a.craftEssenceId - b.craftEssenceId);
 }
 

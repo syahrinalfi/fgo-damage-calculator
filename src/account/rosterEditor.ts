@@ -14,6 +14,7 @@ import type {
 
 export interface ServantCatalogEntry {
   readonly servantId: number;
+  readonly collectionNo: number;
   readonly name: string;
   readonly levelCap: number;
   readonly npIds: readonly number[];
@@ -22,6 +23,7 @@ export interface ServantCatalogEntry {
 
 export interface CraftEssenceCatalogEntry {
   readonly craftEssenceId: number;
+  readonly collectionNo: number;
   readonly name: string;
   /** Caps for LB0 through MLB. Missing stages fall back to the last known cap. */
   readonly levelCaps: readonly number[];
@@ -213,8 +215,7 @@ function validateServant(
   path: string,
   catalog: ServantCatalogEntry | undefined,
 ): void {
-  const levelCap = catalog?.levelCap ?? 120;
-  if (!integerBetween(servant.level, 1, levelCap)) issue(issues, `${path}.level`, `Level must be an integer from 1 through ${levelCap}.`);
+  if (!integerBetween(servant.level, 1, 120)) issue(issues, `${path}.level`, "Level must be an integer from 1 through 120.");
   if (!integerBetween(servant.ascension, 0, 4)) issue(issues, `${path}.ascension`, "Ascension must be from 0 through 4.");
   servant.skillLevels.forEach((value, index) => {
     if (!integerBetween(value, 1, 10)) issue(issues, `${path}.skillLevels.${index}`, "Skill level must be from 1 through 10.");
