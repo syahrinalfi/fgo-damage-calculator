@@ -9,6 +9,7 @@ import type {
   OwnedServant,
   RosterProfile,
   SkillLevel,
+  ServantBuild,
 } from "./types.js";
 
 export interface ServantCatalogEntry {
@@ -55,14 +56,21 @@ export interface OwnedCraftEssenceDraft {
   readonly limitBreakCount: CraftEssenceLimitBreakCount;
 }
 
+function cloneBuild<T extends ServantBuild>(build: T): T {
+  return {
+    ...build,
+    skillLevels: [...build.skillLevels] as T["skillLevels"],
+    appendSkillLevels: { ...build.appendSkillLevels },
+    ...(build.unlockedStrengthenings ? { unlockedStrengthenings: [...build.unlockedStrengthenings] } : {}),
+    fou: { ...build.fou },
+    commandCodeIds: [...build.commandCodeIds] as T["commandCodeIds"],
+  } as T;
+}
+
 function cloneServant(servant: OwnedServant): OwnedServant {
   return {
-    ...servant,
-    skillLevels: [...servant.skillLevels] as OwnedServant["skillLevels"],
-    appendSkillLevels: { ...servant.appendSkillLevels },
+    ...cloneBuild(servant),
     unlockedStrengthenings: [...servant.unlockedStrengthenings],
-    fou: { ...servant.fou },
-    commandCodeIds: [...servant.commandCodeIds] as OwnedServant["commandCodeIds"],
   };
 }
 
@@ -75,7 +83,7 @@ function cloneProfile(profile: RosterProfile): RosterProfile {
     craftEssenceInventory: profile.craftEssenceInventory.map((copy) => ({ ...copy })),
     commandCodeInventory: profile.commandCodeInventory.map((copy) => ({ ...copy })),
     mysticCodes: profile.mysticCodes.map((code) => ({ ...code })),
-    supportPresets: profile.supportPresets.map((preset) => ({ ...preset, build: cloneServant(preset.build as OwnedServant) })),
+    supportPresets: profile.supportPresets.map((preset) => ({ ...preset, build: cloneBuild(preset.build) })),
   };
 }
 

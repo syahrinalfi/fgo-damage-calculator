@@ -14,6 +14,7 @@ import {
   type ServantCatalogEntry,
 } from "./rosterEditor.js";
 import { createEmptyRosterProfile, type RosterProfile } from "./types.js";
+import type { ServantBuild } from "./types.js";
 
 const servant: ServantCatalogEntry = {
   servantId: 1001,
@@ -170,5 +171,26 @@ describe("roster editor domain operations", () => {
     const next = removeRosterServant(withCe, servant.servantId);
     expect(next.ownedServants).toEqual({});
     expect(next.craftEssenceInventory).toHaveLength(1);
+  });
+
+  it("preserves support presets and optional legacy fields while cloning", () => {
+    const supportBuild: ServantBuild = {
+      servantId: 7001,
+      level: 90,
+      ascension: 4,
+      skillLevels: [10, 10, 10],
+      appendSkillLevels: {},
+      npLevel: 1,
+      fou: { atk: 1000, hp: 1000 },
+      commandCodeIds: [],
+    };
+    const source: RosterProfile = {
+      ...createEmptyRosterProfile(Region.NA),
+      supportPresets: [{ id: "support-1", name: "Borrowed", build: supportBuild }],
+    };
+    const next = addRosterServant(source, servant);
+
+    expect(next.supportPresets).toEqual(source.supportPresets);
+    expect(next.supportPresets[0]!.build).not.toBe(source.supportPresets[0]!.build);
   });
 });
