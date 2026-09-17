@@ -221,7 +221,7 @@ export default function App() {
             </div>
             {message && <p role="status" className="mb-4 rounded-md border border-[var(--rule)] bg-[var(--ground-raised)] px-3 py-2 text-sm">{message}</p>}
             <QuestEditor draft={draft} onDraftChange={setDraft} />
-          </> : roster && rosterCatalog ? <RosterEditor profile={roster} catalog={rosterCatalog} status={rosterStatus === "saving" ? "saving" : "ready"} message={rosterMessage} onChange={setRoster} onSave={saveRoster} /> : <p role="status" className="rounded-md border border-[var(--rule)] bg-[var(--ground-raised)] px-3 py-3 text-sm text-[var(--ink-dim)]">{rosterStatus === "loading" ? "Loading Atlas roster catalog…" : rosterMessage ?? "Roster is unavailable."}</p>}
+          </> : roster?.region === region && rosterCatalog ? <RosterEditor profile={roster} catalog={rosterCatalog} status={rosterStatus === "saving" ? "saving" : "ready"} message={rosterMessage} onChange={setRoster} onSave={saveRoster} /> : <p role="status" className="rounded-md border border-[var(--rule)] bg-[var(--ground-raised)] px-3 py-3 text-sm text-[var(--ink-dim)]">{rosterStatus === "loading" ? "Loading Atlas roster catalog…" : rosterMessage ?? "Roster is unavailable."}</p>}
         </div>
       </main>
     </div>
