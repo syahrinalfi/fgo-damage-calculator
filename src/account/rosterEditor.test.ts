@@ -18,6 +18,7 @@ import type { ServantBuild } from "./types.js";
 
 const servant: ServantCatalogEntry = {
   servantId: 1001,
+  collectionNo: 1,
   name: "Test Servant",
   levelCap: 100,
   npIds: [9001],
@@ -27,12 +28,14 @@ const servant: ServantCatalogEntry = {
 const multiNpServant: ServantCatalogEntry = {
   ...servant,
   servantId: 1002,
+  collectionNo: 2,
   name: "Two Forms",
   npIds: [9002, 9003],
 };
 
 const craftEssence: CraftEssenceCatalogEntry = {
   craftEssenceId: 2001,
+  collectionNo: 1,
   name: "Test CE",
   levelCaps: [15, 25, 35, 50, 100],
 };
@@ -112,6 +115,11 @@ describe("roster editor domain operations", () => {
       `ownedServants.${servant.servantId}.fou.hp`,
       `ownedServants.${servant.servantId}.bondLevel`,
     ]));
+  });
+
+  it("allows Grailed servant levels through 120 independently of natural level cap", () => {
+    const next = updateRosterServant(profileWithServant(), servant.servantId, { level: 120 });
+    expect(validateRoster(next, { servants: [servant] }).valid).toBe(true);
   });
 
   it("rejects a profile from the wrong region", () => {

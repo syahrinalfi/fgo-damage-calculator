@@ -6,10 +6,15 @@ describe("roster catalog normalization", () => {
     const records = [
       {
         id: 1001,
+        collectionNo: 7,
         name: "Playable",
         type: "normal",
         lvMax: 90,
-        noblePhantasms: [{ id: 2001 }, { id: 2002 }],
+        noblePhantasms: [
+          { id: 2001, condQuestId: 0, condQuestPhase: 0 },
+          { id: 2002, condQuestId: 3001, condQuestPhase: 3 },
+        ],
+        skills: [{ id: 2101, condQuestId: 3002, condQuestPhase: 2 }],
         relateQuestIds: [3001],
         trialQuestIds: [3002],
       },
@@ -18,16 +23,18 @@ describe("roster catalog normalization", () => {
 
     expect(normalizeServantCatalog(records)).toEqual([{
       servantId: 1001,
+      collectionNo: 7,
       name: "Playable",
       levelCap: 90,
-      npIds: [2001, 2002],
-      strengtheningKeys: ["3001:1", "3002:1"],
+      npIds: [2001],
+      strengtheningKeys: ["3001:3", "3002:2"],
     }]);
   });
 
   it("uses Atlas CE ascension caps and falls back safely for missing stages", () => {
     const records = [{
       id: 4001,
+      collectionNo: 34,
       name: "CE",
       type: "servantEquip",
       lvMax: 100,
@@ -35,6 +42,7 @@ describe("roster catalog normalization", () => {
     }] as never[];
     expect(normalizeCraftEssenceCatalog(records)).toEqual([{
       craftEssenceId: 4001,
+      collectionNo: 34,
       name: "CE",
       levelCaps: [20, 40, 60, 80, 100],
     }]);
