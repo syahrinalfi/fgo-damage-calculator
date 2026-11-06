@@ -138,12 +138,12 @@ describe("resolveSkillEffects — flat numeric effects", () => {
 
   it("lossHpSafe", () => {
     const f = func({ funcType: Func.FuncType.LOSS_HP_SAFE, funcTargetType: Func.FuncTargetType.SELF, svals: [{ Value: 500 }] });
-    expect(resolveSkillEffects(skill([f]), 1).effects).toEqual([{ kind: "lossHpSafe", rawPercent: 500, targetType: "self" }]);
+    expect(resolveSkillEffects(skill([f]), 1).effects).toEqual([{ kind: "lossHpSafe", amount: 500, targetType: "self" }]);
   });
 
   it("lossHp", () => {
     const f = func({ funcType: Func.FuncType.LOSS_HP, funcTargetType: Func.FuncTargetType.SELF, svals: [{ Value: 1000 }] });
-    expect(resolveSkillEffects(skill([f]), 1).effects).toEqual([{ kind: "lossHpPercent", rawPercent: 1000, targetType: "self" }]);
+    expect(resolveSkillEffects(skill([f]), 1).effects).toEqual([{ kind: "lossHp", amount: 1000, targetType: "self" }]);
   });
 
   it("shortenSkill", () => {

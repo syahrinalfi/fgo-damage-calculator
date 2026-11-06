@@ -29,7 +29,7 @@ import type {
   GainHpPercentEffect,
   GainNpEffect,
   InstantDeathEffect,
-  LossHpPercentEffect,
+  LossHpEffect,
   LossHpSafeEffect,
   LossNpEffect,
   RemoveBuffEffect,
@@ -811,7 +811,7 @@ function applyLossNpEffect(
   return servants.map((s) => (targetIds.has(s.servantId) ? { ...s, currentNpGauge: Math.max(s.currentNpGauge - effect.rawAmount, 0) } : s));
 }
 
-/** Applies one `LossHpSafeEffect` (`./skillEffect.js`) to every servant `resolveAllyTargets` resolves it to — subtracts `rawPercent / 1000` of that servant's own `maxHp`, rounded, floored at `1` (never lethal, matching the `FuncType`'s "safe" naming). */
+/** Applies one `LossHpSafeEffect` (`./skillEffect.js`) to every servant `resolveAllyTargets` resolves it to — subtracts the flat `amount` of HP, floored at `1` (never lethal, matching the `FuncType`'s "safe" naming). */
 function applyLossHpSafeEffect(
   servants: readonly ServantInstance[],
   actingServantId: number | undefined,
@@ -820,20 +820,20 @@ function applyLossHpSafeEffect(
 ): readonly ServantInstance[] {
   const targetIds = new Set(resolveAllyTargets(servants, effect.targetType, actingServantId, targetServantId));
   return servants.map((s) =>
-    targetIds.has(s.servantId) ? { ...s, currentHp: Math.max(s.currentHp - Math.round((s.maxHp * effect.rawPercent) / 1000), 1) } : s,
+    targetIds.has(s.servantId) ? { ...s, currentHp: Math.max(s.currentHp - effect.amount, 1) } : s,
   );
 }
 
-/** Applies one `LossHpPercentEffect` (`./skillEffect.js`) to every servant `resolveAllyTargets` resolves it to — subtracts `rawPercent / 1000` of that servant's own `maxHp`, rounded, floored at `0` (unlike `applyLossHpSafeEffect`'s `1`-floor, this can bring a servant to exactly `0`). */
-function applyLossHpPercentEffect(
+/** Applies one `LossHpEffect` (`./skillEffect.js`) to every servant `resolveAllyTargets` resolves it to — subtracts the flat `amount` of HP, floored at `0` (unlike `applyLossHpSafeEffect`'s `1`-floor, this can bring a servant to exactly `0`). */
+function applyLossHpEffect(
   servants: readonly ServantInstance[],
   actingServantId: number | undefined,
-  effect: LossHpPercentEffect,
+  effect: LossHpEffect,
   targetServantId: number | undefined,
 ): readonly ServantInstance[] {
   const targetIds = new Set(resolveAllyTargets(servants, effect.targetType, actingServantId, targetServantId));
   return servants.map((s) =>
-    targetIds.has(s.servantId) ? { ...s, currentHp: Math.max(s.currentHp - Math.round((s.maxHp * effect.rawPercent) / 1000), 0) } : s,
+    targetIds.has(s.servantId) ? { ...s, currentHp: Math.max(s.currentHp - effect.amount, 0) } : s,
   );
 }
 
@@ -1041,8 +1041,8 @@ function applySkillEffect(
       return { ...state, servants: applyShortenSkillEffect(state.servants, actingServantId, effect, targetServantId) };
     case "lossStar":
       return { ...state, starsCarried: Math.max(state.starsCarried - effect.rawAmount, 0) };
-    case "lossHpPercent":
-      return { ...state, servants: applyLossHpPercentEffect(state.servants, actingServantId, effect, targetServantId) };
+    case "lossHp":
+      return { ...state, servants: applyLossHpEffect(state.servants, actingServantId, effect, targetServantId) };
     case "instantDeath":
       return applyInstantDeathEffect(state, effect, targetNpcId, actingServantId, constants, randomFn);
     case "forceInstantDeath":

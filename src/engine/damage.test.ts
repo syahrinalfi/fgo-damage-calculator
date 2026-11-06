@@ -22,6 +22,7 @@ function makeInput(overrides: Partial<DamageInput> = {}): DamageInput {
     critDamageMod: 0,
     isNP: false,
     npDamageMod: 0,
+    damageSpecialMod: 0,
     superEffectiveModifier: 1,
     isSuperEffective: false,
     dmgPlusAdd: 0,
@@ -47,6 +48,16 @@ describe("calculateHitDamage", () => {
 
   it("floors the term-13 bucket at 0.001, not 0, under heavy debuffs", () => {
     expect(calculateHitDamage(makeInput({ powerMod: -2 }))).toBe(0);
+  });
+
+  it("applies damageSpecialMod as its own multiplicative term 18, separate from the term-13 bucket", () => {
+    expect(calculateHitDamage(makeInput({ damageSpecialMod: 0.5 }))).toBe(690);
+    // 460 * 1.5 (term 13) * 1.5 (term 18) — not 460 * 2.0 as if summed into one bucket.
+    expect(calculateHitDamage(makeInput({ powerMod: 0.5, damageSpecialMod: 0.5 }))).toBe(1035);
+  });
+
+  it("floors term 18 at 0.001, not 0", () => {
+    expect(calculateHitDamage(makeInput({ servantAtk: 10_000_000, damageSpecialMod: -5 }))).toBe(2300);
   });
 
   it("applies the Grand Extra Attack multiplier (term 11)", () => {

@@ -71,6 +71,7 @@ function makeDefendingInput(overrides: Partial<DefendingNpGainInput> = {}): Defe
     enemyServerMod: 1,
     npChargeRateMod: 0,
     defensiveChargeRateMod: 0,
+    isOverkill: false,
     ...overrides,
   };
 }
@@ -80,8 +81,16 @@ describe("calculateDefendingNpGain", () => {
     expect(calculateDefendingNpGain(makeDefendingInput())).toBe(500);
   });
 
-  it("has no Overkill term — no isOverkill/isCrit input exists on this formula", () => {
+  it("applies the defender's own NP-gain-up", () => {
     expect(calculateDefendingNpGain(makeDefendingInput({ npChargeRateMod: 0.5 }))).toBe(750);
+  });
+
+  it("applies Overkill as an outer step: floor, multiply by OVER_KILL_NP_RATE, floor again", () => {
+    expect(calculateDefendingNpGain(makeDefendingInput({ isOverkill: true }))).toBe(750);
+    const input = makeDefendingInput({ defensiveNPRate: 301, defensiveChargeRateMod: 0.003, isOverkill: true });
+    const inner = 301 * 1.003; // 301.903
+    expect(Math.floor(Math.floor(inner) * 1.5)).not.toBe(Math.floor(inner * 1.5));
+    expect(calculateDefendingNpGain(input)).toBe(Math.floor(Math.floor(inner) * 1.5));
   });
 
   it("applies both the defender's own gain-up and damage-taken-based gain-up multiplicatively", () => {

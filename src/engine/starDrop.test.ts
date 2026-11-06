@@ -30,8 +30,9 @@ describe("calculateStarDropChance", () => {
     expect(calculateStarDropChance(makeInput({ isOverkill: true }))).toBeCloseTo(0.46, 10);
   });
 
-  it("subtracts the defender's star-drop resistance", () => {
-    expect(calculateStarDropChance(makeInput({ enemyStarDropMod: 0.05 }))).toBeCloseTo(0.11, 10);
+  it("adds the defender's criticalStarDamageTaken total (term 34, current fgo-docs form)", () => {
+    expect(calculateStarDropChance(makeInput({ enemyStarDropMod: 0.05 }))).toBeCloseTo(0.21, 10);
+    expect(calculateStarDropChance(makeInput({ enemyStarDropMod: -0.05 }))).toBeCloseTo(0.11, 10);
   });
 
   it("adds the attacker's own star-drop-up buff-action total", () => {

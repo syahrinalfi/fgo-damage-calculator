@@ -223,9 +223,10 @@ export interface LossNpEffect {
  * `Action` applies — models the API's `lossHpSafe` `FuncType` (research/09 §7 follow-up
  * pass: 29 live instances, `Value` constant across all 10 skill levels in every example
  * surveyed, e.g. `500` — unlike most other per-level `svals`, this one doesn't scale with
- * skill level at all). `rawPercent` follows the same per-mille convention
- * `GainHpPercentEffect.rawPercent` already established: `500` → 50% of the target's own
- * `maxHp`, rounded and subtracted from `currentHp`. "Safe" means exactly what
+ * skill level at all). `amount` is a **flat HP amount**, not a share of `maxHp`: `500` →
+ * subtract 500 HP from `currentHp` (live NA text, e.g. Chiron's "Eternal Dedication EX":
+ * "Decrease your HP by 500"; percentage HP loss is the separate `lossHpPerSafe` `FuncType`,
+ * not modeled here). "Safe" means exactly what
  * `lossHpSafe`'s name states and what every live example's `funcPopupText`/usage pattern
  * implies (a self-cost `Vals` for an otherwise-beneficial skill, never a lethal effect): the
  * target's `currentHp` is floored at `1`, never `0` or below — the one deliberate
@@ -240,7 +241,7 @@ export interface LossNpEffect {
  */
 export interface LossHpSafeEffect {
   readonly kind: "lossHpSafe";
-  readonly rawPercent: number;
+  readonly amount: number;
   readonly targetType: SkillTargetType;
 }
 
@@ -280,21 +281,22 @@ export interface LossStarEffect {
 }
 
 /**
- * One already-resolved percentage-of-`maxHp` self-damage a `useSkill`/`useMysticCodeSkill`
+ * One already-resolved flat-HP self-damage a `useSkill`/`useMysticCodeSkill`
  * `Action` applies — models the API's `lossHp` `FuncType` (research/09 §7 bulk long-tail
- * pass: 11 live NP instances, 10 of 11 `funcTargetType: "self"`, `rawPercent` following the
- * same per-mille convention `GainHpPercentEffect`/`LossHpSafeEffect` already use, e.g.
- * `1000` → 100% of `maxHp`). **Unlike `LossHpSafeEffect`, this is not "safe"** — floored at
+ * pass: 11 live NP instances, 10 of 11 `funcTargetType: "self"`). `amount` is a **flat HP
+ * amount**, not a share of `maxHp`: Cleopatra's NP carries `Value: 1000` and its live NA
+ * text reads "Reduce your HP by 1000" (percentage HP loss is the separate `lossHpPer`
+ * `FuncType`, not modeled here). **Unlike `LossHpSafeEffect`, this is not "safe"** — floored at
  * `0`, not `1`, so this can bring a servant's `currentHp` to exactly `0` (a real, if rare,
  * "this NP can kill its own caster" mechanic, distinct from `lossHpSafe`'s guaranteed-
- * survival cost). The one live `enemy`-targeted example found carries `rawPercent: 0` (a
+ * survival cost). The one live `enemy`-targeted example found carries `Value: 0` (a
  * template/no-op artifact, not a real "true damage vs. an enemy's max HP" mechanic) — ally-
  * only (`SkillTargetType`) accordingly, matching `lossHpSafe`'s and every other HP/NP-gauge
  * effect's targeting shape.
  */
-export interface LossHpPercentEffect {
-  readonly kind: "lossHpPercent";
-  readonly rawPercent: number;
+export interface LossHpEffect {
+  readonly kind: "lossHp";
+  readonly amount: number;
   readonly targetType: SkillTargetType;
 }
 
@@ -426,7 +428,7 @@ export type SkillEffect =
   | LossHpSafeEffect
   | ShortenSkillEffect
   | LossStarEffect
-  | LossHpPercentEffect
+  | LossHpEffect
   | ForceInstantDeathEffect
   | InstantDeathEffect
   | DelayNpTurnEffect;

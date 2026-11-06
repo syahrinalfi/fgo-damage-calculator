@@ -18,7 +18,7 @@ export type ExtraCardChainType = "none" | "single" | "grand";
  * formula.md §1-2). This engine does not itself walk a party/enemy's active buffs to
  * produce these numbers — that is a separate buff-evaluation concern (resolveBuffAction
  * in ./buffAction.js is the primitive it would be built from) — it only implements the
- * fixed-order 17-term formula once every modifier is already known.
+ * fixed-order 18-term formula once every modifier is already known.
  *
  * All fields are decimal fractions (e.g. 0.2 for a +20% buff, 1.5 for a 150% card
  * multiplier), matching the already-divided form the constants in ./constants.js use —
@@ -65,6 +65,8 @@ export interface DamageInput {
   isNP: boolean;
   /** Term 13 — `actor.npdamage` buff-action total; only applied if `isNP`. */
   npDamageMod: number;
+  /** Term 18 — `actor.damageSpecial` buff-action total, its own multiplier after term 13 (fgo-docs `deeper/battle/damage.md`). */
+  damageSpecialMod: number;
   /** Term 14 — the relevant function's `Correction` value; only applied if `isSuperEffective`. */
   superEffectiveModifier: number;
   /** Whether the target actually has the trait this hit's super-effective bonus requires. */
@@ -98,8 +100,8 @@ function extraCardModifier(type: ExtraCardChainType): number {
 
 /**
  * Implements the single-hit damage formula verbatim, term for term (research/02-damage-
- * formula.md §1): 14 multiplicative terms followed by 3 additive terms, floored to a
- * non-negative integer.
+ * formula.md §1): 15 multiplicative terms (01–13, then 18, then 14) followed by 3 additive
+ * terms, floored to a non-negative integer.
  */
 export function calculateHitDamage(input: DamageInput): number {
   const cardTerm = input.firstCardBonus + input.cardDamageValue * Math.max(1 + input.cardMod, 0);
@@ -114,6 +116,7 @@ export function calculateHitDamage(input: DamageInput): number {
       input.npDamageMod * (input.isNP ? 1 : 0),
     0.001,
   );
+  const damageSpecialTerm = Math.max(1 + input.damageSpecialMod, 0.001);
   const superEffectiveTerm = 1 + (input.superEffectiveModifier - 1) * (input.isSuperEffective ? 1 : 0);
   const busterChainMod = input.isBusterChain ? CHAINBONUS_BUSTER_RATE : 0;
   const mightyChainMod = input.isMightyChain ? CHAINBONUS_MIGHTY_ATK_RATE : 0;
@@ -132,6 +135,7 @@ export function calculateHitDamage(input: DamageInput): number {
       extraCardModifier(input.extraCardChainType) *
       specialDefTerm *
       bucketTerm *
+      damageSpecialTerm *
       superEffectiveTerm +
     input.dmgPlusAdd +
     input.selfDmgCutAdd +

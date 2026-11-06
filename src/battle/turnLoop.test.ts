@@ -17,7 +17,7 @@ import type {
   GainNpEffect,
   GainStarEffect,
   InstantDeathEffect,
-  LossHpPercentEffect,
+  LossHpEffect,
   LossHpSafeEffect,
   LossNpEffect,
   LossStarEffect,
@@ -298,7 +298,7 @@ function lossNpEffect(overrides: Partial<LossNpEffect> = {}): LossNpEffect {
 function lossHpSafeEffect(overrides: Partial<LossHpSafeEffect> = {}): LossHpSafeEffect {
   return {
     kind: "lossHpSafe",
-    rawPercent: 500,
+    amount: 500,
     targetType: "self",
     ...overrides,
   };
@@ -321,10 +321,10 @@ function lossStarEffect(overrides: Partial<LossStarEffect> = {}): LossStarEffect
   };
 }
 
-function lossHpPercentEffect(overrides: Partial<LossHpPercentEffect> = {}): LossHpPercentEffect {
+function lossHpEffect(overrides: Partial<LossHpEffect> = {}): LossHpEffect {
   return {
-    kind: "lossHpPercent",
-    rawPercent: 500,
+    kind: "lossHp",
+    amount: 500,
     targetType: "self",
     ...overrides,
   };
@@ -1448,10 +1448,20 @@ describe("resolveAction — useSkill", () => {
     expect(result.servants.find((s) => s.servantId === 1)?.currentNpGauge).toBe(0);
   });
 
-  it("lossHpSafe subtracts rawPercent/1000 of maxHp from currentHp, floored at 1 (never lethal)", () => {
-    const action: Action = { type: "useSkill", servantId: 1, skillSlot: 3, effects: [lossHpSafeEffect({ rawPercent: 900 })], cooldownTurns: 5 };
+  it("lossHpSafe subtracts a flat amount of HP (not a share of maxHp)", () => {
+    const action: Action = { type: "useSkill", servantId: 1, skillSlot: 3, effects: [lossHpSafeEffect({ amount: 500 })], cooldownTurns: 5 };
     const result = resolveAction(
       state({ servants: [servant({ servantId: 1, currentHp: 5000, maxHp: 10000 }), servant({ servantId: 2 }), servant({ servantId: 3 })] }),
+      action,
+      CONSTANTS,
+    );
+    expect(result.servants.find((s) => s.servantId === 1)?.currentHp).toBe(4500);
+  });
+
+  it("lossHpSafe is floored at 1 (never lethal)", () => {
+    const action: Action = { type: "useSkill", servantId: 1, skillSlot: 3, effects: [lossHpSafeEffect({ amount: 500 })], cooldownTurns: 5 };
+    const result = resolveAction(
+      state({ servants: [servant({ servantId: 1, currentHp: 300, maxHp: 10000 }), servant({ servantId: 2 }), servant({ servantId: 3 })] }),
       action,
       CONSTANTS,
     );
@@ -1474,10 +1484,20 @@ describe("resolveAction — useSkill", () => {
     expect(result.starsCarried).toBe(0);
   });
 
-  it("lossHpPercent subtracts rawPercent/1000 of maxHp from currentHp, floored at 0 (can be lethal, unlike lossHpSafe)", () => {
-    const action: Action = { type: "useSkill", servantId: 1, skillSlot: 3, effects: [lossHpPercentEffect({ rawPercent: 1000 })], cooldownTurns: 5 };
+  it("lossHp subtracts a flat amount of HP (Cleopatra's NP: Value 1000 = 'Reduce your HP by 1000')", () => {
+    const action: Action = { type: "useSkill", servantId: 1, skillSlot: 3, effects: [lossHpEffect({ amount: 1000 })], cooldownTurns: 5 };
     const result = resolveAction(
       state({ servants: [servant({ servantId: 1, currentHp: 5000, maxHp: 10000 }), servant({ servantId: 2 }), servant({ servantId: 3 })] }),
+      action,
+      CONSTANTS,
+    );
+    expect(result.servants.find((s) => s.servantId === 1)?.currentHp).toBe(4000);
+  });
+
+  it("lossHp is floored at 0 (can be lethal, unlike lossHpSafe)", () => {
+    const action: Action = { type: "useSkill", servantId: 1, skillSlot: 3, effects: [lossHpEffect({ amount: 1000 })], cooldownTurns: 5 };
+    const result = resolveAction(
+      state({ servants: [servant({ servantId: 1, currentHp: 600, maxHp: 10000 }), servant({ servantId: 2 }), servant({ servantId: 3 })] }),
       action,
       CONSTANTS,
     );

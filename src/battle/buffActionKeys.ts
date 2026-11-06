@@ -25,6 +25,8 @@ export const BUFF_ACTION_KEYS = {
   SELF_DAMAGE: "damageDef",
   CRITICAL_DAMAGE: "criticalDamage",
   NP_DAMAGE: "npdamage",
+  /** Damage formula term 18 (`upDamageSpecial`, `limit: "upper"`) — fgo-docs `deeper/battle/damage.md`. */
+  DAMAGE_SPECIAL: "damageSpecial",
   GIVEN_DAMAGE: "givenDamage",
   RECEIVE_DAMAGE: "receiveDamage",
   COMMAND_NP_ATK: "commandNpAtk",
@@ -34,6 +36,8 @@ export const BUFF_ACTION_KEYS = {
   COMMAND_STAR_ATK: "commandStarAtk",
   COMMAND_STAR_DEF: "commandStarDef",
   CRITICAL_POINT: "criticalPoint",
+  /** Star-drop term 34, read from the defender (`up`/`downCriticalStarDamageTaken`) — replaced the old `-defSvt.criticalPoint` (fgo-docs `deeper/battle/critstars.md`). */
+  CRITICAL_STAR_DAMAGE_TAKEN: "criticalStarDamageTaken",
   /**
    * The instant-death formula's 3 buff-action terms — resolved this session (community
    * source: firq.dev's "Instant Death Success Rate" formula, cross-referenced against live

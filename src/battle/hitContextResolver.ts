@@ -56,8 +56,8 @@ function npGainKeyForCard(card: Card): keyof NoblePhantasm.NoblePhantasmGain | n
  *   `ServantInstance` gained this field alongside this resolver too, since nothing previously
  *   needed it).
  *
- * Throws if `handCard.card` isn't one of Buster/Arts/Quick/Extra — the NP card type ("5")
- * never appears in `handCards` (it's dealt separately via `castNp`, research/03 §6.5) and no
+ * Throws if `handCard.card` isn't one of Buster/Arts/Quick/Extra — NP casts never appear in
+ * `handCards` (they go through `castNp`, research/03 §6.5; card type "5" is `BLANK`) and no
  * other card type exists, so this is a genuine caller-error guard, not a real branch.
  */
 export function resolveCardHitContext(

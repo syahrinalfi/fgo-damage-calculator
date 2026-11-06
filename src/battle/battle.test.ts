@@ -62,6 +62,12 @@ const BUFF_CONSTANTS = {
   [BUFF_ACTION_KEYS.COMMAND_STAR_ATK]: percentAction("upCommandstar", "downCommandstar"),
   [BUFF_ACTION_KEYS.COMMAND_STAR_DEF]: percentAction("upDefenceCommandstar", "downDefenceCommandstar"),
   [BUFF_ACTION_KEYS.CRITICAL_POINT]: percentAction("upCriticalpoint", "downCriticalpoint", 1000),
+  [BUFF_ACTION_KEYS.CRITICAL_STAR_DAMAGE_TAKEN]: percentAction(
+    "upCriticalStarDamageTaken",
+    "downCriticalStarDamageTaken",
+    1000,
+  ),
+  [BUFF_ACTION_KEYS.DAMAGE_SPECIAL]: percentAction("upDamageSpecial", "downDamageSpecial", 1000),
 } as unknown as Buff.BuffConstantMap;
 
 const CARD_CONSTANTS = {
@@ -270,6 +276,15 @@ describe("resolveDamageInput", () => {
     expect(input.powerMod).toBeCloseTo(0.35, 10);
   });
 
+  it("resolves damageSpecialMod from the attacker's damageSpecial action, kept out of powerMod", () => {
+    const attacker = makeUnit({
+      activeBuffs: [makeBuff({ type: "upDamageSpecial" as ActiveBuffInstance["type"], amount: 300 })],
+    });
+    const input = resolveDamageInput(attacker, makeUnit(), CONSTANTS, baseContext);
+    expect(input.damageSpecialMod).toBeCloseTo(0.3, 10);
+    expect(input.powerMod).toBe(0);
+  });
+
   it("keeps dmgPlusAdd/selfDmgCutAdd as raw flat totals, not divided by 1000", () => {
     const attacker = makeUnit({
       activeBuffs: [makeBuff({ type: "addDamage" as ActiveBuffInstance["type"], amount: 3000 })],
@@ -356,8 +371,10 @@ describe("resolveAttackingNpGainInput / resolveDefendingNpGainInput", () => {
     const input = resolveDefendingNpGainInput(defender, makeUnit(), CONSTANTS, {
       defensiveNPRate: 500,
       enemyServerMod: 1,
+      isOverkill: true,
     });
     expect(input.defensiveNPRate).toBe(500);
+    expect(input.isOverkill).toBe(true);
     expect(input.npChargeRateMod).toBeCloseTo(0.2, 10);
     expect(input.defensiveChargeRateMod).toBeCloseTo(0.1, 10);
   });
@@ -404,12 +421,16 @@ describe("resolveStarDropInput", () => {
     expect(input.firstCardBonus).toBeCloseTo(0.05, 10);
   });
 
-  it("resolves starDropMod/enemyStarDropMod from each side's own criticalPoint buffs", () => {
+  it("resolves starDropMod from the attacker's criticalPoint and enemyStarDropMod from the defender's criticalStarDamageTaken", () => {
     const attacker = makeUnit({
       activeBuffs: [makeBuff({ type: "upCriticalpoint" as ActiveBuffInstance["type"], amount: 50 })],
     });
     const defender = makeUnit({
-      activeBuffs: [makeBuff({ type: "downCriticalpoint" as ActiveBuffInstance["type"], amount: 20 })],
+      activeBuffs: [
+        makeBuff({ type: "downCriticalStarDamageTaken" as ActiveBuffInstance["type"], amount: 20 }),
+        // The defender's own criticalPoint no longer feeds term 34 (fgo-docs critstars.md "Previously").
+        makeBuff({ type: "downCriticalpoint" as ActiveBuffInstance["type"], amount: 70 }),
+      ],
     });
     const input = resolveStarDropInput(attacker, defender, CONSTANTS, {
       card: { type: BUSTER, position: 1 },

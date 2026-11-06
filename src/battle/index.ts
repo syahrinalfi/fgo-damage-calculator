@@ -38,7 +38,7 @@ export type {
   LossHpSafeEffect,
   ShortenSkillEffect,
   LossStarEffect,
-  LossHpPercentEffect,
+  LossHpEffect,
   InstantDeathEffect,
   ForceInstantDeathEffect,
   DelayNpTurnEffect,

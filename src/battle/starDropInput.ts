@@ -65,7 +65,7 @@ export function resolveStarDropInput(
       (!context.isNP && context.isMightyChain ? CHAINBONUS_MIGHTY_STARRATE : 0),
     enemyStarDropMod: resolveUnitActionModifier(
       constants.buff,
-      BUFF_ACTION_KEYS.CRITICAL_POINT,
+      BUFF_ACTION_KEYS.CRITICAL_STAR_DAMAGE_TAKEN,
       defender.activeBuffs,
       defenderContext,
     ),

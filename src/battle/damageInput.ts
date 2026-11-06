@@ -117,6 +117,12 @@ export function resolveDamageInput(
     ),
     isNP: context.isNP,
     npDamageMod: resolveUnitActionModifier(constants.buff, BUFF_ACTION_KEYS.NP_DAMAGE, attacker.activeBuffs, traitContext),
+    damageSpecialMod: resolveUnitActionModifier(
+      constants.buff,
+      BUFF_ACTION_KEYS.DAMAGE_SPECIAL,
+      attacker.activeBuffs,
+      traitContext,
+    ),
     superEffectiveModifier: context.superEffectiveModifier,
     isSuperEffective: context.isSuperEffective,
     dmgPlusAdd: resolveUnitFlatActionTotal(

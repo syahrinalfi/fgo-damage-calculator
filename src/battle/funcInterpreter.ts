@@ -12,7 +12,7 @@ import type {
   GainNpEffect,
   GainStarEffect,
   InstantDeathEffect,
-  LossHpPercentEffect,
+  LossHpEffect,
   LossHpSafeEffect,
   LossNpEffect,
   LossStarEffect,
@@ -172,13 +172,13 @@ function resolveFunc(func: Func.Func, svals: DataVal.DataVal): readonly SkillEff
     case Func.FuncType.LOSS_HP_SAFE: {
       const target = allyTargetType(func.funcTargetType);
       if (target === null || svals.Value === undefined) return [];
-      const effect: LossHpSafeEffect = { kind: "lossHpSafe", rawPercent: svals.Value, targetType: target };
+      const effect: LossHpSafeEffect = { kind: "lossHpSafe", amount: svals.Value, targetType: target };
       return [effect];
     }
     case Func.FuncType.LOSS_HP: {
       const target = allyTargetType(func.funcTargetType);
       if (target === null || svals.Value === undefined) return [];
-      const effect: LossHpPercentEffect = { kind: "lossHpPercent", rawPercent: svals.Value, targetType: target };
+      const effect: LossHpEffect = { kind: "lossHp", amount: svals.Value, targetType: target };
       return [effect];
     }
     case Func.FuncType.SHORTEN_SKILL: {

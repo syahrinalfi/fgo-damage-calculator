@@ -54,19 +54,25 @@ export interface DefendingNpGainInput {
   npChargeRateMod: number;
   /** `defSvt.dropNpDamage` buff-action total — damage-taken-based NP gain, a distinct buff action. */
   defensiveChargeRateMod: number;
+  /** Whether this hit is an Overkill on the defending servant. */
+  isOverkill: boolean;
 }
 
 /**
- * Implements the defending NP-gain formula verbatim (research/04 §2): a single floor,
- * no Overkill term. Returns raw gauge units (FULL_TD_POINT = 100% gauge).
+ * Implements the defending NP-gain formula verbatim (research/04 §2, fgo-docs `deeper/battle/
+ * np.md`): the inner product is floored, multiplied by `OVER_KILL_NP_RATE` on an Overkill
+ * hit, and floored again — the same outer-step shape as the attacking formula. Returns raw
+ * gauge units (FULL_TD_POINT = 100% gauge).
  */
 export function calculateDefendingNpGain(input: DefendingNpGainInput): number {
-  return Math.floor(
+  const innerProduct = Math.floor(
     input.defensiveNPRate *
       input.enemyServerMod *
       (1 + input.npChargeRateMod) *
       (1 + input.defensiveChargeRateMod),
   );
+  const overkillModifier = input.isOverkill ? OVER_KILL_NP_RATE : 1;
+  return Math.floor(innerProduct * overkillModifier);
 }
 
 /** Converts raw gauge units (as returned by the two functions above) to a gauge percentage. */

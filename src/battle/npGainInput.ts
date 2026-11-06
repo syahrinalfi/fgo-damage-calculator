@@ -77,6 +77,7 @@ export function resolveAttackingNpGainInput(
 export interface DefendingNpGainResolutionContext {
   defensiveNPRate: number;
   enemyServerMod: number;
+  isOverkill: boolean;
 }
 
 /**
@@ -107,5 +108,6 @@ export function resolveDefendingNpGainInput(
       defender.activeBuffs,
       traitContext,
     ),
+    isOverkill: context.isOverkill,
   };
 }

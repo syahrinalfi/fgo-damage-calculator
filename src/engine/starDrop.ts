@@ -21,7 +21,7 @@ export interface StarDropInput {
   serverRate: number;
   /** Attacker's `criticalPoint` buff-action total. */
   starDropMod: number;
-  /** Defender's `criticalPoint` buff-action total. */
+  /** Defender's `criticalStarDamageTaken` buff-action total, added (fgo-docs `critstars.md`; replaced the old `-defSvt.criticalPoint`). */
   enemyStarDropMod: number;
   /** Whether this hit is a critical hit. */
   isCrit: boolean;
@@ -43,7 +43,7 @@ export function calculateStarDropChance(input: StarDropInput): number {
     input.baseStarRate +
     cardTerm +
     input.serverRate +
-    input.starDropMod -
+    input.starDropMod +
     input.enemyStarDropMod +
     criticalModifier;
 
