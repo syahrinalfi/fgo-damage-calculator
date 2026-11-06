@@ -15,18 +15,20 @@ Source: live-fetched `https://api.atlasacademy.io/export/JP/NiceCard.json`. Stru
 | `adjustCritical` | `cardStarValue` | crit-star-drop formula, §5 below |
 | `addCritical` | `firstCardBonus` (star drop) | crit-star-drop formula, §5 below |
 
-Card type IDs (confirmed via each entry's `individuality` trait tag): `1` = Arts (`cardArts`), `2` = Buster (`cardBuster`), `3` = Quick (`cardQuick`), `4` = Extra (`cardExtra`), `5` = NP card (all-zero stub, see §1.4), `10`/`21`/`22` = "Weak" enemy-attack card variants (`cardWeak`), `11` = "Strong" enemy-attack card variant (`cardStrong`), `60` = a rare Buster variant carrying an extra unnamed trait (id 4009, "unknown") not otherwise decoded in this pass, `101`–`104` = a byte-for-byte duplicate of `1`–`4`'s values (purpose not confirmed — see §6 open items, does not change any conclusion below since the numbers are identical).
+Card type IDs (confirmed via each entry's `individuality` trait tag): `1` = Arts (`cardArts`), `2` = Buster (`cardBuster`), `3` = Quick (`cardQuick`), `4` = Extra (`cardExtra`), `5` = `BLANK` (corrected 2026-11-06 — not the NP card; fgo-game-data-api `gameenums.py` `CARD_TYPE_NAME` maps `5: NiceCardType.blank`, see §1.4), `10`/`21`/`22` = "Weak" enemy-attack card variants (`cardWeak`), `11` = "Strong" enemy-attack card variant (`cardStrong`), `60` = a rare Buster variant carrying an extra unnamed trait (id 4009, "unknown") not otherwise decoded in this pass, `101`–`103` = byte-for-byte duplicates of `1`–`3`'s values, and `104` matches `4` except that it has only position key `4` (`4` has both `1` and `4`; corrected 2026-11-06) (purpose not confirmed — see §6 open items, does not change any conclusion below since the numbers are identical).
 
 The second-level key (`1`/`2`/`3` for player cards, or `4` for Extra) is the card's **position in the played 3-card chain** (1st/2nd/3rd card of the turn) — **not** an arbitrary index. This directly resolves file 00 §4's "chain order bonus (first/second/third card position multiplier)" concept with exact sourced numbers:
 
 ### 1.1 Arts (id 1)
 | Position | `adjustAtk` | `addAtk` | `adjustTdGauge` | `addTdGauge` |
 |---|---|---|---|---|
-| 1st | 1000 (100%) | 0 | 3000 (30%) | **1000 (+10%)** |
-| 2nd | 1200 (120%) | 0 | 4500 (45%) | 0 |
-| 3rd | 1400 (140%) | 0 | 6000 (60%) | 0 |
+| 1st | 1000 (100%) | 0 | 3000 (×3.0) | **1000 (+100%)** |
+| 2nd | 1200 (120%) | 0 | 4500 (×4.5) | 0 |
+| 3rd | 1400 (140%) | 0 | 6000 (×6.0) | 0 |
 
-Arts cards have **no flat damage bonus for being played first**, but do have a flat NP-gauge bonus specifically when played as the 1st card (`addTdGauge` = 1000 only at position 1) — matching the well-known community rule "Arts gives extra NP gauge when played first," now backed by an exact number from primary data. **Correction (research/09 §7 follow-up pass)**: this section originally quoted the magnitude as "+10%" — cross-checking `addTdGauge`'s divided value (1000/1000 = **+100%**, the same `/1000` convention `addAtk`/`adjustAtk` etc. use throughout this file) against research/06 §7.2's independently-sourced "Arts leads → +100% flat addition to the NP-gain modifier" figure confirms the true value is **+100%**, not +10% — a wording error in this file's original text, not a genuine numeric discrepancy between primary and community sources.
+(Table labels corrected 2026-11-06 to the file's own `/1000` convention — `adjustTdGauge` 3000 is the ×3.0 `cardNpValue` used in file 04's worked example, not 30%.)
+
+Arts cards have **no flat damage bonus for being played first**, but do have a flat NP-gauge bonus when an Arts card leads the chain (`addTdGauge` = 1000, stored only at position 1 — but the lead card's bonus applies to **every** card in the chain, not just the 1st; file 06 §7.2, `chainLeadCardType` in the engine) — matching the well-known community rule "Arts gives extra NP gauge when played first," now backed by an exact number from primary data. **Correction (research/09 §7 follow-up pass)**: this section originally quoted the magnitude as "+10%" — cross-checking `addTdGauge`'s divided value (1000/1000 = **+100%**, the same `/1000` convention `addAtk`/`adjustAtk` etc. use throughout this file) against research/06 §7.2's independently-sourced "Arts leads → +100% flat addition to the NP-gain modifier" figure confirms the true value is **+100%**, not +10% — a wording error in this file's original text, not a genuine numeric discrepancy between primary and community sources.
 
 ### 1.2 Buster (id 2)
 | Position | `adjustAtk` | `addAtk` | `adjustCritical` |
@@ -35,7 +37,7 @@ Arts cards have **no flat damage bonus for being played first**, but do have a f
 | 2nd | 1800 (180%) | 0 | 150 |
 | 3rd | 2100 (210%) | 0 | 200 |
 
-Buster's well-known "first card gets a flat damage bonus" is confirmed exactly: **+50% flat ATK bonus** (`addAtk` = 500) only at position 1, on top of the already-highest base multiplier of the three colors (150%/180%/210% vs. Arts' 100%/120%/140% and Quick's 80%/96%/112% below). Buster's `adjustCritical` also scales by position (100/150/200 = 10%/15%/20% flat crit-star-drop contribution — see §5) — i.e. Buster contributes more critical stars the later it's played too, not just more damage.
+Buster's well-known "first card gets a flat damage bonus" is confirmed exactly: **+50% flat ATK bonus** (`addAtk` = 500, stored only at position 1, applied to every card of a Buster-led chain — file 06 §7.2), on top of the already-highest base multiplier of the three colors (150%/180%/210% vs. Arts' 100%/120%/140% and Quick's 80%/96%/112% below). Buster's `adjustCritical` also scales by position (100/150/200 = 10%/15%/20% flat crit-star-drop contribution — see §5) — i.e. Buster contributes more critical stars the later it's played too, not just more damage.
 
 ### 1.3 Quick (id 3)
 | Position | `adjustAtk` | `addAtk` | `adjustCritical` | `addCritical` |
@@ -44,12 +46,12 @@ Buster's well-known "first card gets a flat damage bonus" is confirmed exactly: 
 | 2nd | 960 (96%) | 0 | 1300 (130%) | 0 |
 | 3rd | 1120 (112%) | 0 | 1800 (180%) | 0 |
 
-Quick's well-known "first card gets bonus critical stars" is likewise confirmed exactly: **+20% flat star-drop-chance bonus** (`addCritical` = 200) only at position 1. Quick has the lowest base damage multiplier of the three colors but the highest `adjustCritical` baseline (star generation is Quick's specialty, consistent with community knowledge).
+Quick's well-known "first card gets bonus critical stars" is likewise confirmed exactly: **+20% flat star-drop-chance bonus** (`addCritical` = 200, stored only at position 1, applied to every card of a Quick-led chain — file 06 §7.2). Quick has the lowest base damage multiplier of the three colors but the highest `adjustCritical` baseline (star generation is Quick's specialty, consistent with community knowledge).
 
-### 1.4 Extra (id 4) and NP (id 5)
-Extra only has two populated position keys, `1` and `4`, both flat `adjustAtk`/`adjustTdGauge`/`adjustCritical` = 1000 (100%, no position scaling at all) — Extra Attack doesn't get a chain-position bonus the way the three colors do; its distinct bonus is instead the separate `extraCardModifier` term (damage formula term 11, file 02 §2/§5: ×2.0 normal, ×3.5 after a same-color "Grand"/rainbow-adjacent chain) applied multiplicatively on top. **Which of "1" vs "4" applies in which real scenario was not confirmed in this pass** — flagged as an open item (§6).
+### 1.4 Extra (id 4) and id 5 (`BLANK`)
+Extra only has two populated position keys, `1` and `4`, both flat `adjustAtk`/`adjustTdGauge`/`adjustCritical` = 1000 (100%, no position scaling at all) — Extra Attack doesn't get a chain-position bonus the way the three colors do; its distinct bonus is instead the separate `extraCardModifier` term (damage formula term 11, file 02 §2/§5: ×2.0 normal, ×3.5 only after a "color brave chain" — three same-color cards from the same servant; a rainbow chain does not qualify) applied multiplicatively on top. **Which of "1" vs "4" applies in which real scenario was not confirmed in this pass** — flagged as an open item (§6).
 
-The NP card (id `5`, single position key `"0"`) is an **all-zero stub** — confirms NP cards do not go through this per-position table at all. An NP's damage is driven entirely by its own `npDamageMultiplier` (file 02 §4) and whatever `classAtkBonus`/`triangleModifier`/etc. terms apply normally; the card-position/chain-order bonus system in this file simply does not apply to NP cards. This also answers file 00 §6's open question "can NP cards critically hit, and if so how does that interact with the NP formula" **indirectly**: since NP cards carry no `adjustCritical`/`addCritical` entry at all in this table, they generate no critical-hit-eligible interaction through the normal card-crit pathway described in §5 — **consistent with the well-established community understanding that NP cards cannot critically hit**, though this file did not find an explicit primary-source statement saying so outright; it's inferred from the all-zero stub rather than confirmed by name.
+**Corrected 2026-11-06**: id `5` is `BLANK`, not the NP card (fgo-game-data-api `gameenums.py` `CARD_TYPE_NAME`: `5: NiceCardType.blank`), so the paragraph below rests on a misidentified entry. The NP-crit inference in it is therefore unsupported, and "can NP cards crit" is open again (§7). The original text is kept for history: ~~The NP card (id `5`, single position key `"0"`) is an **all-zero stub** — confirms NP cards do not go through this per-position table at all.~~ An NP's damage is driven entirely by its own `npDamageMultiplier` (file 02 §4) and whatever `classAtkBonus`/`triangleModifier`/etc. terms apply normally; the card-position/chain-order bonus system in this file simply does not apply to NP cards. This also answers file 00 §6's open question "can NP cards critically hit, and if so how does that interact with the NP formula" **indirectly**: since NP cards carry no `adjustCritical`/`addCritical` entry at all in this table, they generate no critical-hit-eligible interaction through the normal card-crit pathway described in §5 — **consistent with the well-established community understanding that NP cards cannot critically hit**, though this file did not find an explicit primary-source statement saying so outright; it's inferred from the all-zero stub rather than confirmed by name.
 
 ## 2. Hit count & hit-distribution data model
 
@@ -62,7 +64,7 @@ Confirmed via a live example (`GET /nice/JP/servant/1100900`, Space Ishtar) that
 | Quick (3) | 4 | `[10, 20, 30, 40]` |
 | Extra (4) | 5 | `[6, 13, 20, 26, 35]` |
 
-(Values above are Space Ishtar's specific hit counts — **hit count is per-servant, per-card-type**, not a universal constant across all servants of a class or overall; file 00's "Hit count mechanics" domain concept is confirmed correct not to assume a generic hit count.) This directly satisfies file 00 §4's requirement: hit count and per-hit damage-distribution are both present, per-servant, per-card-type, sourced from `hitsDistribution` (and the analogous `NiceTd.npDistribution` for the NP itself — same live example's NP has `npDistribution: [16, 33, 51]`, a 3-hit NP with 16%/33%/51% distribution, matching its `card: 1` = Arts-classified NP). `NiceServant.cardDetails` (seen in file 01's field inventory) was not individually decoded in this pass — flagged as an open item (§6), likely carries hit-count-adjacent metadata (e.g. hit-count overrides at specific ascensions/costumes) rather than duplicating `hitsDistribution` itself.
+(Values above are Space Ishtar's specific hit counts — **hit count is per-servant, per-card-type**, not a universal constant across all servants of a class or overall; file 00's "Hit count mechanics" domain concept is confirmed correct not to assume a generic hit count.) This directly satisfies file 00 §4's requirement: hit count and per-hit damage-distribution are both present, per-servant, per-card-type, sourced from `hitsDistribution` (and the analogous `NiceTd.npDistribution` for the NP itself — same live example's NP has `npDistribution: [16, 33, 51]`, a 3-hit NP with 16%/33%/51% distribution, matching its `card: 1` = Arts-classified NP). `NiceServant.cardDetails` — **decoded 2026-11-06**: `cardDetails[cardType]` = `{hitsDistribution, attackIndividuality, attackType}`. It **does** contain `hitsDistribution` (identical to the top-level array) and adds per-card attack traits (e.g. `attackMagical`) and `attackType` (e.g. `"one"`).
 
 **Engine implication (reinforcing file 00's existing note)**: NP refund, crit-star generation, and Overkill are all evaluated **per hit** using this array — a 5-hit Extra Attack generates 5 separate NP-gauge/star/overkill evaluations (one per array entry), each using that entry's share of the card's total damage to determine whether *that specific hit* met the Overkill threshold (i.e., dealt more damage than the target's remaining HP) — overkill is therefore possible on some hits of a multi-hit card/NP and not others within the same action, not an all-or-nothing property of the whole card.
 
@@ -88,7 +90,7 @@ File 02 §5 surfaced these `NiceConstant.json` values without fully resolving th
 ## 5. Critical stars — generation (drop chance), confirmed; crit chance from stars-on-hand, not found in primary sources
 
 ### 5.1 Star drop chance per hit — confirmed formula
-Source: [`fgo-game-data-docs/battle/critstars.md`](https://github.com/atlasacademy/fgo-game-data-docs/blob/master/battle/critstars.md).
+Source: [`fgo-docs/deeper/battle/critstars.md`](https://github.com/atlasacademy/fgo-docs/blob/master/deeper/battle/critstars.md) (originally cited from the archived 2021 `fgo-game-data-docs` copy, which had the old `- enemyStarDropMod` form — corrected 2026-11-06 and implemented in `src/engine/starDrop.ts`).
 
 ```
 dropChancePerHit =
@@ -96,7 +98,7 @@ dropChancePerHit =
       + firstCardBonus + (cardStarValue * max(1 + cardMod, 0))
       + serverRate
       + starDropMod
-      - enemyStarDropMod
+      + enemyStarDropMod
       + criticalModifier )
     * overkillModifier
     + overkillAdd
@@ -105,7 +107,8 @@ dropChancePerHit =
 - `baseStarRate` = `NiceServant.starGen` (a flat per-servant baseline — Space Ishtar's is 60).
 - `firstCardBonus`/`cardStarValue` = `addCritical`/`adjustCritical` from `NiceCard.json` (§1 above).
 - `cardMod` = `atkSvt.commandStarAtk - defSvt.commandStarDef` (a buff-action pair, same buff-action pipeline as file 02 §3).
-- `starDropMod`/`enemyStarDropMod` = `criticalPoint` buff action on attacker/defender respectively.
+- `starDropMod` = attacker's `criticalPoint` buff action; `enemyStarDropMod` = defender's `criticalStarDamageTaken` buff action (`up`/`downCriticalStarDamageTaken`), **added**. fgo-docs marks the old form, `enemyStarDropMod = -defSvt.criticalPoint`, as "Previously".
+- `serverRate` = the enemy's `serverMod.starRate`, an **added** term — so `starRate: 0` means no adjustment, not 0% star generation.
 - `criticalModifier` = `NiceConstant.CRITICAL_STAR_RATE` = 0.2 (a flat +20 percentage-point bonus specifically **if this hit is a crit** — separate from the crit-chance mechanic itself, this only affects star *generation* on a hit that already landed as critical).
 - `overkillModifier`/`overkillAdd` = `NiceConstant.OVER_KILL_STAR_RATE` = 1 (i.e. ×1, no change) and `OVER_KILL_STAR_ADD` = 0.3 (a flat +30 percentage-point star-drop bonus on an Overkill hit) — confirms file 00's "Overkill bonus modifier" applies to star generation as its own additive bonus, distinct from Overkill's ×1.5 NP-gain bonus (file 02 §4) and its damage-side interaction (file 00 §4, not yet separately confirmed for raw damage itself — the damage formula in file 02 has no explicit "isOverkill" term, meaning **Overkill does not directly multiply raw hit damage** — it only affects NP gain (×1.5) and star drop (+30pp), a useful clarification of file 00's "Overkill bonus modifier" wording, which had implied a possible damage effect too).
 
@@ -168,16 +171,17 @@ Sources (community guide-tier, not primary — the buff-type names in §6.1 are 
 - ~~Exact numeric effect of Arts Chain, Quick Chain, Brave Chain, Mighty Chain~~ — **resolved by a follow-up pass, see `06-traits-and-class-mechanics.md` §7** (community-sourced but cross-corroborated across 3+ independent authors, plus official-source confirmation of Mighty Chain's existence). The `*_CHAIN_INDIVIDUALITY` trait IDs turned out not to gate the actual bonus math (it's hardcoded client-side per chain composition, not a buff/function instance) — a live buff/function pull was never going to find it, which is why this was previously a dead end.
 - Crit-chance-from-stars-on-hand formula and the stars-carried-over cap — not found in primary sources in this pass (§5.2); currently only community-sourced, flagged as needing either a deeper primary-source search or explicit "unverified" labeling before the engine hardcodes a number.
 - ~~Card-draw base RNG model (bag vs. independent-per-turn)~~ — **resolved (§6.5, follow-up pass)**: it's a bag system, 15-card pool dealt down without replacement across a 3-turn cycle then reshuffled. Community-cross-corroborated (GamePress, Fandom Wiki, BlueStacks), sourced from the project owner's own domain knowledge. ~~Whether within-turn card selection has any additional weighting~~ — **also resolved**: purely random, no per-servant spread guarantee (confirmed by the project owner's observation that a single turn's hand can come entirely from one servant's deck). One smaller nuance remains open: the early-reshuffle-on-servant-death claim (single-sourced, Fandom only).
-- Purpose of the `101`–`104` duplicate block in `NiceCard.json` (byte-identical to `1`–`4`) — not confirmed; doesn't affect any formula conclusion since values match, but worth understanding before assuming it's always safe to ignore.
+- Purpose of the `101`–`104` duplicate block in `NiceCard.json` (`101`–`103` byte-identical to `1`–`3`; `104` carries only position `4`) — not confirmed; doesn't affect any formula conclusion since values match, but worth understanding before assuming it's always safe to ignore.
 - Extra Attack's two position keys (`1` vs `4`) and which applies when — not confirmed.
-- `NiceServant.cardDetails` field's exact contents/purpose (distinct from `hitsDistribution`) — not decoded in this pass.
-- Whether NP cards can critically hit — inferred "no" from the all-zero `NiceCard.json` stub for card type 5, not confirmed by an explicit primary-source statement.
+- ~~`NiceServant.cardDetails` field's exact contents/purpose~~ — **decoded 2026-11-06** (§2).
+- Whether NP cards can critically hit — **unsourced again (2026-11-06)**: the earlier "no" rested on card type 5, which is `BLANK`, not the NP card.
 - Card manipulation mechanics (§6): exact numeric durations/cooldowns and whether the community-sourced servant list is exhaustive — not primary-verified, only the buff-type existence is schema-confirmed.
 
 ## 8. Sources
 
 - https://api.atlasacademy.io/export/JP/NiceCard.json (live-fetched, full table quoted in §1)
-- https://github.com/atlasacademy/fgo-game-data-docs/blob/master/battle/critstars.md (star drop formula, §5.1)
+- https://github.com/atlasacademy/fgo-docs/blob/master/deeper/battle/critstars.md (star drop formula, §5.1 — maintained source; the archived `fgo-game-data-docs` copy originally cited here has the superseded `-criticalPoint` term)
+- https://raw.githubusercontent.com/atlasacademy/fgo-game-data-api/master/app/schemas/gameenums.py (`CARD_TYPE_NAME`: id 5 = `blank`)
 - https://api.atlasacademy.io/export/JP/NiceConstant.json (live-fetched, chain/overkill constants, §3/§5.1)
 - https://api.atlasacademy.io/nice/JP/servant/1100900 (Space Ishtar, live-fetched — source for hitsDistribution/npDistribution/starAbsorb/starGen example values, §2/§5.2)
 - https://blogs.nrvnqsr.com/entry.php/3307-How-many-crit-stars-do-I-get-in-combat (original datamining source credited by critstars.md)

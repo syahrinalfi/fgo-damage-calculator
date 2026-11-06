@@ -59,13 +59,18 @@ Source: same file, `#Defending NP`.
 
 ```
 NP% per hit =
-(25)    Round Down(
-(26)        defensiveNPRate
-(27)        * enemyServerMod
-(28)        * (1 + npChargeRateMod)
-(29)        * (1 + defensiveChargeRateMod)
+        Round Down(
+(25)        Round Down(
+(26)            defensiveNPRate
+(27)            * enemyServerMod
+(28)            * (1 + npChargeRateMod)
+(29)            * (1 + defensiveChargeRateMod)
+            )
+            * overkillModifier
         )
 ```
+
+**Corrected 2026-11-06** against the maintained `atlasacademy/fgo-docs` `deeper/battle/np.md`: the defending formula floors twice and multiplies by `overkillModifier` (`NiceConstant.OVER_KILL_NP_RATE` = 1.5 on an Overkill hit, 1 otherwise) between the floors — the same outer-step shape as the attacking formula. The earlier single-floor, no-Overkill version came from the archived 2021 `fgo-game-data-docs` copy. Implemented in `calculateDefendingNpGain` (`src/engine/npGain.ts`, new `isOverkill` input).
 
 | Term | Meaning | Source |
 |---|---|---|
@@ -80,7 +85,7 @@ NP% per hit =
 
 ## 3. Which NP-gain-affecting buff action applies where
 
-Both formulas are documented on the `fgo-docs` site with an explicit lower/upper-bound table (default 100%, cap 500%, floor 0) for the `cardMod` terms (`commandNpAtk`/`commandNpDef`) and `npChargeRateMod` (`dropNp`) — i.e. these buff actions are individually capped at 500%, same clamp mechanism as the damage formula's buff actions (file 02 §3). No official upper bound is listed for `defensiveChargeRateMod` (`dropNpDamage`) in that table, meaning either it wasn't included in that particular table or it uses `NiceBuff.maxRate` per-buff like the general system (file 01/02) — no evidence found for a `dropNpDamage`-specific hardcoded cap distinct from the general per-buff `maxRate` mechanism.
+Both formulas are documented on the `fgo-docs` site with an explicit lower/upper-bound table (default 100%, cap 500%) for the `cardMod` terms (`commandNpAtk`/`commandNpDef`) and `npChargeRateMod` (`dropNp`) — i.e. these buff actions are individually capped at 500%, same clamp mechanism as the damage formula's buff actions (file 02 §3). The floor is **not** universal: `commandNpDef` has no lower bound (its ActionList `limit` is `upper`; corrected 2026-11-06). ~~No official upper bound is listed for `defensiveChargeRateMod` (`dropNpDamage`)~~ — **resolved 2026-11-06**: `dropNpDamage` uses `limit: normal` and the same per-buff `maxRate` mechanism as `dropNp` (ActionList `maxRate` [5000, 50000]); Avenger EX's `upDamagedropnp` buff carries `maxRate` 5000, so its effective cap is 500%.
 
 ---
 
@@ -131,9 +136,9 @@ Two related, previously-undocumented mechanics, both confirmed by the project ow
 - **Reaching OC stage 4/5 (400–500%) is never achieved through passive gauge accumulation alone, at any NP level** — it is only ever an ephemeral, moment-of-cast addition from an NP Chain (§5.5) or an Overcharge-up skill/buff, added on top of whatever the level-capped gauge itself provides at that instant. If neither is active at the moment of cast, the effective Overcharge is exactly what the (level-capped) gauge value gives — up to OC1/OC2/OC3 for NP level 1/2-4/5 respectively — never higher. This confirms the engine should **not** model Overcharge as something that "accumulates" in a persistent sense beyond the gauge's own bracket; the NP Chain bonus (§5.5) already models this correctly as a per-cast addition to the OC stage, not a persistent gauge increase — this generalizes that same "ephemeral, cast-time-only" treatment to Overcharge-up skills as well.
 - **Engine implication**: `ServantInstance` (research/09 §1) needs its NP level as static data to look up the correct accumulation cap (`{1: 100%, 2: 200%, 3: 200%, 4: 200%, 5: 300%}` in `FULL_TD_POINT` units), and `resolveAction`'s `castNp` case (research/09 §1's turn-resolution reducer) must reset the casting servant's `currentNpGauge` to exactly 0 after resolving the cast, regardless of any gauge gained from that same NP's own hits.
 
-### 5.3 Gauge cost per NP (usually 1 bar, but not hardcoded)
+### 5.3 `gaugeCount` is the per-NP-level bar count (gauge cap), not a cast cost — corrected 2026-11-06
 
-The raw `MstTreasureDeviceLv` table carries a `gaugeCount` integer field per NP-level record — the number of "full bars" (100%-gauge units) that NP costs to cast. This confirms the engine should read gauge cost per-NP from data rather than hardcoding "NP always costs exactly 100%" — although in practice almost every servant NP has `gaugeCount = 1`; no live example with a different value was pulled in this pass, so this is a structural confirmation (the field exists and is meaningful) rather than a demonstrated example of a non-1 value.
+The raw `MstTreasureDeviceLv` table carries a `gaugeCount` integer field per NP-level record (it is not exposed on `NiceTd`). An earlier pass read it as the number of bars an NP costs to cast and assumed it is almost always 1. Live raw data contradicts that: for both Mash (`/raw/JP/servant/1`) and Space Ishtar (`/raw/JP/servant/1100900`), `gaugeCount` runs **1, 2, 2, 2, 3** across NP levels 1–5. That matches the owner-sourced gauge cap in §5.2a (100% at NP1, 200% at NP2–4, 300% at NP5), so `gaugeCount` is the number of gauge bars the servant can hold at that NP level. This gives §5.2a's cap a primary-data source. The cast-and-reset-to-0 behavior is unchanged (§5.2a).
 
 ### 5.4 An unresolved, out-of-scope-for-now constant
 
@@ -155,7 +160,7 @@ The NP-gain formulas in §1–2 above cover the *per-hit/per-turn calculation*, 
 
 Space Ishtar's own `classPassive` list (live data, `nice/JP/servant/1100900`) includes two skills that are pure NP-gain passives, always active with no player action required:
 - **"Avenger EX"** → grants herself an always-on **NP Gain Up When Damaged** buff (i.e. she gains bonus NP gauge from the *defending* formula, §2, whenever hit).
-- **"Self-Restoration (Magical Energy) B"** → grants **NP Gain Each Turn** (a flat per-turn gauge tick, independent of attacking or defending — likely modeled as a `gainNp`-type function firing on a turn-start trigger rather than through either formula in §1–2 at all).
+- **"Self-Restoration (Magical Energy) B"** → grants **NP Gain Each Turn** (a flat per-turn gauge tick, independent of attacking or defending). **Corrected 2026-11-06** (the earlier text guessed a `gainNp` function on a turn-start trigger): live data shows an `addStateShort` granting a `regainNp` buff (`Value` 350), which maps to buff action `turnendNp` — it fires at **turn end**.
 
 Mechanically these passives are structured identically to active skills/NPs — an ordered `functions` array producing buffs via the same buff-action pipeline documented in §1–3 — so **the engine's default NP-gauge simulation must scan a servant's full `classPassive` list for NP-gain-related functions every turn, not just their 3 selected active skills**, or it will systematically under-count gauge for servants whose kit includes this (a real, non-rare pattern — not every servant has one, but enough do that it can't be treated as an edge case). See the corresponding domain-concept update in `00-project-overview.md` §4 for the fuller three-way passive-category breakdown (`classPassive` vs. `extraPassive` vs. `appendPassive`) this finding is drawn from.
 
@@ -175,7 +180,7 @@ CRITICAL_RATE_PER_STAR = 100
 
 Given this project's already-established scale convention (buff/constant raw values are divided by 1000 when used as a rate — e.g. `CRITICAL_STAR_RATE = 200` → 0.2, `CRITICAL_TD_POINT_RATE = 2000` → 2.0, both confirmed in `critstars.md`/`np.md`), `CRITICAL_RATE_PER_STAR = 100` → **10% crit-chance contribution per star allocated to a card**. This is the same figure the community has long cited, but until this pass it had not been traced to an actual named constant in Atlas Academy's own data — it now has a genuine primary-source citation (`NiceConstant.CRITICAL_RATE_PER_STAR`) rather than being purely community folklore.
 
-The official `fgo-docs` doc site (not a separate `.md` file, but the rendered site's own README content — see "What affects whether a card procs critical hit") independently corroborates the *existence* of a star-based crit-chance mechanism without giving its exact numeric formula: it describes stars-on-hand as being allocated per-card via a per-hit RNG roll during hit-star generation, with the allocated stars then determining "your position in the stargen bracket," and separately confirms that critical-hit RNG uses the same underlying dice-roll/RNG-advancement system as skill effects and star generation. It does not, however, state the per-star percentage itself — that number comes only from the `CRITICAL_RATE_PER_STAR` constant above and the community mechanism write-up in §6.2.
+The official `fgo-docs` doc site (not a separate `.md` file, but the rendered site's own README content — see "What affects whether a card procs critical hit") independently corroborates the *existence* of a star-based crit-chance mechanism without giving its exact numeric formula: ~~it describes stars-on-hand as being allocated per-card via a per-hit RNG roll during hit-star generation, with the allocated stars then determining "your position in the stargen bracket,"~~ (**misread, corrected 2026-11-06**: the README's brackets — [1-100], [101-200], [201-300] — describe per-hit star *generation* and how far the RNG advances, not star allocation to cards) and separately confirms that critical-hit RNG uses the same underlying dice-roll/RNG-advancement system as skill effects and star generation. It does not, however, state the per-star percentage itself — that number comes only from the `CRITICAL_RATE_PER_STAR` constant above and the community mechanism write-up in §6.2.
 
 ### 6.2 The mechanism itself (community-sourced, but from the same datamining source `fgo-game-data-docs` already cites for `np.md`/`critstars.md`)
 
@@ -197,9 +202,9 @@ Atlas Academy's own `np.md` and `critstars.md` cite `blogs.nrvnqsr.com` ("Kyte")
 
 `src/battle/critStarLottery.ts`'s `allocateCritStars` implements the §6.2 mechanism directly: the shuffled +50/+20/+20/0/0 slot-bonus pool (reusing `shuffleCards`, `./cardBag.js`, so the bag/shuffle mechanic and the lottery's own shuffle share one implementation) plus each hand slot's owning servant's `criticalWeight` (now a real `ServantInstance` field, `src/battle/battleState.ts`, sourced from `NiceServant.starAbsorb` per §6.3 above) — every one of `starsCarried` stars is an independent weighted pick across the 5 hand slots' combined weight, not a without-replacement draw. `critChanceForStars` then converts a slot's allocated star count to its crit-chance contribution via `CRITICAL_RATE_PER_STAR` (`src/engine/constants.ts`, now a real constant), capped at 100%; `rollIsCrit` is the thin Bernoulli step that turns that probability into the `HitResolutionContext.isCrit` boolean.
 
-**Wired into `resolveAction` (follow-up pass, `src/battle/turnLoop.ts`)**: `resolveEndTurn` now calls `allocateCritStars` once per turn against the freshly-drawn hand and `BattleState.starsCarried`, storing the result in a new parallel `BattleState.handCardStars` field; `resolvePlayCard` reads the played slot's entry and rolls `isCrit` via `critChanceForStars`/`rollIsCrit` itself — a caller building a `playCard` `Action` no longer supplies `isCrit` at all (its `context` type, `DerivedHitContext`, omits the field). `castNp` hardcodes `isCrit: false` instead, since an NP card can never critically hit (§1.4/research/03 §5's all-zero NP position stub).
+**Wired into `resolveAction` (follow-up pass, `src/battle/turnLoop.ts`)**: `resolveEndTurn` now calls `allocateCritStars` once per turn against the freshly-drawn hand and `BattleState.starsCarried`, storing the result in a new parallel `BattleState.handCardStars` field; `resolvePlayCard` reads the played slot's entry and rolls `isCrit` via `critChanceForStars`/`rollIsCrit` itself — a caller building a `playCard` `Action` no longer supplies `isCrit` at all (its `context` type, `DerivedHitContext`, omits the field). `castNp` hardcodes `isCrit: false` instead, since an NP card can never critically hit (~~research/03 §1.4's all-zero NP position stub~~ — **2026-11-06**: that stub is card id 5 = `BLANK`, not the NP card, so this behavior is now community-knowledge only, not primary-sourced; research/03 §7).
 
-**Deliberately not modeled**: the "Star Focus"/`upStarweight` buff multiplier on `criticalWeight` (§6.2 point 1) — no confirmed `BUFF_ACTION_KEYS` entry exists yet for it (that file's own doc comment requires every key to be live-fetch-verified first), so a servant carrying that buff is simply under-weighted for now rather than the engine guessing at an unconfirmed key. Star *generation* itself — rolling each hit's `starDropChance` into an actual count and feeding it into next turn's `starsCarried` — is also still not wired; `endTurn` allocates whatever `starsCarried` already holds but never updates it.
+**Deliberately not modeled**: the "Star Focus"/`upStarweight` buff multiplier on `criticalWeight` (§6.2 point 1) — ~~no confirmed `BUFF_ACTION_KEYS` entry exists yet for it~~ (**2026-11-06**: the live ActionList maps `upStarweight` to action key `starweight`, so the key is now confirmed; the engine still does not read it), so a servant carrying that buff is simply under-weighted for now rather than the engine guessing at an unconfirmed key. Star *generation* itself — rolling each hit's `starDropChance` into an actual count and feeding it into next turn's `starsCarried` — is also still not wired; `endTurn` allocates whatever `starsCarried` already holds but never updates it.
 
 ---
 
@@ -207,6 +212,8 @@ Atlas Academy's own `np.md` and `critstars.md` cite `blogs.nrvnqsr.com` ("Kyte")
 
 - Exact OC-stage boundary rounding rule at exact bracket edges (§5.2) — narrowed from "does interpolation exist" (no) to "which side of an exact 100%-multiple boundary" (unconfirmed) for the 200/300/400% boundaries specifically. **The 100% boundary is now resolved** (§5.2 follow-up): increases landing at 99.xx% round up to 100%; decreases do not; the 200/300/400% boundaries do not share this behavior.
 - `NP_DOUBLE_BURST`/`NP_TRIPLE_BURST` constants' actual meaning (§5.4) — unconfirmed, low priority.
+- **Crit-star lottery: per-card 10-star cap (new, 2026-11-06, community conflict)**: Japanese write-ups (atwiki, quoted on a hatena blog, plus a Qiita implementation) say a card that reaches 10 stars is removed from the weighted draw. §6.4's implementation makes independent picks with no removal, under which §6.3's "50 stars = 100% crit on all 5 cards" cannot hold. Needs resolving before trusting crit-rate output.
+- **`upCriticalrate` ("Critical Hit Rate Up", e.g. Okita's skill 2) is not in the crit-chance model (new, 2026-11-06)**: §6 models crit chance from stars only.
 - ~~Stars-carried-over cap and per-servant `criticalWeight` schema location~~ — **resolved (§6.3, follow-up pass)**: no carryover cap needed (mis-framed question); `criticalWeight` = `NiceServant.starAbsorb`.
 - ~~Evade vs. Invincible NP-gain/star-gain consequence~~ (§6.3) — **resolved (file 05 §6.4, follow-up pass)**: confirmed via direct in-game observation that both an Evaded and an Invincible-blocked hit still generate NP gauge and crit stars normally for the attacker — only the damage-formula output itself is zeroed by either buff.
 - Precise Enemy Rank (Bronze/Silver/Gold) effect on NP refund (file 00 §6, not addressed in this pass — no primary source located; deferred to file 08, since it is more naturally an enemy-data-model question than an NP-gain-formula one).

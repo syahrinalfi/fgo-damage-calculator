@@ -19,10 +19,10 @@ Every MC skill's 1st and 2nd slots draw from a small recurring set of categories
 | Category | `funcType` | Live example (MC, skill) |
 |---|---|---|
 | **Self/ally buff (turn-limited)** | `addStateShort` | MC 1 "Instant Enhancement" (`ptOne`); MC 20 "Buff All Allies" (`ptAll`) |
-| **Self/ally buff (count-limited, e.g. Evade)** | `addState` | MC 1 "Emergency Evade" (`ptOne`) — grants buff 284, an Evade-type buff (file 05 §6 pattern) |
+| **Self/ally buff (e.g. Evade)** | `addState` | MC 1 "Emergency Evade" (`ptOne`) — funcId 284 grants buff 151 (`avoidance`, buffGroup 200) with `Turn: 1, Count: -1`, i.e. a **turn-limited** Evade, not count-limited (corrected 2026-11-06 — 284 is the funcId, not the buff id) |
 | **HP restoration** | `gainHp` | MC 1 "First Aid" (`ptOne`); MC 30 "Cure-All" (`ptAll`) |
 | **NP gauge charge** | `gainNp` | MC 30 "Spiritron Transfer" (`ptOne`) |
-| **Critical star generation** | `gainStar` | MC 50 "Confident in Victory" (`ptAll` + `self`, two separate `gainStar` functions in one skill — party stars plus a personal/Master bonus) |
+| **Critical star generation** | `gainStar` | MC 50 "Confident in Victory" (`ptAll` + `self`, two separate `gainStar` functions in one skill — but the `ptAll` function has `Value: 0` at every level; the stars come only from the `self` function, 10→20. Corrected 2026-11-06) |
 | **Enemy debuff** | `addState` targeting `enemy` | MC 20 "Gandr" — grants buff id 178, **Stun** (`type:"donotAct"`, `buffGroup:500`, 1-turn `ProgressSelfTurn`), a single-target hard CC, not a damage skill |
 | **Debuff/buff removal (cleanse)** | `subState` | MC 40 "Rain of Isis" (`ptOne`) — dispels a target's debuffs, same `subState` mechanism documented in file 05 §5 |
 | **Skill cooldown reduction** | `shortenSkill` | MC 40 "Eyes of Medjed" (`ptOne`) |
