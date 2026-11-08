@@ -1,6 +1,5 @@
 import {
   addRosterCraftEssence,
-  addRosterServant,
   removeRosterCraftEssence,
   removeRosterServant,
   setRosterMysticCode,
@@ -13,9 +12,13 @@ import {
 } from "fgo-damage-calculator/account";
 import { useMemo, useState } from "react";
 import type { RosterCatalogData } from "../data/rosterCatalog";
+import MysticCodeDirectory from "./MysticCodeDirectory";
+import { ceMatches, npOptionLabel, servantMatches, strengtheningLabel } from "./rosterPresentation";
+import ServantAddDialog from "./ServantAddDialog";
 
-const inputClass = "mt-1 w-full rounded-md border border-[var(--rule)] bg-[var(--ground-inset)] px-3 py-2 text-sm text-[var(--ink)]";
-const buttonClass = "rounded-md border border-[var(--rule)] px-3 py-2 text-sm text-[var(--ink)] hover:border-[var(--focus)] disabled:cursor-not-allowed disabled:opacity-40";
+type InventoryView = "servants" | "craftEssences" | "mysticCodes";
+type OwnedServant = NonNullable<RosterProfile["ownedServants"][number]>;
+type OwnedCraftEssence = RosterProfile["craftEssenceInventory"][number];
 
 interface RosterEditorProps {
   readonly profile: RosterProfile;
@@ -26,122 +29,169 @@ interface RosterEditorProps {
   readonly onSave: () => void;
 }
 
-function numericValue(event: { target: { value: string } }): number {
-  return Number(event.target.value);
+interface OwnedServantItem { readonly servant: OwnedServant; readonly entry: ServantCatalogEntry; }
+interface OwnedCraftEssenceItem { readonly copy: OwnedCraftEssence; readonly entry: CraftEssenceCatalogEntry; readonly copyNumber: number; }
+
+function Portrait({ src, name }: { readonly src: string | undefined; readonly name: string }) {
+  const [failedSrc, setFailedSrc] = useState<string | undefined>();
+  if (src === undefined || failedSrc === src) return <div className="portrait-fallback" aria-hidden="true">{name.slice(0, 2).toLocaleUpperCase() || "?"}</div>;
+  return <img src={src} alt={name} loading="lazy" onError={() => setFailedSrc(src)} />;
 }
 
-function servantMatches(entry: ServantCatalogEntry, query: string): boolean {
-  const needle = query.trim().toLocaleLowerCase();
-  return needle.length === 0 || entry.name.toLocaleLowerCase().includes(needle) ||
-    String(entry.collectionNo).includes(needle) || String(entry.servantId).includes(needle);
-}
-
-function ceMatches(entry: CraftEssenceCatalogEntry, query: string): boolean {
-  const needle = query.trim().toLocaleLowerCase();
-  return needle.length === 0 || entry.name.toLocaleLowerCase().includes(needle) ||
-    String(entry.collectionNo).includes(needle) || String(entry.craftEssenceId).includes(needle);
-}
-
-function ServantBuildEditor({ profile, servant, catalog, onChange }: {
-  readonly profile: RosterProfile;
-  readonly servant: NonNullable<RosterProfile["ownedServants"][number]>;
-  readonly catalog: ServantCatalogEntry;
-  readonly onChange: (profile: RosterProfile) => void;
-}) {
+function ServantInspector({ profile, servant, entry, onChange }: { readonly profile: RosterProfile; readonly servant: OwnedServant; readonly entry: ServantCatalogEntry; readonly onChange: (profile: RosterProfile) => void }) {
   const patch = (changes: Parameters<typeof updateRosterServant>[2]) => onChange(updateRosterServant(profile, servant.servantId, changes));
-  const setSkill = (index: 0 | 1 | 2, value: number) => {
-    const skillLevels = [...servant.skillLevels] as typeof servant.skillLevels;
-    skillLevels[index] = value as typeof skillLevels[typeof index];
-    patch({ skillLevels });
-  };
-  const toggleAppend = (slot: 1 | 2 | 3, checked: boolean) => {
-    const appendSkillLevels = { ...servant.appendSkillLevels };
-    if (checked) appendSkillLevels[slot] = appendSkillLevels[slot] ?? 1;
-    else delete appendSkillLevels[slot];
-    patch({ appendSkillLevels });
-  };
-  const toggleStrengthening = (key: string, checked: boolean) => {
-    const unlockedStrengthenings = checked
-      ? [...new Set([...servant.unlockedStrengthenings, key])]
-      : servant.unlockedStrengthenings.filter((current) => current !== key);
-    patch({ unlockedStrengthenings });
-  };
+  const setSkill = (index: 0 | 1 | 2, value: number) => { const skillLevels = [...servant.skillLevels] as typeof servant.skillLevels; skillLevels[index] = value as typeof skillLevels[typeof index]; patch({ skillLevels }); };
+  const toggleAppend = (slot: 1 | 2 | 3, checked: boolean) => { const appendSkillLevels = { ...servant.appendSkillLevels }; if (checked) appendSkillLevels[slot] = appendSkillLevels[slot] ?? 1; else delete appendSkillLevels[slot]; patch({ appendSkillLevels }); };
+  const toggleStrengthening = (key: string, checked: boolean) => patch({ unlockedStrengthenings: checked ? [...new Set([...servant.unlockedStrengthenings, key])] : servant.unlockedStrengthenings.filter((value) => value !== key) });
+  const selectedNpId = servant.selectedNpId ?? entry.npIds[0];
+  const selectedNp = entry.npOptions?.find((np) => np.id === selectedNpId);
 
   return (
-    <fieldset className="rounded-lg border border-[var(--rule)] bg-[var(--ground-raised)] p-4 sm:p-5">
-      <legend className="sr-only">{catalog.name} servant build</legend>
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <div><h3 className="font-semibold">{catalog.name}</h3><p className="num text-xs text-[var(--ink-dim)]">No. {catalog.collectionNo}</p></div>
-        <button className="text-sm text-[var(--ink-dim)] hover:text-[var(--ink)]" type="button" onClick={() => onChange(removeRosterServant(profile, servant.servantId))}>Remove servant</button>
+    <aside className="side-panel inventory-inspector" aria-label={`${entry.name} build`}>
+      <div className="inventory-inspector__portrait"><Portrait src={entry.portraitUrl} name={entry.name} /><span>{entry.className ?? "Unknown class"}</span></div>
+      <header><p className="eyebrow">Owned Servant</p><h2>{entry.name}</h2><p>{selectedNp === undefined ? "Noble Phantasm" : `${selectedNp.name} · ${selectedNp.card}`} · NP{servant.npLevel}</p></header>
+
+      <div className="inspector-fields form-grid form-grid--two">
+        <label>Level<input className="field-input" type="number" min={1} max={120} value={servant.level} onChange={(event) => patch({ level: Number(event.target.value) })} /></label>
+        <label>Ascension<input className="field-input" type="number" min={0} max={4} value={servant.ascension} onChange={(event) => patch({ ascension: Number(event.target.value) as never })} /></label>
+        <label>NP level<input className="field-input" type="number" min={1} max={5} value={servant.npLevel} onChange={(event) => patch({ npLevel: Number(event.target.value) as never })} /></label>
+        <label>Bond<input className="field-input" type="number" min={0} max={15} value={servant.bondLevel} onChange={(event) => patch({ bondLevel: Number(event.target.value) })} /></label>
       </div>
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <label className="text-xs font-medium text-[var(--ink-dim)]">Level
-          <input className={`${inputClass} num`} name={`servant-${servant.servantId}-level`} type="number" min={1} max={120} value={servant.level} onChange={(event) => patch({ level: numericValue(event) })} />
-        </label>
-        <label className="text-xs font-medium text-[var(--ink-dim)]">Ascension
-          <input className={`${inputClass} num`} name={`servant-${servant.servantId}-ascension`} type="number" min={0} max={4} value={servant.ascension} onChange={(event) => patch({ ascension: numericValue(event) as never })} />
-        </label>
-        <label className="text-xs font-medium text-[var(--ink-dim)]">NP level
-          <input className={`${inputClass} num`} name={`servant-${servant.servantId}-np-level`} type="number" min={1} max={5} value={servant.npLevel} onChange={(event) => patch({ npLevel: numericValue(event) as never })} />
-        </label>
-        <label className="text-xs font-medium text-[var(--ink-dim)]">Bond level
-          <input className={`${inputClass} num`} name={`servant-${servant.servantId}-bond-level`} type="number" min={0} max={15} value={servant.bondLevel} onChange={(event) => patch({ bondLevel: numericValue(event) })} />
-        </label>
+      {entry.npIds.length > 1 && <label className="wide-field">Noble Phantasm form<select className="field-input" value={servant.selectedNpId ?? ""} onChange={(event) => patch({ selectedNpId: event.target.value === "" ? undefined : Number(event.target.value) })}><option value="">Select form</option>{entry.npIds.map((id) => <option key={id} value={id}>{npOptionLabel(entry, id)}</option>)}</select></label>}
+
+      <section className="inspector-section">
+        <p className="form-section-label">Skills</p>
+        <div className="skill-levels">{[0, 1, 2].map((index) => <label key={index}><span className="skill-orb">{index + 1}</span><span>Skill {index + 1}</span><input className="field-input" type="number" min={1} max={10} value={servant.skillLevels[index]} onChange={(event) => setSkill(index as 0 | 1 | 2, Number(event.target.value))} /></label>)}</div>
+      </section>
+
+      <section className="inspector-section">
+        <p className="form-section-label">Append skills</p>
+        <div className="append-list">{[1, 2, 3].map((slot) => <label key={slot}><input type="checkbox" checked={servant.appendSkillLevels[slot as 1 | 2 | 3] !== undefined} onChange={(event) => toggleAppend(slot as 1 | 2 | 3, event.target.checked)} /><span>Append {slot}</span>{servant.appendSkillLevels[slot as 1 | 2 | 3] !== undefined && <input aria-label={`Append skill ${slot} level`} className="field-input" type="number" min={1} max={10} value={servant.appendSkillLevels[slot as 1 | 2 | 3]} onChange={(event) => patch({ appendSkillLevels: { ...servant.appendSkillLevels, [slot]: Number(event.target.value) as never } })} />}</label>)}</div>
+      </section>
+
+      <section className="inspector-section form-grid form-grid--two">
+        <label>ATK Fou<input className="field-input" type="number" min={0} max={2000} value={servant.fou.atk} onChange={(event) => patch({ fou: { ...servant.fou, atk: Number(event.target.value) } })} /></label>
+        <label>HP Fou<input className="field-input" type="number" min={0} max={2000} value={servant.fou.hp} onChange={(event) => patch({ fou: { ...servant.fou, hp: Number(event.target.value) } })} /></label>
+      </section>
+
+      {entry.strengtheningKeys.length > 0 && <section className="inspector-section"><p className="form-section-label">Cleared strengthenings</p><div className="check-list">{entry.strengtheningKeys.map((key, index) => <label key={key}><input type="checkbox" checked={servant.unlockedStrengthenings.includes(key)} onChange={(event) => toggleStrengthening(key, event.target.checked)} />{strengtheningLabel(key, index)}</label>)}</div></section>}
+
+      <button className="danger-link" type="button" onClick={() => onChange(removeRosterServant(profile, servant.servantId))}>Remove from roster</button>
+    </aside>
+  );
+}
+
+function CraftEssenceInspector({ profile, copy, entry, copyNumber, onChange }: { readonly profile: RosterProfile; readonly copy: OwnedCraftEssence; readonly entry: CraftEssenceCatalogEntry; readonly copyNumber: number; readonly onChange: (profile: RosterProfile) => void }) {
+  const cap = entry.levelCaps[Math.min(copy.limitBreakCount, entry.levelCaps.length - 1)] ?? 100;
+  const patch = (changes: Parameters<typeof updateRosterCraftEssence>[2]) => onChange(updateRosterCraftEssence(profile, copy.id, changes));
+  return (
+    <aside className="side-panel inventory-inspector" aria-label={`${entry.name} copy ${copyNumber}`}>
+      <div className="inventory-inspector__portrait inventory-inspector__portrait--ce"><Portrait src={entry.portraitUrl} name={entry.name} /><span>Copy {copyNumber}</span></div>
+      <header><p className="eyebrow">Owned Craft Essence</p><h2>{entry.name}</h2><p>Level {copy.level} · Limit Break {copy.limitBreakCount}/4</p></header>
+      <div className="inspector-fields form-grid form-grid--two">
+        <label>Level<input className="field-input" type="number" min={1} max={cap} value={copy.level} onChange={(event) => patch({ level: Number(event.target.value) })} /></label>
+        <label>Limit Break<select className="field-input" value={copy.limitBreakCount} onChange={(event) => patch({ limitBreakCount: Number(event.target.value) as never })}>{[0, 1, 2, 3, 4].map((lb) => <option key={lb} value={lb}>{lb}/4</option>)}</select></label>
       </div>
-      {catalog.npIds.length > 1 && <label className="mt-3 block text-xs font-medium text-[var(--ink-dim)]">Noble Phantasm form
-        <select className={inputClass} name={`servant-${servant.servantId}-np-form`} value={servant.selectedNpId ?? ""} onChange={(event) => patch({ selectedNpId: event.target.value === "" ? undefined : Number(event.target.value) })}>
-          <option value="">Select NP form</option>
-          {catalog.npIds.map((id) => <option key={id} value={id}>NP {id}</option>)}
-        </select>
-      </label>}
-      <div className="mt-4 grid gap-3 sm:grid-cols-3">
-        {[0, 1, 2].map((index) => <label key={index} className="text-xs font-medium text-[var(--ink-dim)]">Skill {index + 1}
-          <input className={`${inputClass} num`} name={`servant-${servant.servantId}-skill-${index + 1}`} type="number" min={1} max={10} value={servant.skillLevels[index]} onChange={(event) => setSkill(index as 0 | 1 | 2, numericValue(event))} />
-        </label>)}
-      </div>
-      <div className="mt-4 grid gap-3 sm:grid-cols-3">
-        {[1, 2, 3].map((slot) => <label key={slot} className="flex items-center gap-2 text-xs text-[var(--ink-dim)]">
-          <input name={`servant-${servant.servantId}-append-${slot}-enabled`} type="checkbox" checked={servant.appendSkillLevels[slot as 1 | 2 | 3] !== undefined} onChange={(event) => toggleAppend(slot as 1 | 2 | 3, event.target.checked)} />
-          Append {slot}
-          {servant.appendSkillLevels[slot as 1 | 2 | 3] !== undefined && <input aria-label={`Append skill ${slot} level`} className={`${inputClass} num mt-0 w-20`} name={`servant-${servant.servantId}-append-${slot}-level`} type="number" min={1} max={10} value={servant.appendSkillLevels[slot as 1 | 2 | 3]} onChange={(event) => patch({ appendSkillLevels: { ...servant.appendSkillLevels, [slot]: numericValue(event) as never } })} />}
-        </label>)}
-      </div>
-      <div className="mt-4 grid gap-3 sm:grid-cols-3">
-        <label className="text-xs font-medium text-[var(--ink-dim)]">ATK Fou
-          <input className={`${inputClass} num`} name={`servant-${servant.servantId}-atk-fou`} type="number" min={0} max={2000} value={servant.fou.atk} onChange={(event) => patch({ fou: { ...servant.fou, atk: numericValue(event) } })} />
-        </label>
-        <label className="text-xs font-medium text-[var(--ink-dim)]">HP Fou
-          <input className={`${inputClass} num`} name={`servant-${servant.servantId}-hp-fou`} type="number" min={0} max={2000} value={servant.fou.hp} onChange={(event) => patch({ fou: { ...servant.fou, hp: numericValue(event) } })} />
-        </label>
-      </div>
-      {catalog.strengtheningKeys.length > 0 && <fieldset className="mt-4 border-t border-[var(--rule)] pt-4"><legend className="text-xs font-medium text-[var(--ink-dim)]">Cleared strengthenings</legend><div className="mt-2 grid gap-2 sm:grid-cols-2">{catalog.strengtheningKeys.map((key) => <label key={key} className="flex items-center gap-2 text-xs text-[var(--ink-dim)]"><input name={`servant-${servant.servantId}-strengthening-${key}`} type="checkbox" checked={servant.unlockedStrengthenings.includes(key)} onChange={(event) => toggleStrengthening(key, event.target.checked)} />{key}</label>)}</div></fieldset>}
-    </fieldset>
+      <p className="inspector-note">Current level cap: <strong>{cap}</strong>. Every copy stays separate so CE assignments match your account.</p>
+      <button className="danger-link" type="button" onClick={() => onChange(removeRosterCraftEssence(profile, copy.id))}>Remove this copy</button>
+    </aside>
+  );
+}
+
+function CraftEssencePicker({ entries, query, onQueryChange, onAdd, onClose }: { readonly entries: readonly CraftEssenceCatalogEntry[]; readonly query: string; readonly onQueryChange: (query: string) => void; readonly onAdd: (entry: CraftEssenceCatalogEntry) => void; readonly onClose: () => void }) {
+  return (
+    <div className="dialog-scrim" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+      <section className="collection-dialog collection-dialog--compact" role="dialog" aria-modal="true" aria-labelledby="add-ce-title">
+        <header className="collection-dialog__header"><div><p className="eyebrow">Catalogue</p><h2 id="add-ce-title">Add a Craft Essence</h2><p>Each saved entry represents one physical copy in your account.</p></div><button className="quiet-action" type="button" onClick={onClose}>Close</button></header>
+        <div className="collection-dialog__body">
+          <label className="search-line"><span>Search Craft Essences</span><input autoFocus type="search" value={query} onChange={(event) => onQueryChange(event.target.value)} placeholder="Type a name" /></label>
+          <div className="ce-picker-grid">{entries.map((entry) => <button key={entry.craftEssenceId} type="button" onClick={() => onAdd(entry)}><div><Portrait src={entry.portraitUrl} name={entry.name} /></div><strong>{entry.name}</strong><small>Add copy</small></button>)}</div>
+          {entries.length === 0 && <div className="empty-state"><span className="empty-state__mark">0</span><p>No Craft Essences match this search.</p></div>}
+        </div>
+      </section>
+    </div>
   );
 }
 
 export default function RosterEditor({ profile, catalog, status, message, onChange, onSave }: RosterEditorProps) {
+  const [activeInventory, setActiveInventory] = useState<InventoryView>("servants");
   const [servantQuery, setServantQuery] = useState("");
+  const [servantClass, setServantClass] = useState("");
   const [ceQuery, setCeQuery] = useState("");
-  const [selectedServantId, setSelectedServantId] = useState<number | null>(null);
+  const [ceCatalogQuery, setCeCatalogQuery] = useState("");
+  const [requestedServantId, setRequestedServantId] = useState<number | null>(null);
+  const [requestedCeId, setRequestedCeId] = useState<string | null>(null);
+  const [showServantAdd, setShowServantAdd] = useState(false);
+  const [showCeAdd, setShowCeAdd] = useState(false);
   const validation = useMemo(() => validateRoster(profile, catalog), [profile, catalog]);
   const servantMap = useMemo(() => new Map(catalog.servants.map((entry) => [entry.servantId, entry])), [catalog.servants]);
-  const servantResults = catalog.servants.filter((entry) => servantMatches(entry, servantQuery)).slice(0, 12);
-  const ceResults = catalog.craftEssences.filter((entry) => ceMatches(entry, ceQuery)).slice(0, 12);
-  const selectedServant = selectedServantId === null ? undefined : profile.ownedServants[selectedServantId];
-  const selectedCatalog = selectedServantId === null ? undefined : servantMap.get(selectedServantId);
+  const ceMap = useMemo(() => new Map(catalog.craftEssences.map((entry) => [entry.craftEssenceId, entry])), [catalog.craftEssences]);
+  const servants = useMemo<readonly OwnedServantItem[]>(() => Object.values(profile.ownedServants).flatMap((servant) => { const entry = servantMap.get(servant.servantId); return entry === undefined ? [] : [{ servant, entry }]; }), [profile.ownedServants, servantMap]);
+  const craftEssences = useMemo<readonly OwnedCraftEssenceItem[]>(() => profile.craftEssenceInventory.flatMap((copy, index) => { const entry = ceMap.get(copy.craftEssenceId); return entry === undefined ? [] : [{ copy, entry, copyNumber: index + 1 }]; }), [profile.craftEssenceInventory, ceMap]);
+  const classes = [...new Set(servants.map(({ entry }) => entry.className ?? "Unknown class"))].sort();
+  const visibleServants = servants.filter(({ entry }) => servantMatches(entry, servantQuery) && (servantClass === "" || entry.className === servantClass));
+  const visibleCraftEssences = craftEssences.filter(({ entry }) => ceMatches(entry, ceQuery));
+  const ceCatalogResults = catalog.craftEssences.filter((entry) => ceMatches(entry, ceCatalogQuery)).slice(0, 30);
+  const selectedServant = servants.find(({ servant }) => servant.servantId === requestedServantId) ?? servants[0];
+  const selectedCe = craftEssences.find(({ copy }) => copy.id === requestedCeId) ?? craftEssences[0];
+
+  const addCraftEssence = (entry: CraftEssenceCatalogEntry) => {
+    const next = addRosterCraftEssence(profile, entry, { level: entry.levelCaps[0] ?? 1, limitBreakCount: 0 });
+    onChange(next);
+    setRequestedCeId(next.craftEssenceInventory[next.craftEssenceInventory.length - 1]?.id ?? null);
+    setShowCeAdd(false);
+    setCeCatalogQuery("");
+  };
+
+  const tabs: readonly (readonly [InventoryView, string, number])[] = [
+    ["servants", "Servants", servants.length],
+    ["craftEssences", "Craft Essences", craftEssences.length],
+    ["mysticCodes", "Mystic Codes", profile.mysticCodes.length],
+  ];
+  const query = activeInventory === "servants" ? servantQuery : ceQuery;
 
   return (
-    <section aria-labelledby="roster-editor-title" className="min-w-0">
-      <div className="mb-6 flex flex-wrap items-end justify-between gap-4 border-b border-[var(--rule)] pb-5"><div><p className="text-xs uppercase tracking-[0.16em] text-[var(--ink-dim)]">Step 2 of 4 · {profile.region} account</p><h2 id="roster-editor-title" className="mt-1 text-lg font-semibold">Build your roster</h2></div><button className="rounded-md bg-[var(--amber)] px-4 py-2 text-sm font-semibold text-[#1a1200] disabled:opacity-50" type="button" disabled={!validation.valid || status === "saving"} onClick={onSave}>{status === "saving" ? "Saving…" : "Save roster"}</button></div>
-      {message && <p role="status" className="mb-4 rounded-md border border-[var(--rule)] bg-[var(--ground-raised)] px-3 py-2 text-sm">{message}</p>}
-      {!validation.valid && <div role="alert" className="mb-5 rounded-md border border-[#8d5b5b] bg-[#321d22] px-3 py-3 text-sm"><p className="font-medium">Fix these fields before saving:</p><ul className="mt-1 list-disc pl-5 text-[var(--ink-dim)]">{validation.issues.slice(0, 8).map((issue) => <li key={issue.path}><span className="num">{issue.path}</span>: {issue.message}</li>)}</ul></div>}
-      <div className="grid gap-5 rounded-lg border border-[var(--rule)] bg-[var(--ground-raised)] p-4 sm:grid-cols-3 sm:p-5"><label className="text-xs font-medium text-[var(--ink-dim)]">Master level<input className={`${inputClass} num`} name="masterLevel" type="number" min={1} max={190} value={profile.masterLevel} onChange={(event) => onChange({ ...profile, masterLevel: numericValue(event) })} /></label><div className="sm:col-span-2 self-end text-sm text-[var(--ink-dim)]">JP and NA rosters are saved independently. Unsupported fields such as Command Codes and support presets are preserved.</div></div>
-      <div className="mt-5 grid grid-cols-[minmax(0,1fr)] gap-5 lg:grid-cols-[minmax(16rem,0.75fr)_minmax(0,1.25fr)]">
-        <section aria-labelledby="servant-search-title" className="rounded-lg border border-[var(--rule)] bg-[var(--ground-raised)] p-4 sm:p-5"><h3 id="servant-search-title" className="font-semibold">Servants</h3><label className="mt-3 block text-xs font-medium text-[var(--ink-dim)]">Search by name or collection number<input className={inputClass} name="servantSearch" type="search" value={servantQuery} onChange={(event) => setServantQuery(event.target.value)} placeholder="e.g. 2 or Altria" /></label><div className="mt-3 max-h-80 space-y-1 overflow-y-auto">{servantResults.map((entry) => { const owned = profile.ownedServants[entry.servantId] !== undefined; return <button key={entry.servantId} className={`flex w-full items-center justify-between rounded-md px-3 py-2 text-left text-sm ${selectedServantId === entry.servantId ? "bg-[var(--ground-inset)]" : "hover:bg-[var(--ground-inset)]"}`} type="button" onClick={() => { setSelectedServantId(entry.servantId); if (!owned) onChange(addRosterServant(profile, entry)); }}><span className="truncate">{entry.name}<span className="num ml-2 text-xs text-[var(--ink-dim)]">No. {entry.collectionNo}</span></span><span className="text-xs text-[var(--focus)]">{owned ? "Owned" : "Add"}</span></button>; })}</div><p className="mt-3 text-xs text-[var(--ink-dim)]">{Object.keys(profile.ownedServants).length} owned servant{Object.keys(profile.ownedServants).length === 1 ? "" : "s"}</p></section>
-        <div>{selectedServant && selectedCatalog ? <ServantBuildEditor profile={profile} servant={selectedServant} catalog={selectedCatalog} onChange={onChange} /> : <div className="rounded-lg border border-dashed border-[var(--rule)] p-8 text-sm text-[var(--ink-dim)]">Select a servant to edit investment details.</div>}</div>
+    <section aria-labelledby="roster-editor-title" className="collection-page">
+      <h1 id="roster-editor-title" className="sr-only">Servants</h1>
+      <aside className="side-panel filter-rail" aria-label="Collection filters and account">
+        {activeInventory !== "mysticCodes" && <label className="field-label">Search
+          <input className="field-input" type="search" value={query} onChange={(event) => activeInventory === "servants" ? setServantQuery(event.target.value) : setCeQuery(event.target.value)} placeholder="Name" />
+        </label>}
+        {activeInventory === "servants" && <section className="panel-section">
+          <h3 id="class-filter-label">Class</h3>
+          <div className="chip-row" role="radiogroup" aria-labelledby="class-filter-label">
+            {["", ...classes].map((className) => <button key={className || "all"} type="button" role="radio" aria-checked={servantClass === className} className={`chip ${servantClass === className ? "is-on" : ""}`} onClick={() => setServantClass(className)}>{className || "All"}</button>)}
+          </div>
+        </section>}
+        <section className="panel-section">
+          <h3>Account</h3>
+          <label className="field-label">Master level<input className="field-input num" type="number" min={1} max={190} value={profile.masterLevel} onChange={(event) => onChange({ ...profile, masterLevel: Number(event.target.value) })} /></label>
+          <p className="hint">Sets the party-cost budget the optimizer uses.</p>
+        </section>
+        <button className="primary-action primary-action--block" type="button" disabled={!validation.valid || status === "saving"} onClick={onSave}>{status === "saving" ? "Saving…" : "Save collection"}</button>
+        {message && <p role="status" className="hint">{message}</p>}
+      </aside>
+
+      <div className="collection-main">
+        <div className="collection-main__head">
+          <div className="segmented" role="tablist" aria-label="Inventory categories">
+            {tabs.map(([id, label, count]) => <button key={id} type="button" role="tab" aria-selected={activeInventory === id} className={activeInventory === id ? "is-active" : ""} onClick={() => setActiveInventory(id)}>{label} <span className="num">{count}</span></button>)}
+          </div>
+          {activeInventory !== "mysticCodes" && <button className="primary-action" type="button" onClick={() => activeInventory === "servants" ? setShowServantAdd(true) : setShowCeAdd(true)}>+ Add {activeInventory === "servants" ? "servant" : "CE"}</button>}
+        </div>
+        {!validation.valid && <div role="alert" className="validation-note"><strong>Some build details need attention.</strong><ul>{validation.issues.slice(0, 6).map((issue, index) => <li key={`${issue.path}-${index}`}>{issue.message}</li>)}</ul></div>}
+
+        {activeInventory === "mysticCodes" ? <MysticCodeDirectory entries={catalog.mysticCodes} owned={profile.mysticCodes} onAdd={(entry) => onChange(setRosterMysticCode(profile, entry, 1))} onLevelChange={(entry, level) => onChange(setRosterMysticCode(profile, entry, level))} />
+          : activeInventory === "servants" ? visibleServants.length === 0 ? <div className="empty-card"><p>{servants.length === 0 ? "Add the servants you own to start your collection." : "No owned servants match these filters."}</p></div> : <><p className="hint">{visibleServants.length} of {servants.length} servants · {profile.region} account</p><div className="portrait-gallery">{visibleServants.map(({ servant, entry }) => <button key={servant.servantId} type="button" aria-pressed={selectedServant?.servant.servantId === servant.servantId} className={selectedServant?.servant.servantId === servant.servantId ? "is-selected" : ""} onClick={() => setRequestedServantId(servant.servantId)}><div><Portrait src={entry.portraitUrl} name={entry.name} /></div><strong>{entry.name}</strong><small>{entry.className ?? "Unknown"}</small><small>Lv {servant.level} · NP{servant.npLevel} · {servant.skillLevels.join("/")}</small></button>)}</div></>
+          : visibleCraftEssences.length === 0 ? <div className="empty-card"><p>{craftEssences.length === 0 ? "Add every Craft Essence copy you own." : "No owned Craft Essences match this search."}</p></div> : <div className="portrait-gallery portrait-gallery--ce">{visibleCraftEssences.map(({ copy, entry, copyNumber }) => <button key={copy.id} type="button" aria-pressed={selectedCe?.copy.id === copy.id} className={selectedCe?.copy.id === copy.id ? "is-selected" : ""} onClick={() => setRequestedCeId(copy.id)}><div><Portrait src={entry.portraitUrl} name={entry.name} /></div><strong>{entry.name}</strong><small>Copy {copyNumber} · Lv {copy.level} · LB {copy.limitBreakCount}/4</small></button>)}</div>}
       </div>
-      <section aria-labelledby="ce-title" className="mt-5 rounded-lg border border-[var(--rule)] bg-[var(--ground-raised)] p-4 sm:p-5"><div className="flex flex-wrap items-center justify-between gap-3"><h3 id="ce-title" className="font-semibold">Craft Essences</h3><span className="num text-xs text-[var(--ink-dim)]">{profile.craftEssenceInventory.length} copies</span></div><label className="mt-3 block text-xs font-medium text-[var(--ink-dim)]">Search by name or collection number<input className={inputClass} name="craftEssenceSearch" type="search" value={ceQuery} onChange={(event) => setCeQuery(event.target.value)} placeholder="e.g. 34 or Kaleidoscope" /></label><div className="mt-3 grid gap-2 sm:grid-cols-2">{ceResults.map((entry) => <button key={entry.craftEssenceId} className={`${buttonClass} text-left`} type="button" onClick={() => onChange(addRosterCraftEssence(profile, entry, { level: entry.levelCaps[0] ?? 1, limitBreakCount: 0 }))}>Add {entry.name}<span className="num ml-2 text-xs text-[var(--ink-dim)]">No. {entry.collectionNo}</span></button>)}</div><div className="mt-4 space-y-2">{profile.craftEssenceInventory.map((copy, index) => { const entry = catalog.craftEssences.find((candidate) => candidate.craftEssenceId === copy.craftEssenceId); if (!entry) return null; const cap = entry.levelCaps[Math.min(copy.limitBreakCount, entry.levelCaps.length - 1)] ?? 100; return <div key={copy.id} className="grid gap-2 rounded-md border border-[var(--rule)] p-3 sm:grid-cols-[minmax(0,1fr)_6rem_8rem_auto] sm:items-end"><div><p className="text-sm">{entry.name}</p><p className="num text-xs text-[var(--ink-dim)]">Copy {index + 1} · No. {entry.collectionNo}</p></div><label className="text-xs text-[var(--ink-dim)]">Level<input className={`${inputClass} num`} name={`ce-${copy.id}-level`} type="number" min={1} max={cap} value={copy.level} onChange={(event) => onChange(updateRosterCraftEssence(profile, copy.id, { level: numericValue(event) }))} /></label><label className="text-xs text-[var(--ink-dim)]">Limit break<select className={`${inputClass} num`} name={`ce-${copy.id}-limit-break`} value={copy.limitBreakCount} onChange={(event) => onChange(updateRosterCraftEssence(profile, copy.id, { limitBreakCount: numericValue(event) as never }))}>{[0, 1, 2, 3, 4].map((lb) => <option key={lb} value={lb}>{lb}/4</option>)}</select></label><button className="text-sm text-[var(--ink-dim)]" type="button" onClick={() => onChange(removeRosterCraftEssence(profile, copy.id))}>Remove</button></div>; })}</div></section>
-      <section aria-labelledby="mystic-code-title" className="mt-5 rounded-lg border border-[var(--rule)] bg-[var(--ground-raised)] p-4 sm:p-5"><div className="flex flex-wrap items-center justify-between gap-3"><h3 id="mystic-code-title" className="font-semibold">Mystic Codes</h3><span className="text-xs text-[var(--ink-dim)]">Level 1–10</span></div><div className="mt-3 grid gap-2 sm:grid-cols-2">{catalog.mysticCodes.map((entry) => { const owned = profile.mysticCodes.find((code) => code.mysticCodeId === entry.mysticCodeId); return <div key={entry.mysticCodeId} className="grid grid-cols-[minmax(0,1fr)_5rem] items-end gap-2"><div className="text-sm">{entry.name}<span className="num ml-2 text-xs text-[var(--ink-dim)]">{entry.mysticCodeId}</span>{!owned && <button className={`${buttonClass} mt-2 w-full text-left`} type="button" onClick={() => onChange(setRosterMysticCode(profile, entry, 1))}>Add</button>}</div>{owned && <label className="text-xs text-[var(--ink-dim)]">Level<input className={`${inputClass} num`} name={`mystic-code-${entry.mysticCodeId}-level`} type="number" min={1} max={10} value={owned.level} onChange={(event) => onChange(setRosterMysticCode(profile, entry, numericValue(event)))} /></label>}</div>; })}</div></section>
+
+      {activeInventory === "servants" ? selectedServant === undefined ? <aside className="side-panel inventory-inspector inventory-inspector--empty">Select a servant to edit its build.</aside> : <ServantInspector profile={profile} servant={selectedServant.servant} entry={selectedServant.entry} onChange={onChange} />
+        : activeInventory === "craftEssences" ? selectedCe === undefined ? <aside className="side-panel inventory-inspector inventory-inspector--empty">Select a Craft Essence copy to edit it.</aside> : <CraftEssenceInspector profile={profile} copy={selectedCe.copy} entry={selectedCe.entry} copyNumber={selectedCe.copyNumber} onChange={onChange} />
+        : null}
+
+      {showServantAdd && <ServantAddDialog profile={profile} catalog={catalog} onChange={onChange} onSelect={setRequestedServantId} onClose={() => setShowServantAdd(false)} />}
+      {showCeAdd && <CraftEssencePicker entries={ceCatalogResults} query={ceCatalogQuery} onQueryChange={setCeCatalogQuery} onAdd={addCraftEssence} onClose={() => setShowCeAdd(false)} />}
     </section>
   );
 }

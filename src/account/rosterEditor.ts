@@ -16,15 +16,26 @@ export interface ServantCatalogEntry {
   readonly servantId: number;
   readonly collectionNo: number;
   readonly name: string;
+  readonly className?: string;
+  readonly portraitUrl?: string;
   readonly levelCap: number;
   readonly npIds: readonly number[];
+  /** Atlas-backed labels for the normal NP forms selectable in the roster. */
+  readonly npOptions?: readonly NoblePhantasmCatalogEntry[];
   readonly strengtheningKeys: readonly string[];
+}
+
+export interface NoblePhantasmCatalogEntry {
+  readonly id: number;
+  readonly name: string;
+  readonly card: string;
 }
 
 export interface CraftEssenceCatalogEntry {
   readonly craftEssenceId: number;
   readonly collectionNo: number;
   readonly name: string;
+  readonly portraitUrl?: string;
   /** Caps for LB0 through MLB. Missing stages fall back to the last known cap. */
   readonly levelCaps: readonly number[];
 }
