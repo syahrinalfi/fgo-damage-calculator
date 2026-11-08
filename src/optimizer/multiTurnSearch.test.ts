@@ -5,8 +5,12 @@ import type { BattleState, EnemyInstance, HandCard, ServantInstance } from "../b
 import { BUFF_ACTION_KEYS } from "../battle/buffActionKeys.js";
 import type { BattleConstants } from "../battle/gameConstants.js";
 import { damageDealtAtSlot } from "./objectives.js";
-import { attackingServantIds, searchMultiTurnActionSequences, type PerTurnCandidateBuilder } from "./multiTurnSearch.js";
-import type { ActionSequenceCandidate } from "./turnSearch.js";
+import { advanceBeam, attackingServantIds, searchMultiTurnActionSequences, startBeam, type PerTurnCandidateBuilder } from "./multiTurnSearch.js";
+import { simulateActionSequence, type ActionSequenceCandidate, type SequenceScoreFn } from "./turnSearch.js";
+import { ActionUnavailableError } from "../battle/actionError.js";
+import { resolveAction } from "../battle/turnLoop.js";
+import { buildAttackChainCandidates, type NpAttackOption } from "./cardOrderCandidates.js";
+import { buildSkillAndCardOrderCandidates, type SkillActivation } from "./skillUsageCandidates.js";
 
 const BUSTER = "2" as Card;
 const ARTS = "1" as Card;
@@ -228,5 +232,57 @@ describe("searchMultiTurnActionSequences", () => {
   it("throws rather than recursing forever for a negative turnCount", () => {
     const buildCandidates: PerTurnCandidateBuilder = () => [passCandidate()];
     expect(() => searchMultiTurnActionSequences(state(), -1, buildCandidates, CONSTANTS, () => 0, damageDealtAtSlot(0))).toThrow(RangeError);
+  });
+});
+
+describe("advanceBeam shared setup and NP pre-filter", () => {
+  const ALL_POSITIONS = {
+    ...CONSTANTS,
+    card: Object.fromEntries(Object.entries(CARD_CONSTANTS).map(([type, byPosition]) => {
+      const first = (byPosition as Record<number, unknown>)[1];
+      return [type, { 1: first, 2: first, 3: first }];
+    })) as unknown as CardDetail.CardConstantMap,
+  };
+  // The old per-candidate behavior: simulate every candidate in full from the branch state.
+  function referenceAdvance(start: BattleState, candidates: readonly ActionSequenceCandidate[], scoreFn: SequenceScoreFn) {
+    return candidates.flatMap((candidate) => {
+      try {
+        const afterActions = simulateActionSequence(start, candidate.actions, ALL_POSITIONS, () => 0.5);
+        const afterTurn = resolveAction(afterActions, { type: "endTurn" }, ALL_POSITIONS, () => 0.5);
+        return [{ label: candidate.label, score: scoreFn(afterTurn, start) }];
+      } catch (error) {
+        if (error instanceof ActionUnavailableError) return [];
+        throw error;
+      }
+    });
+  }
+
+  it("keeps exactly the lines a full per-candidate simulation keeps, in the same order", () => {
+    const start = state({ servants: [servant(1), servant(2, { currentNpGauge: 9500 }), servant(3)] });
+    const skills: readonly SkillActivation[] = [
+      { type: "useSkill", servantId: 1, skillSlot: 1, effects: [{ kind: "gainNp", rawAmount: 10000, targetType: "self" }], cooldownTurns: 5 },
+      { type: "useSkill", servantId: 3, skillSlot: 1, effects: [], cooldownTurns: 5 },
+    ];
+    const npOption = (servantId: number): NpAttackOption => ({
+      servantId,
+      cardType: BUSTER,
+      context: { ...BUSTER_CONTEXT, isNP: true, npDamageMultiplier: 3 },
+      targetNpcIds: [9001],
+      label: `NP:${servantId}`,
+    });
+    const chains = buildAttackChainCandidates(start.handCards, start.handCards.map((card) => ({ ...BUSTER_CONTEXT, card: { type: card.card, position: 1 } })), [npOption(1), npOption(2)], 9001);
+    const candidates = buildSkillAndCardOrderCandidates(skills, chains);
+    const scoreFn = damageDealtAtSlot(0);
+
+    const reference = referenceAdvance(start, candidates, scoreFn);
+    const beam = advanceBeam(startBeam(start, scoreFn), 0, start, () => candidates, ALL_POSITIONS, () => 0.5, scoreFn, { beamWidth: candidates.length });
+
+    expect(reference.length).toBeGreaterThan(0);
+    expect(reference.length).toBeLessThan(candidates.length);
+    expect(beam.map((entry) => [entry.label, entry.score])).toEqual(
+      [...reference].sort((a, b) => b.score - a.score).map((entry) => [entry.label, entry.score]),
+    );
+    expect(beam.some((entry) => entry.label.startsWith("useSkill:1.1|") && entry.label.includes("NP:1"))).toBe(true);
+    expect(beam.some((entry) => entry.label.includes("NP:2"))).toBe(false);
   });
 });

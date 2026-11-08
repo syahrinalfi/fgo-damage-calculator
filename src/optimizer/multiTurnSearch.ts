@@ -3,7 +3,8 @@ import { ActionUnavailableError } from "../battle/actionError.js";
 import type { BattleState } from "../battle/battleState.js";
 import type { BattleConstants } from "../battle/gameConstants.js";
 import { resolveAction } from "../battle/turnLoop.js";
-import { simulateActionSequence, type ActionSequenceCandidate, type SequenceScoreFn } from "./turnSearch.js";
+import { FULL_TD_POINT } from "../engine/constants.js";
+import type { ActionSequenceCandidate, SequenceScoreFn } from "./turnSearch.js";
 
 /**
  * Research/09 §5's ST Burst Finder specialization — "the search space's turn dimension is not
@@ -136,17 +137,34 @@ export function advanceBeam(
 ): readonly BeamEntry[] {
   const beamWidth = options.beamWidth ?? DEFAULT_BEAM_WIDTH;
   const expanded: BeamEntry[] = [];
+  const actionIds = new WeakMap<Action, number>();
+  let nextActionId = 0;
+  const actionId = (action: Action): number => {
+    let id = actionIds.get(action);
+    if (id === undefined) {
+      id = nextActionId++;
+      actionIds.set(action, id);
+    }
+    return id;
+  };
   for (const branch of frontier) {
+    // Candidates share their setup (skills, Mystic Code skills, Order Change) as the same action
+    // objects, so each distinct setup is simulated once per line; `null` marks an unavailable one.
+    const setupStates = new Map<string, BattleState | null>();
     for (const candidate of buildCandidatesForTurn(branch.state, turnIndex)) {
       const attackerIds = new Set([...branch.attackerIds, ...attackingServantIds(candidate.actions)]);
       if (options.maxAttackerCount !== undefined && attackerIds.size > options.maxAttackerCount) continue;
-      let stateAfterActions: BattleState;
-      try {
-        stateAfterActions = simulateActionSequence(branch.state, candidate.actions, constants, randomFn);
-      } catch (error) {
-        if (error instanceof ActionUnavailableError) continue;
-        throw error;
+      const firstAttack = candidate.actions.findIndex(isAttack);
+      const setupLength = firstAttack < 0 ? candidate.actions.length : firstAttack;
+      const setupKey = candidate.actions.slice(0, setupLength).map(actionId).join(",");
+      let setupState = setupStates.get(setupKey);
+      if (setupState === undefined) {
+        setupState = simulateOrUnavailable(branch.state, candidate.actions, 0, setupLength, constants, randomFn);
+        setupStates.set(setupKey, setupState);
       }
+      if (setupState === null || hasUnreadyNp(setupState, candidate.actions, setupLength)) continue;
+      const stateAfterActions = simulateOrUnavailable(setupState, candidate.actions, setupLength, candidate.actions.length, constants, randomFn);
+      if (stateAfterActions === null) continue;
       const stateAfterTurn = resolveAction(stateAfterActions, { type: "endTurn" }, constants, randomFn);
       expanded.push({
         label: branch.label === "" ? candidate.label : `${branch.label}>>${candidate.label}`,
@@ -163,6 +181,44 @@ export function advanceBeam(
   }
   expanded.sort(byScoreDescending);
   return expanded.slice(0, beamWidth);
+}
+
+function isAttack(action: Action): boolean {
+  return action.type === "playCard" || action.type === "castNp" || action.type === "playExtraCard";
+}
+
+/** Resolves `actions[from..to)` in order, or `null` when one is unavailable in the battle state. */
+function simulateOrUnavailable(
+  state: BattleState,
+  actions: readonly Action[],
+  from: number,
+  to: number,
+  constants: BattleConstants,
+  randomFn: () => number,
+): BattleState | null {
+  let current = state;
+  try {
+    for (let index = from; index < to; index += 1) current = resolveAction(current, actions[index] as Action, constants, randomFn);
+  } catch (error) {
+    if (error instanceof ActionUnavailableError) return null;
+    throw error;
+  }
+  return current;
+}
+
+/**
+ * True when the chain casts an NP whose servant is below 100% after the setup. The NP must be
+ * full when the chain is chosen (`BattleState.npReadyAtChainSelection`), so the engine would
+ * reject the line anyway; skipping it here avoids simulating its cards first.
+ */
+function hasUnreadyNp(setupState: BattleState, actions: readonly Action[], setupLength: number): boolean {
+  for (let index = setupLength; index < actions.length; index += 1) {
+    const action = actions[index] as Action;
+    if (action.type !== "castNp") continue;
+    const servant = setupState.servants.find((candidate) => candidate.servantId === action.servantId);
+    if (servant !== undefined && servant.currentNpGauge < FULL_TD_POINT) return true;
+  }
+  return false;
 }
 
 /** The beam's lines as results, best first. */
