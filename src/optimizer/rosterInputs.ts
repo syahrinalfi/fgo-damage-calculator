@@ -10,12 +10,12 @@ export interface RosterOptimizerInputs {
   readonly cePool: readonly EquippedCraftEssence[];
 }
 
-function strengtheningKey(skill: Skill.Skill): string {
+export function skillStrengtheningKey(skill: Skill.Skill): string {
   return `${skill.condQuestId}:${skill.condQuestPhase}`;
 }
 
 function isSkillUnlocked(skill: Skill.Skill, unlocked: ReadonlySet<string>): boolean {
-  return skill.condQuestId === 0 || unlocked.has(strengtheningKey(skill));
+  return skill.condQuestId === 0 || unlocked.has(skillStrengtheningKey(skill));
 }
 
 function strongerSkill(left: Skill.Skill, right: Skill.Skill): Skill.Skill {
@@ -28,7 +28,7 @@ function strongerSkill(left: Skill.Skill, right: Skill.Skill): Skill.Skill {
   return left.id > right.id ? left : right;
 }
 
-function skillSourceFor(
+export function skillSourceFor(
   niceServant: ServantModule.Servant,
   skillLevels: readonly [SkillLevel, SkillLevel, SkillLevel],
   unlockedStrengthenings: readonly string[],

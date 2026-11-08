@@ -9,14 +9,23 @@ import { resolveOrderChangeSwapOptions } from "../battle/orderChangeSwapResolver
 import { resolveSkillActivationOptions, type ServantSkillSource } from "../battle/skillActivationResolver.js";
 import { isQuestCleared } from "../battle/turnLoop.js";
 import type { Wave } from "../quest/types.js";
-import { buildInitialBattleState, type PartyMemberSpec } from "./battleStateBuilder.js";
+import { buildInitialBattleState, partyMemberBattleId, supportBattleId, type PartyMemberSpec } from "./battleStateBuilder.js";
 import { enumerateCeAssignments, enumeratePartyFormations } from "./candidateGeneration.js";
 import { buildAttackChainCandidates, type NpAttackOption } from "./cardOrderCandidates.js";
 import { resolveNpAttackOption } from "./npActivationResolver.js";
 import { selectNoblePhantasmVersion } from "./npVersionSelection.js";
-import { attackingServantIds, searchMultiTurnActionSequences, type MultiTurnResult } from "./multiTurnSearch.js";
+import {
+  advanceBeam,
+  attackingServantIds,
+  rankBeam,
+  searchMultiTurnActionSequences,
+  startBeam,
+  validateMultiTurnSearchOptions,
+  type MultiTurnResult,
+} from "./multiTurnSearch.js";
 import { questProgress } from "./objectives.js";
 import { buildOrderChangeCandidates, type OrderChangeSwap } from "./orderChangeCandidates.js";
+import { skillSourceFor } from "./rosterInputs.js";
 import { buildSkillAndCardOrderCandidates, type SkillActivation } from "./skillUsageCandidates.js";
 import { searchBestActionSequence, type ActionSequenceCandidate, type ActionSequenceResult, type SequenceScoreFn } from "./turnSearch.js";
 import {
@@ -37,6 +46,15 @@ export interface ServantCandidate {
 export interface QuestOptimizerOptions {
   /** User-shortlisted pool (research/09 §4's "candidate servant subset, ≤6, user-shortlisted") — every `FRONT_LINE_SERVANT_COUNT`-sized (plus up to `maxBenchCount` benched) combination of this is tried (`enumeratePartyFormations`, `./candidateGeneration.js`). */
   readonly shortlist: readonly ServantCandidate[];
+  /**
+   * Borrowed supports to consider, usually built with `buildBorrowedSupportCandidate`
+   * (`./supportBuild.js`). Parties are searched with no support and with each candidate in any
+   * one slot (front line or bench). A support never takes a CE from `cePool`, never counts
+   * toward `costBudget`, and is keyed in battle by `supportBattleId` so it can share the field
+   * with the owned copy of the same servant. The automatic `npGainByServantId`, `skillSources`
+   * and NP paths resolve a support from its own data; explicit resolvers receive its battle id.
+   */
+  readonly supportCandidates?: readonly ServantCandidate[];
   /** Owned CE copies eligible to equip — every no-reuse assignment of this pool to every fielded slot (front-line plus any benched sub-members) is tried (`enumerateCeAssignments`), including leaving a slot bare. */
   readonly cePool: readonly EquippedCraftEssence[];
   readonly waves: readonly Wave[];
@@ -159,6 +177,23 @@ export interface QuestOptimizerOptions {
   readonly randomFn?: () => number;
 }
 
+interface PartySlot {
+  readonly candidate: ServantCandidate;
+  readonly isSupport: boolean;
+}
+
+/** A borrowed support's NP gain comes from its own legal NP version, not the caller's owned-roster lookup. */
+function supportNpGainsByBattleId(party: readonly PartyMemberSpec[]): ReadonlyMap<number, NoblePhantasm.NoblePhantasmGain> {
+  const gains = new Map<number, NoblePhantasm.NoblePhantasmGain>();
+  for (const member of party) {
+    if (member.isSupport !== true) continue;
+    const np = selectNoblePhantasmVersion(member.niceServant.noblePhantasms ?? [], member.build);
+    if (np === undefined) throw new RangeError(`Borrowed support ${member.build.servantId} has no legal Noble Phantasm`);
+    gains.set(partyMemberBattleId(member), np.npGain);
+  }
+  return gains;
+}
+
 /** One party-formation × CE-assignment party candidate (front-line plus any benched sub-members), together with its best found card-play-order line. */
 export type QuestOptimizerCandidate = RankedQuestCandidate;
 
@@ -200,29 +235,54 @@ function toActionSequenceResult(multiTurnResult: MultiTurnResult): ActionSequenc
   return { label: multiTurnResult.label, actions, finalState: multiTurnResult.finalState, score: multiTurnResult.score };
 }
 
-export function optimizeQuest(options: QuestOptimizerOptions): readonly QuestOptimizerCandidate[] {
+interface SearchSettings {
+  readonly scoreFn: SequenceScoreFn;
+  readonly randomFn: () => number;
+  readonly attributionPoolSize: number;
+}
+
+function searchSettings(options: QuestOptimizerOptions): SearchSettings {
   if (options.resolveHitContext === undefined && options.npGainByServantId === undefined) {
     throw new RangeError("optimizeQuest requires either options.resolveHitContext or options.npGainByServantId to be supplied");
   }
-
-  const scoreFn = options.scoreFn ?? questProgress();
-  const randomFn = options.randomFn ?? Math.random;
   const attributionPoolSize = options.attributionPoolSize ?? 64;
   if (!Number.isInteger(attributionPoolSize) || attributionPoolSize < 1) {
     throw new RangeError(`attributionPoolSize must be a positive integer, got ${attributionPoolSize}`);
   }
+  return { scoreFn: options.scoreFn ?? questProgress(), randomFn: options.randomFn ?? Math.random, attributionPoolSize };
+}
 
+/** One within-budget party (formation × CE assignment) ready to search, with its per-turn candidate builder. */
+interface PartySearch {
+  readonly party: readonly PartyMemberSpec[];
+  readonly initialState: BattleState;
+  readonly buildCandidatesForState: (state: BattleState) => readonly ActionSequenceCandidate[];
+}
+
+type CoarseQuestResult = Pick<QuestOptimizerCandidate, "party" | "initialState" | "best">;
+
+/** Lazily yields every within-budget party, building each one's starting state only when it is reached. */
+function* partySearches(options: QuestOptimizerOptions, randomFn: () => number): Generator<PartySearch> {
   // Each optional axis prefers an explicit caller-supplied resolver over its raw-data
   // auto-resolver counterpart (`../battle/skillActivationResolver.js`/`orderChangeSwapResolver.js`)
   // — a manual override always wins. Neither depends on the per-turn `state` a formation's
   // candidates are built from, so both are resolved once per `optimizeQuest` call rather than
   // rebuilt per party/turn.
+  const skillSources = options.skillSources === undefined
+    ? undefined
+    : [
+        ...options.skillSources,
+        ...(options.supportCandidates ?? []).map((support): ServantSkillSource => ({
+          ...skillSourceFor(support.niceServant, support.build.skillLevels, support.build.unlockedStrengthenings ?? []),
+          servantId: supportBattleId(support.build.servantId),
+        })),
+      ];
   const resolveSkillOptionsFn =
     options.resolveSkillOptions ??
-    (options.skillSources === undefined
+    (skillSources === undefined
       ? undefined
       : (state: BattleState) =>
-          resolveSkillActivationOptions(state, options.skillSources as readonly ServantSkillSource[], {
+          resolveSkillActivationOptions(state, skillSources, {
             ...(options.defaultTargetServantId !== undefined ? { defaultTargetServantId: options.defaultTargetServantId } : {}),
           }));
   const resolveOrderChangeOptionsFn =
@@ -231,7 +291,16 @@ export function optimizeQuest(options: QuestOptimizerOptions): readonly QuestOpt
       ? undefined
       : (state: BattleState) => resolveOrderChangeSwapOptions(state, options.hasOrderChangeMysticCodeSkill as boolean));
 
-  const formations = enumeratePartyFormations(options.shortlist, FRONT_LINE_SERVANT_COUNT, options.maxBenchCount ?? 0);
+  const maxBenchCount = options.maxBenchCount ?? 0;
+  const ownedSlots: readonly PartySlot[] = options.shortlist.map((candidate) => ({ candidate, isSupport: false }));
+  const formations = [
+    ...enumeratePartyFormations(ownedSlots, FRONT_LINE_SERVANT_COUNT, maxBenchCount),
+    ...(options.supportCandidates ?? []).flatMap((candidate) => {
+      const support: PartySlot = { candidate, isSupport: true };
+      return enumeratePartyFormations([...ownedSlots, support], FRONT_LINE_SERVANT_COUNT, maxBenchCount)
+        .filter((formation) => formation.frontLine.includes(support) || formation.bench.includes(support));
+    }),
+  ];
 
   // `enumerateCeAssignments` only depends on the fielded slot *count*, not which specific
   // servants fill it — many formations of the same total size (front-line + bench) share the
@@ -245,17 +314,19 @@ export function optimizeQuest(options: QuestOptimizerOptions): readonly QuestOpt
     return computed;
   };
 
-  const results: Array<Pick<QuestOptimizerCandidate, "party" | "initialState" | "best">> = [];
   for (const formation of formations) {
     const fielded = [...formation.frontLine, ...formation.bench];
-    const ceAssignments = ceAssignmentsForSlotCount(fielded.length);
+    const ceAssignments = ceAssignmentsForSlotCount(fielded.filter((slot) => !slot.isSupport).length);
     for (const ceAssignment of ceAssignments) {
-      const party: PartyMemberSpec[] = fielded.map((member, index) => {
-        const equippedCe = ceAssignment[index];
+      let ceIndex = 0;
+      const party: PartyMemberSpec[] = fielded.map((slot, index) => {
         const isFrontLine = index < formation.frontLine.length;
-        const base: PartyMemberSpec = { niceServant: member.niceServant, build: member.build, isFrontLine };
+        const base: PartyMemberSpec = { niceServant: slot.candidate.niceServant, build: slot.candidate.build, isFrontLine };
+        if (slot.isSupport) return { ...base, isSupport: true };
+        const equippedCe = ceAssignment[ceIndex++];
         return equippedCe === undefined ? base : { ...base, equippedCe };
       });
+      const supportNpGains = options.resolveHitContext === undefined ? supportNpGainsByBattleId(party) : new Map();
 
       const initialState = buildInitialBattleState(party, options.waves, {
         costBudget: options.costBudget,
@@ -290,7 +361,8 @@ export function optimizeQuest(options: QuestOptimizerOptions): readonly QuestOpt
             if (actingServant === undefined) {
               throw new RangeError(`No servant with servantId ${handCard.servantId} in this BattleState`);
             }
-            return resolveCardHitContext(handCard, actingServant, npGainByServantId(handCard.servantId), targetEnemy, randomFn);
+            const npGain = supportNpGains.get(handCard.servantId) ?? npGainByServantId(handCard.servantId);
+            return resolveCardHitContext(handCard, actingServant, npGain, targetEnemy, randomFn);
           });
 
         const buildForHand = (hand: BattleState["handCards"]): ReturnType<typeof buildAttackChainCandidates> => {
@@ -299,8 +371,8 @@ export function optimizeQuest(options: QuestOptimizerOptions): readonly QuestOpt
             options.resolveNpOptions?.(state, targetEnemy) ??
             state.servants.flatMap((servant) => {
               if (!servant.isFrontLine) return [];
-              const member = party.find((candidate) => candidate.build.servantId === servant.servantId);
-              const np = options.npByServantId?.(servant.servantId) ??
+              const member = party.find((candidate) => partyMemberBattleId(candidate) === servant.servantId);
+              const np = (member?.isSupport === true ? undefined : options.npByServantId?.(servant.servantId)) ??
                 (member === undefined
                   ? undefined
                   : selectNoblePhantasmVersion(member.niceServant.noblePhantasms ?? [], member.build));
@@ -322,41 +394,22 @@ export function optimizeQuest(options: QuestOptimizerOptions): readonly QuestOpt
           : buildOrderChangeCandidates(resolveOrderChangeOptionsFn(state), state.handCards, buildForHand);
       };
 
-      let best: ActionSequenceResult | undefined;
-      if (options.turnCount === undefined) {
-        const candidates = buildCandidatesForState(initialState);
-        const maxAttackerCount = options.maxAttackerCount;
-        const eligibleCandidates = maxAttackerCount === undefined
-          ? candidates
-          : candidates.filter((candidate) => attackingServantIds(candidate.actions).size <= maxAttackerCount);
-        const ranked = searchBestActionSequence(initialState, eligibleCandidates, options.constants, randomFn, scoreFn);
-        best = ranked[0];
-      } else {
-        const multiTurnResults = searchMultiTurnActionSequences(
-          initialState,
-          options.turnCount,
-          buildCandidatesForState,
-          options.constants,
-          randomFn,
-          scoreFn,
-          {
-            ...(options.beamWidth === undefined ? {} : { beamWidth: options.beamWidth }),
-            ...(options.maxAttackerCount === undefined ? {} : { maxAttackerCount: options.maxAttackerCount }),
-          },
-        );
-        const bestMultiTurn = multiTurnResults[0];
-        best = bestMultiTurn === undefined ? undefined : toActionSequenceResult(bestMultiTurn);
-      }
-      if (best === undefined) continue;
-
-      results.push({ party, initialState, best });
+      yield { party, initialState, buildCandidatesForState };
     }
   }
+}
 
+function coarseResult(search: PartySearch, best: ActionSequenceResult | undefined): CoarseQuestResult | undefined {
+  return best === undefined ? undefined : { party: search.party, initialState: search.initialState, best };
+}
+
+/** Coarsely ranks per-party best lines, causally replays the bounded finalist pool, and returns them in product ranking order. */
+function rankCoarseResults(results: readonly CoarseQuestResult[], options: QuestOptimizerOptions, settings: SearchSettings): readonly QuestOptimizerCandidate[] {
+  const { scoreFn, randomFn, attributionPoolSize } = settings;
   const preferredAttackerId = options.preferences?.preferredAttackerId;
   const eventCeIds = new Set(options.preferences?.eventCeIds ?? []);
   const bondCeIds = new Set(options.preferences?.bondCeIds ?? []);
-  const coarsePreferenceCount = (candidate: (typeof results)[number], ids: ReadonlySet<number>): number =>
+  const coarsePreferenceCount = (candidate: CoarseQuestResult, ids: ReadonlySet<number>): number =>
     candidate.party.filter((member) => member.equippedCe !== undefined && ids.has(member.equippedCe.data.id)).length;
   const coarseFinalists = [...results]
     .sort((a, b) => {
@@ -377,6 +430,40 @@ export function optimizeQuest(options: QuestOptimizerOptions): readonly QuestOpt
   return rankQuestCandidates(attributed, options.preferences);
 }
 
+export function optimizeQuest(options: QuestOptimizerOptions): readonly QuestOptimizerCandidate[] {
+  const settings = searchSettings(options);
+  const { scoreFn, randomFn } = settings;
+  const results: CoarseQuestResult[] = [];
+  for (const search of partySearches(options, randomFn)) {
+    let best: ActionSequenceResult | undefined;
+    if (options.turnCount === undefined) {
+      const candidates = search.buildCandidatesForState(search.initialState);
+      const maxAttackerCount = options.maxAttackerCount;
+      const eligibleCandidates = maxAttackerCount === undefined
+        ? candidates
+        : candidates.filter((candidate) => attackingServantIds(candidate.actions).size <= maxAttackerCount);
+      best = searchBestActionSequence(search.initialState, eligibleCandidates, options.constants, randomFn, scoreFn)[0];
+    } else {
+      const bestMultiTurn = searchMultiTurnActionSequences(
+        search.initialState,
+        options.turnCount,
+        search.buildCandidatesForState,
+        options.constants,
+        randomFn,
+        scoreFn,
+        {
+          ...(options.beamWidth === undefined ? {} : { beamWidth: options.beamWidth }),
+          ...(options.maxAttackerCount === undefined ? {} : { maxAttackerCount: options.maxAttackerCount }),
+        },
+      )[0];
+      best = bestMultiTurn === undefined ? undefined : toActionSequenceResult(bestMultiTurn);
+    }
+    const result = coarseResult(search, best);
+    if (result !== undefined) results.push(result);
+  }
+  return rankCoarseResults(results, options, settings);
+}
+
 export interface MinimumTurnOptimizerOptions extends Omit<QuestOptimizerOptions, "turnCount" | "maxAttackerCount"> {
   readonly maxTurns?: number;
   /** Progressive widening stops at this many damage dealers. Defaults to the largest fieldable party. */
@@ -393,7 +480,7 @@ export interface MinimumTurnOptimizerResult {
   readonly candidates: readonly QuestOptimizerCandidate[];
 }
 
-/** Iterative-deepening Clear Quest search. Three turns is only a preset; the first actual full-quest clear wins, bounded by the product's 6-turn offensive-only cap. */
+/** Minimum-turn Clear Quest search. Three turns is only a preset; the fewest turns that clear the whole quest win (then the fewest attackers), bounded by the product's 6-turn offensive-only cap. */
 export function optimizeQuestMinimumTurns(options: MinimumTurnOptimizerOptions): MinimumTurnOptimizerResult {
   const {
     maxTurns = 6,
@@ -410,32 +497,62 @@ export function optimizeQuestMinimumTurns(options: MinimumTurnOptimizerOptions):
   }
   if (reliability !== undefined) validateReliabilityConfig(reliability);
   const searchRandomFn = questOptions.randomFn ?? (reliability === undefined ? undefined : createSeededRandom(reliability.seed));
+  const searchOptions: QuestOptimizerOptions = { ...questOptions, ...(searchRandomFn === undefined ? {} : { randomFn: searchRandomFn }) };
+  const settings = searchSettings(searchOptions);
+  const { scoreFn, randomFn } = settings;
+  const searches = [...partySearches(searchOptions, randomFn)];
+
+  // One turn-by-turn beam per attacker limit replaces a full search per (turns, limit) pair: the
+  // beam after turn N is the same however many turns follow, so each limit reads its earliest
+  // clear as it goes. A wider limit only matters if it clears in fewer turns than one already
+  // found, which keeps the original "fewest turns, then fewest attackers" order.
+  let found: { readonly turns: number; readonly attackerLimit: number; readonly cleared: readonly QuestOptimizerCandidate[] } | undefined;
   let closest: readonly QuestOptimizerCandidate[] = [];
-  for (let turnCount = 1; turnCount <= maxTurns; turnCount += 1) {
-    for (let attackerLimit = 1; attackerLimit <= maxAttackers; attackerLimit += 1) {
-      const candidates = optimizeQuest({
-        ...questOptions,
-        ...(searchRandomFn === undefined ? {} : { randomFn: searchRandomFn }),
-        turnCount,
-        maxAttackerCount: attackerLimit,
+  for (let attackerLimit = 1; attackerLimit <= maxAttackers; attackerLimit += 1) {
+    const horizon = found === undefined ? maxTurns : found.turns - 1;
+    if (horizon < 1) break;
+    const beamOptions = {
+      ...(questOptions.beamWidth === undefined ? {} : { beamWidth: questOptions.beamWidth }),
+      maxAttackerCount: attackerLimit,
+    };
+    validateMultiTurnSearchOptions(beamOptions);
+    let beams = searches.map((search) => startBeam(search.initialState, scoreFn));
+    for (let turns = 1; turns <= horizon; turns += 1) {
+      beams = beams.map((beam, index) => {
+        const search = searches[index] as PartySearch;
+        return beam.length === 0
+          ? beam
+          : advanceBeam(beam, turns - 1, search.initialState, search.buildCandidatesForState, options.constants, randomFn, scoreFn, beamOptions);
       });
-      const cleared = candidates.filter((candidate) => isQuestCleared(candidate.best.finalState));
-      if (cleared.length > 0) {
-        const evaluated = reliability === undefined
-          ? cleared
-          : cleared.map((candidate) => ({
-              ...candidate,
-              reliability: estimateQuestCandidateReliability(candidate, options.constants, reliability),
-            }));
-        return {
-          minimumTurns: turnCount,
-          searchedThroughTurn: turnCount,
-          attackerLimitUsed: attackerLimit,
-          candidates: selectDiverseQuestCandidates(evaluated, options.preferences, maxResults),
-        };
+      const results = beams.flatMap((beam, index): readonly CoarseQuestResult[] => {
+        const bestLine = rankBeam(beam)[0];
+        const result = coarseResult(searches[index] as PartySearch, bestLine === undefined ? undefined : toActionSequenceResult(bestLine));
+        return result === undefined ? [] : [result];
+      });
+      if (results.some((result) => isQuestCleared(result.best.finalState))) {
+        const cleared = rankCoarseResults(results, searchOptions, settings).filter((candidate) => isQuestCleared(candidate.best.finalState));
+        if (cleared.length > 0) {
+          found = { turns, attackerLimit, cleared };
+          break;
+        }
       }
-      if (attackerLimit === maxAttackers) closest = candidates;
+      if (attackerLimit === maxAttackers && turns === maxTurns) closest = rankCoarseResults(results, searchOptions, settings);
     }
+  }
+
+  if (found !== undefined) {
+    const evaluated = reliability === undefined
+      ? found.cleared
+      : found.cleared.map((candidate) => ({
+          ...candidate,
+          reliability: estimateQuestCandidateReliability(candidate, options.constants, reliability),
+        }));
+    return {
+      minimumTurns: found.turns,
+      searchedThroughTurn: found.turns,
+      attackerLimitUsed: found.attackerLimit,
+      candidates: selectDiverseQuestCandidates(evaluated, options.preferences, maxResults),
+    };
   }
   return {
     minimumTurns: null,

@@ -12,6 +12,8 @@ import { optimizeQuest, optimizeQuestMinimumTurns, type ServantCandidate } from 
 import type { NpAttackOption } from "./cardOrderCandidates.js";
 import type { SkillActivation } from "./skillUsageCandidates.js";
 import { npStrengtheningKey } from "./npVersionSelection.js";
+import { supportBattleId } from "./battleStateBuilder.js";
+import { selectDiverseQuestCandidates } from "./resultRanking.js";
 import { buildUpgradeScenarios, findClearUpgradeRecommendations } from "./upgradeAdvisor.js";
 
 function niceServant(overrides: Partial<ServantModule.Servant> = {}): ServantModule.Servant {
@@ -1050,4 +1052,194 @@ describe("upgrade advisor integration", () => {
     });
     expect(report.recommendations[0]?.result.minimumTurns).toBe(1);
   });
+});
+
+describe("borrowed support", () => {
+  const ce: CraftEssence.CraftEssence = { atkGrowth: [0, 0, 300], hpGrowth: [0, 0, 150], cost: 12 } as unknown as CraftEssence.CraftEssence;
+
+  it("fields at most one borrowed support and never equips it with a Craft Essence", () => {
+    const results = optimizeQuest({
+      shortlist: [candidate(1), candidate(2)],
+      supportCandidates: [candidate(3)],
+      cePool: [{ data: ce, level: 1 }],
+      waves: [wave()],
+      costBudget: 1000,
+      constants: CONSTANTS,
+      resolveHitContext,
+      randomFn: () => 0,
+    });
+    expect(results.length).toBeGreaterThan(0);
+    for (const result of results) {
+      const supports = result.party.filter((member) => member.isSupport === true);
+      expect(supports).toHaveLength(1);
+      expect(supports[0]?.equippedCe).toBeUndefined();
+    }
+    expect(results.some((result) => result.party.some((member) => member.equippedCe !== undefined))).toBe(true);
+  });
+
+  it("still searches parties without a support, and adds none when no support candidates are given", () => {
+    const withSupport = optimizeQuest({
+      shortlist: [candidate(1), candidate(2), candidate(3)],
+      supportCandidates: [candidate(4)],
+      cePool: [],
+      waves: [wave()],
+      costBudget: 1000,
+      constants: CONSTANTS,
+      resolveHitContext,
+      randomFn: () => 0,
+    });
+    expect(withSupport.some((result) => result.party.every((member) => member.isSupport !== true))).toBe(true);
+    expect(withSupport.some((result) => result.party.some((member) => member.isSupport === true))).toBe(true);
+  });
+
+  it("leaves the borrowed support out of the Cost check", () => {
+    const results = optimizeQuest({
+      shortlist: [candidate(1), candidate(2)],
+      supportCandidates: [candidate(3)],
+      cePool: [],
+      waves: [wave()],
+      costBudget: 32,
+      constants: CONSTANTS,
+      resolveHitContext,
+      randomFn: () => 0,
+    });
+    expect(results.length).toBeGreaterThan(0);
+    expect(results.every((result) => result.initialState.costSpent === 32)).toBe(true);
+  });
+
+  it("lets a borrowed support share the field with the owned copy of the same servant", () => {
+    const results = optimizeQuest({
+      shortlist: [candidate(1), candidate(2), candidate(3)],
+      supportCandidates: [candidate(1)],
+      cePool: [],
+      waves: [wave()],
+      costBudget: 1000,
+      constants: CONSTANTS,
+      resolveHitContext,
+      randomFn: () => 0,
+    });
+    const doubled = results.find((result) => result.party.filter((member) => member.build.servantId === 1).length === 2);
+    expect(doubled).toBeDefined();
+    expect(doubled?.initialState.servants.map((servant) => servant.servantId)).toEqual(expect.arrayContaining([1, supportBattleId(1)]));
+  });
+
+  it("resolves the support's own NP gain and skills on the automatic paths, keyed by its battle id", () => {
+    const npGain = { buster: [500], arts: [500], quick: [500], extra: [500], np: [500], defence: [500] } as unknown as NoblePhantasm.NoblePhantasmGain;
+    const selfAtkUp = {
+      funcId: 1,
+      funcType: Func.FuncType.ADD_STATE,
+      funcTargetType: Func.FuncTargetType.SELF,
+      funcTargetTeam: Func.FuncTargetTeam.PLAYER,
+      functvals: [],
+      funcquestTvals: [],
+      overWriteTvalsList: [],
+      funcPopupText: "",
+      buffs: [{ type: "upAtk" as Buff.BuffType, buffGroup: 0, vals: [], ckSelfIndv: [], ckOpIndv: [] } as unknown as Buff.Buff],
+      svals: Array.from({ length: 10 }, () => ({ Value: 500, Turn: 3 })),
+    } as unknown as Func.Func;
+    const skill = (num: number, functions: readonly Func.Func[]): Skill.Skill =>
+      ({ id: 900 + num, num, condQuestId: 0, condQuestPhase: 0, functions, coolDown: Array.from({ length: 10 }, () => 5) }) as unknown as Skill.Skill;
+    const support: ServantCandidate = {
+      niceServant: niceServant({
+        id: 3,
+        noblePhantasms: [{ ...damagingNp(700, [100]), npGain }],
+        skills: [skill(1, [selfAtkUp]), skill(2, []), skill(3, [])],
+      } as Partial<ServantModule.Servant>),
+      build: { ...build(3), skillLevels: [10, 10, 10] },
+    };
+    const results = optimizeQuest({
+      shortlist: [candidate(1), candidate(2)],
+      supportCandidates: [support],
+      cePool: [],
+      waves: [wave()],
+      costBudget: 1000,
+      constants: CONSTANTS,
+      npGainByServantId: (servantId) => {
+        if (servantId === 1 || servantId === 2) return npGain;
+        throw new RangeError(`owned lookup asked for ${servantId}`);
+      },
+      skillSources: [],
+      // A fixed draw deals no support card on turn 1; three turns bring the support's cards into hand.
+      turnCount: 3,
+      randomFn: () => 0,
+    });
+    expect(results.length).toBeGreaterThan(0);
+    expect(results.some((result) => result.best.actions.some((action) => action.type === "useSkill" && action.servantId === supportBattleId(3)))).toBe(true);
+  });
+
+  it("attributes a support's damage to its battle id", () => {
+    const results = optimizeQuest({
+      shortlist: [candidate(1), candidate(2)],
+      supportCandidates: [candidate(3)],
+      cePool: [],
+      waves: [wave()],
+      costBudget: 1000,
+      constants: CONSTANTS,
+      resolveHitContext,
+      turnCount: 3,
+      randomFn: () => 0,
+    });
+    const supportAttacked = results.find((result) => result.attribution.attackerIds.includes(supportBattleId(3)));
+    expect(supportAttacked).toBeDefined();
+    expect(supportAttacked?.strategyKey).toContain(String(supportBattleId(3)));
+  });
+});
+
+describe("optimizeQuestMinimumTurns equivalence with a turn-by-turn reference", () => {
+  // The original iterative deepening: one full optimizeQuest per (turn, attacker limit) pair.
+  function reference(options: Parameters<typeof optimizeQuestMinimumTurns>[0]) {
+    const { maxTurns = 6, maxAttackers = 3 + (options.maxBenchCount ?? 0), maxResults = 5, ...questOptions } = options;
+    let closest: ReturnType<typeof optimizeQuest> = [];
+    for (let turnCount = 1; turnCount <= maxTurns; turnCount += 1) {
+      for (let attackerLimit = 1; attackerLimit <= maxAttackers; attackerLimit += 1) {
+        const candidates = optimizeQuest({ ...questOptions, turnCount, maxAttackerCount: attackerLimit });
+        const cleared = candidates.filter((candidate) => isQuestCleared(candidate.best.finalState));
+        if (cleared.length > 0) {
+          return { minimumTurns: turnCount, searchedThroughTurn: turnCount, attackerLimitUsed: attackerLimit, candidates: selectDiverseQuestCandidates(cleared, options.preferences, maxResults) };
+        }
+        if (attackerLimit === maxAttackers) closest = candidates;
+      }
+    }
+    return { minimumTurns: null, searchedThroughTurn: maxTurns, attackerLimitUsed: null, candidates: selectDiverseQuestCandidates(closest, options.preferences, maxResults) };
+  }
+
+  const fingerprint = (result: ReturnType<typeof optimizeQuestMinimumTurns>) => ({
+    minimumTurns: result.minimumTurns,
+    searchedThroughTurn: result.searchedThroughTurn,
+    attackerLimitUsed: result.attackerLimitUsed,
+    candidates: result.candidates.map((candidate) => ({
+      strategyKey: candidate.strategyKey,
+      score: candidate.best.score,
+      actions: candidate.best.actions,
+      party: candidate.party.map((member) => [member.build.servantId, member.isSupport === true, member.isFrontLine]),
+    })),
+  });
+
+  const firstEnemy = waveEnemy({ npcId: 9001, hp: 1 });
+  const secondEnemy = waveEnemy({ npcId: 9101, hp: 1 });
+  const twoWaves = [
+    wave({ waveNumber: 1, initialEnemies: [firstEnemy], enemyPool: [firstEnemy] }),
+    wave({ waveNumber: 2, initialEnemies: [secondEnemy], enemyPool: [secondEnemy] }),
+  ];
+  const boss = waveEnemy({ npcId: 9001, hp: 999999999 });
+  const cases: readonly [string, Parameters<typeof optimizeQuestMinimumTurns>[0]][] = [
+    ["a clear on turn 2 with two attackers", {
+      shortlist: [candidate(1), candidate(2), candidate(3), candidate(4)], cePool: [], waves: twoWaves,
+      costBudget: 1000, constants: CONSTANTS, resolveHitContext, maxTurns: 4, randomFn: () => 0,
+    }],
+    ["no clear within the turn limit", {
+      shortlist: [candidate(1), candidate(2), candidate(3), candidate(4)], cePool: [], waves: [wave({ initialEnemies: [boss], enemyPool: [boss] })],
+      costBudget: 1000, constants: CONSTANTS, resolveHitContext, maxTurns: 2, randomFn: () => 0,
+    }],
+    ["a borrowed support and a bench slot", {
+      shortlist: [candidate(1), candidate(2), candidate(3)], supportCandidates: [candidate(1)], cePool: [], waves: twoWaves, maxBenchCount: 1,
+      costBudget: 1000, constants: CONSTANTS, resolveHitContext, maxTurns: 3, randomFn: () => 0,
+    }],
+  ];
+
+  for (const [name, options] of cases) {
+    it(`matches the reference for ${name}`, () => {
+      expect(fingerprint(optimizeQuestMinimumTurns(options))).toEqual(fingerprint(reference(options)));
+    });
+  }
 });

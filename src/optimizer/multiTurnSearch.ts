@@ -81,7 +81,27 @@ export function searchMultiTurnActionSequences(
   if (turnCount < 0) {
     throw new RangeError(`turnCount must be >= 0, got ${turnCount}`);
   }
+  validateMultiTurnSearchOptions(options);
 
+  let frontier = startBeam(initialState, scoreFn);
+  for (let turnIndex = 0; turnIndex < turnCount; turnIndex += 1) {
+    frontier = advanceBeam(frontier, turnIndex, initialState, buildCandidatesForTurn, constants, randomFn, scoreFn, options);
+    if (frontier.length === 0) break;
+  }
+  return rankBeam(frontier);
+}
+
+/** One retained partial line between turns of a beam search. */
+export interface BeamEntry {
+  readonly label: string;
+  readonly turnActions: readonly (readonly Action[])[];
+  readonly state: BattleState;
+  readonly attackerIds: ReadonlySet<number>;
+  /** `scoreFn(state, initialState)`, computed once when the entry is created. */
+  readonly score: number;
+}
+
+export function validateMultiTurnSearchOptions(options: MultiTurnSearchOptions): void {
   const beamWidth = options.beamWidth ?? DEFAULT_BEAM_WIDTH;
   if (!Number.isInteger(beamWidth) || beamWidth < 1) {
     throw new RangeError(`beamWidth must be a positive integer, got ${beamWidth}`);
@@ -89,52 +109,70 @@ export function searchMultiTurnActionSequences(
   if (options.maxAttackerCount !== undefined && (!Number.isInteger(options.maxAttackerCount) || options.maxAttackerCount < 1)) {
     throw new RangeError(`maxAttackerCount must be a positive integer, got ${options.maxAttackerCount}`);
   }
+}
 
-  interface FrontierEntry {
-    readonly label: string;
-    readonly turnActions: readonly (readonly Action[])[];
-    readonly state: BattleState;
-    readonly attackerIds: ReadonlySet<number>;
-  }
+/** The beam before any turn has been searched: the starting state alone. */
+export function startBeam(initialState: BattleState, scoreFn: SequenceScoreFn): readonly BeamEntry[] {
+  return [{ label: "", turnActions: [], state: initialState, attackerIds: new Set(), score: scoreFn(initialState, initialState) }];
+}
 
-  let frontier: readonly FrontierEntry[] = [{ label: "", turnActions: [], state: initialState, attackerIds: new Set() }];
-  for (let turnIndex = 0; turnIndex < turnCount; turnIndex += 1) {
-    const expanded: FrontierEntry[] = [];
-    for (const branch of frontier) {
-      for (const candidate of buildCandidatesForTurn(branch.state, turnIndex)) {
-        const attackerIds = new Set([...branch.attackerIds, ...attackingServantIds(candidate.actions)]);
-        if (options.maxAttackerCount !== undefined && attackerIds.size > options.maxAttackerCount) continue;
-        let stateAfterActions: BattleState;
-        try {
-          stateAfterActions = simulateActionSequence(branch.state, candidate.actions, constants, randomFn);
-        } catch (error) {
-          if (error instanceof ActionUnavailableError) continue;
-          throw error;
-        }
-        const stateAfterTurn = resolveAction(stateAfterActions, { type: "endTurn" }, constants, randomFn);
-        expanded.push({
-          label: branch.label === "" ? candidate.label : `${branch.label}>>${candidate.label}`,
-          turnActions: [...branch.turnActions, candidate.actions],
-          state: stateAfterTurn,
-          attackerIds,
-        });
-        if (expanded.length >= beamWidth * 2) {
-          expanded.sort((a, b) => scoreFn(b.state, initialState) - scoreFn(a.state, initialState));
-          expanded.length = beamWidth;
-        }
+const byScoreDescending = (a: BeamEntry, b: BeamEntry): number => b.score - a.score;
+
+/**
+ * Searches one more turn from every retained line: simulates each candidate plus a trailing
+ * `endTurn`, drops unavailable lines and lines over the attacker cap, and keeps the best
+ * `beamWidth`. The frontier after turn N depends only on the turns searched so far, never on how
+ * many turns a caller will eventually search, so callers may stop or continue at any turn.
+ */
+export function advanceBeam(
+  frontier: readonly BeamEntry[],
+  turnIndex: number,
+  initialState: BattleState,
+  buildCandidatesForTurn: PerTurnCandidateBuilder,
+  constants: BattleConstants,
+  randomFn: () => number,
+  scoreFn: SequenceScoreFn,
+  options: MultiTurnSearchOptions = {},
+): readonly BeamEntry[] {
+  const beamWidth = options.beamWidth ?? DEFAULT_BEAM_WIDTH;
+  const expanded: BeamEntry[] = [];
+  for (const branch of frontier) {
+    for (const candidate of buildCandidatesForTurn(branch.state, turnIndex)) {
+      const attackerIds = new Set([...branch.attackerIds, ...attackingServantIds(candidate.actions)]);
+      if (options.maxAttackerCount !== undefined && attackerIds.size > options.maxAttackerCount) continue;
+      let stateAfterActions: BattleState;
+      try {
+        stateAfterActions = simulateActionSequence(branch.state, candidate.actions, constants, randomFn);
+      } catch (error) {
+        if (error instanceof ActionUnavailableError) continue;
+        throw error;
+      }
+      const stateAfterTurn = resolveAction(stateAfterActions, { type: "endTurn" }, constants, randomFn);
+      expanded.push({
+        label: branch.label === "" ? candidate.label : `${branch.label}>>${candidate.label}`,
+        turnActions: [...branch.turnActions, candidate.actions],
+        state: stateAfterTurn,
+        attackerIds,
+        score: scoreFn(stateAfterTurn, initialState),
+      });
+      if (expanded.length >= beamWidth * 2) {
+        expanded.sort(byScoreDescending);
+        expanded.length = beamWidth;
       }
     }
-    expanded.sort((a, b) => scoreFn(b.state, initialState) - scoreFn(a.state, initialState));
-    frontier = expanded.slice(0, beamWidth);
-    if (frontier.length === 0) break;
   }
+  expanded.sort(byScoreDescending);
+  return expanded.slice(0, beamWidth);
+}
 
+/** The beam's lines as results, best first. */
+export function rankBeam(frontier: readonly BeamEntry[]): readonly MultiTurnResult[] {
   return frontier
     .map((entry): MultiTurnResult => ({
       label: entry.label,
       turnActions: entry.turnActions,
       finalState: entry.state,
-      score: scoreFn(entry.state, initialState),
+      score: entry.score,
     }))
     .sort((a, b) => b.score - a.score);
 }

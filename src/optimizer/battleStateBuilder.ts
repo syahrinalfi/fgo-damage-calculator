@@ -17,6 +17,22 @@ export interface PartyMemberSpec {
   readonly build: ServantBuild;
   readonly isFrontLine: boolean;
   readonly equippedCe?: EquippedCraftEssence;
+  /** Borrowed from the support list rather than owned: never counts toward party Cost (owner-confirmed) and is keyed by `supportBattleId`. */
+  readonly isSupport?: boolean;
+}
+
+/**
+ * In-battle key for a borrowed support. `ServantInstance.servantId` is the battle's unit key;
+ * owned servants use their Atlas id (a roster holds each servant once), so a negative key lets
+ * a borrowed copy share the field with the owned copy of the same servant.
+ */
+export function supportBattleId(servantId: number): number {
+  return -servantId;
+}
+
+/** The `ServantInstance.servantId`/`Action.servantId` this party member resolves to in battle. */
+export function partyMemberBattleId(member: Pick<PartyMemberSpec, "build" | "isSupport">): number {
+  return member.isSupport === true ? supportBattleId(member.build.servantId) : member.build.servantId;
 }
 
 export interface InitialBattleStateOptions {
@@ -45,7 +61,7 @@ export interface InitialBattleStateOptions {
  * however many benched sub-members — the same invariant `buildCombinedCardDeck` already
  * enforces (throws otherwise, not silently building an under/oversized deck).
  * `costSpent` is computed directly from `party` (`niceServant.cost` + `equippedCe.data.cost`
- * per member, both real `Entity.cost` fields, research/09 §6) rather than from the built
+ * per owned member, both real `Entity.cost` fields, research/09 §6; a borrowed support is free) rather than from the built
  * `ServantInstance`s, which don't carry Cost at all — matching how `costSpent` is defined
  * (research/09 §1: "the party actually fielded," not per-`ServantInstance` bookkeeping).
  *
@@ -56,13 +72,19 @@ export interface InitialBattleStateOptions {
  * party in, one `BattleState` out," independently testable without a real shortlist).
  */
 export function buildInitialBattleState(party: readonly PartyMemberSpec[], waves: readonly Wave[], options: InitialBattleStateOptions): BattleState {
-  const baseServants = party.map((member) => buildServantInstance(member.niceServant, member.build, member.isFrontLine, member.equippedCe));
+  const baseServants = party.map((member) => ({
+    ...buildServantInstance(member.niceServant, member.build, member.isFrontLine, member.equippedCe),
+    servantId: partyMemberBattleId(member),
+  }));
   const { servants, startingStars } = applyCraftEssencePassives(baseServants, party.map((member) => ({
-    servantId: member.build.servantId,
+    servantId: partyMemberBattleId(member),
     isFrontLine: member.isFrontLine,
     ...(member.equippedCe === undefined ? {} : { equippedCe: member.equippedCe }),
   })));
-  const costSpent = party.reduce((sum, member) => sum + member.niceServant.cost + (member.equippedCe?.data.cost ?? 0), 0);
+  const costSpent = party.reduce(
+    (sum, member) => member.isSupport === true ? sum : sum + member.niceServant.cost + (member.equippedCe?.data.cost ?? 0),
+    0,
+  );
   const initialWave = waves[0];
   const enemies = initialWave === undefined ? [] : initialWave.initialEnemies.map(buildEnemyInstance);
 

@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { ServantBuild } from "../account/types.js";
 import type { EquippedCraftEssence } from "../battle/battleState.js";
 import type { Wave, WaveEnemy } from "../quest/types.js";
-import { buildInitialBattleState, type PartyMemberSpec } from "./battleStateBuilder.js";
+import { buildInitialBattleState, partyMemberBattleId, supportBattleId, type PartyMemberSpec } from "./battleStateBuilder.js";
 
 function niceServant(overrides: Partial<ServantModule.Servant> = {}): ServantModule.Servant {
   return {
@@ -203,5 +203,24 @@ describe("buildInitialBattleState", () => {
 
     expect(state.handCardStars.reduce((sum, stars) => sum + stars, 0)).toBe(10);
     expect(state.starsCarried).toBe(0);
+  });
+});
+
+describe("borrowed support battle identity", () => {
+  it("keys a borrowed support apart from an owned copy of the same servant", () => {
+    const support: PartyMemberSpec = { ...member(1, true), isSupport: true };
+    const state = buildInitialBattleState([member(1, true), member(2, true), support], [wave()], { costBudget: 100 });
+    const supportId = supportBattleId(1);
+    expect(supportId).not.toBe(1);
+    expect(state.servants.map((servant) => servant.servantId)).toEqual([1, 2, supportId]);
+    expect(partyMemberBattleId(support)).toBe(supportId);
+    expect(partyMemberBattleId(member(1, true))).toBe(1);
+    expect(state.handCards.concat(state.cardBag).filter((card) => card.servantId === supportId)).toHaveLength(5);
+  });
+
+  it("leaves a borrowed support out of the party Cost", () => {
+    const support: PartyMemberSpec = { ...member(3, true), isSupport: true };
+    const state = buildInitialBattleState([member(1, true), member(2, true), support], [wave()], { costBudget: 100 });
+    expect(state.costSpent).toBe(32);
   });
 });

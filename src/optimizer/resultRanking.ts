@@ -2,7 +2,7 @@ import type { Action, DerivedHitContext } from "../battle/action.js";
 import type { BattleState } from "../battle/battleState.js";
 import type { BattleConstants } from "../battle/gameConstants.js";
 import { isQuestCleared } from "../battle/turnLoop.js";
-import type { PartyMemberSpec } from "./battleStateBuilder.js";
+import { partyMemberBattleId, type PartyMemberSpec } from "./battleStateBuilder.js";
 import type { ReliabilityEstimate } from "./reliability.js";
 import { simulateActionSequence, type ActionSequenceResult, type SequenceScoreFn } from "./turnSearch.js";
 
@@ -132,7 +132,7 @@ export function attributeQuestCandidate(
     (scoreLossByAttacker.get(b) ?? 0) - (scoreLossByAttacker.get(a) ?? 0) || a - b,
   )[0];
   const coreServantIds = candidate.party
-    .map((member) => member.build.servantId)
+    .map(partyMemberBattleId)
     .filter((servantId) => causallyWorse(
       candidate.best.finalState,
       replayCounterfactual(candidate, servantId, true, constants, randomFn),
@@ -140,7 +140,7 @@ export function attributeQuestCandidate(
       scoreFn,
     ))
     .sort((a, b) => a - b);
-  const coreKey = (coreServantIds.length > 0 ? coreServantIds : candidate.party.map((member) => member.build.servantId).sort((a, b) => a - b)).join("-");
+  const coreKey = (coreServantIds.length > 0 ? coreServantIds : candidate.party.map(partyMemberBattleId).sort((a, b) => a - b)).join("-");
   const attribution: QuestResultAttribution = {
     attackerIds,
     ...(primaryAttackerId === undefined ? {} : { primaryAttackerId }),

@@ -19,6 +19,7 @@ import type { Wave, WaveEnemy } from "../quest/types.js";
  * per-servant, so `BattleState.commandSealsRemaining` is the single shared counter.
  */
 export interface ServantInstance extends Omit<BattleUnit, "activeBuffs"> {
+  /** In-battle unit key, unique per fielded member: the Atlas servant id for owned servants; a borrowed support gets a distinct key from the party builder. */
   readonly servantId: number;
   readonly isFrontLine: boolean;
   /** This servant's 5-card deck composition (`Entity.cards`, research/03 §6.4/§6.5), in fixed slot order. */
