@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { ActiveBuffInstance } from "../buffs/types.js";
 import { FULL_TD_POINT } from "../engine/constants.js";
 import type { Wave, WaveEnemy } from "../quest/types.js";
-import type { Action, DerivedHitContext } from "./action.js";
+import type { Action, AttackChainCard, DerivedHitContext } from "./action.js";
 import type { BattleState, EnemyInstance, HandCard, ServantInstance } from "./battleState.js";
 import { BUFF_ACTION_KEYS } from "./buffActionKeys.js";
 import type { TrackedBuff } from "./buffLifecycle.js";
@@ -25,6 +25,7 @@ import type {
   RevivalEffect,
   ShortenSkillEffect,
 } from "./skillEffect.js";
+import { ActionUnavailableError } from "./actionError.js";
 import { isQuestCleared, resolveAction } from "./turnLoop.js";
 
 const BUSTER = "2" as Card;
@@ -1666,5 +1667,34 @@ describe("resolveAction — break-bar (shift) transitions", () => {
     );
     expect(result.enemies[0]).toMatchObject({ npcId: 9001 });
     expect(result.enemies[0]?.currentHp).toBeGreaterThan(0);
+  });
+});
+
+describe("NP gauge is checked when the chain is chosen", () => {
+  const chainCards: readonly AttackChainCard[] = [{ type: BUSTER, servantId: 1 }, { type: BUSTER, servantId: 1, isNp: true }, { type: ARTS, servantId: 2 }];
+  const playFirstCard = (start: BattleState) =>
+    resolveAction(start, { type: "playCard", servantId: 1, handCardIndex: 0, targetNpcId: 9001, context: CARD_CONTEXT, chainCards, chainPosition: 1 }, CONSTANTS);
+  const castSecond: Action = { type: "castNp", servantId: 1, targetNpcId: 9001, context: { ...NP_CONTEXT, card: { type: BUSTER, position: 2 } }, chainCards, chainPosition: 2 };
+
+  it("rejects an NP that only reaches 100% from a face card earlier in the same chain", () => {
+    const afterCard = playFirstCard(state({ servants: [servant({ servantId: 1, currentNpGauge: FULL_TD_POINT - 1 }), servant({ servantId: 2 }), servant({ servantId: 3 })] }));
+    expect(afterCard.servants.find((candidate) => candidate.servantId === 1)?.currentNpGauge).toBe(FULL_TD_POINT);
+    expect(() => resolveAction(afterCard, castSecond, CONSTANTS)).toThrow(ActionUnavailableError);
+  });
+
+  it("allows an NP after a face card when the servant was already at 100% when the chain was chosen", () => {
+    const afterCard = playFirstCard(state({ servants: [servant({ servantId: 1, npLevel: 2, currentNpGauge: FULL_TD_POINT }), servant({ servantId: 2 }), servant({ servantId: 3 })] }));
+    expect(() => resolveAction(afterCard, castSecond, CONSTANTS)).not.toThrow();
+  });
+
+  it("lets a skill charge before the chain is chosen, and checks again on the next turn", () => {
+    const start = state({ servants: [servant({ servantId: 1, currentNpGauge: 0, skillCooldowns: [0, 0, 0] }), servant({ servantId: 2 }), servant({ servantId: 3 })] });
+    const charged = resolveAction(start, { type: "useSkill", servantId: 1, skillSlot: 1, effects: [gainNpEffect({ rawAmount: FULL_TD_POINT })], cooldownTurns: 5 }, CONSTANTS);
+    const firstNp: Action = {
+      type: "castNp", servantId: 1, targetNpcId: 9001, context: NP_CONTEXT,
+      chainCards: [{ type: BUSTER, servantId: 1, isNp: true }, { type: BUSTER, servantId: 1 }, { type: ARTS, servantId: 2 }], chainPosition: 1,
+    };
+    expect(() => resolveAction(charged, firstNp, CONSTANTS)).not.toThrow();
+    expect(resolveAction(playFirstCard(start), { type: "endTurn" }, CONSTANTS).npReadyAtChainSelection).toBeUndefined();
   });
 });

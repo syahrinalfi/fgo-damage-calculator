@@ -148,7 +148,8 @@ function advanceEnemyForEndTurn(enemy: EnemyInstance): EnemyInstance {
  * freshly-drawn hand, then itself reset to 0, so a Quick-led chain's bonus applies to
  * exactly one future turn's hand rather than persisting indefinitely.
  */
-function resolveEndTurn(state: BattleState, randomFn: () => number): BattleState {
+function resolveEndTurn(battleState: BattleState, randomFn: () => number): BattleState {
+  const { npReadyAtChainSelection: _chainSelection, ...state } = battleState;
   const servants = state.servants.map(advanceServantForEndTurn);
   const advancedEnemies = state.enemies.map(advanceEnemyForEndTurn);
   const nextWaveIndex = state.currentWaveIndex + 1;
@@ -534,6 +535,9 @@ function resolveCastNp(
   const servant = findServant(state, action.servantId);
   if (servant.currentNpGauge < FULL_TD_POINT) {
     throw new ActionUnavailableError(`Servant ${action.servantId} needs at least 100% NP gauge to cast, got ${servant.currentNpGauge}`);
+  }
+  if (state.npReadyAtChainSelection !== undefined && !state.npReadyAtChainSelection.has(action.servantId)) {
+    throw new ActionUnavailableError(`Servant ${action.servantId} was below 100% NP gauge when this turn's chain was chosen`);
   }
   const declaredTargetNpcIds = action.targetNpcIds ?? [action.targetNpcId];
   if (declaredTargetNpcIds.length === 0 || !declaredTargetNpcIds.includes(action.targetNpcId)) {
@@ -1182,6 +1186,13 @@ function resolveOrderChange(state: BattleState, action: Extract<Action, { type: 
  * lottery (`./critStarLottery.js`) and chain classification (`./chainDetection.js`) —
  * research/09 §7's "next increment" this pass built.
  */
+/** Records which servants can NP this turn the moment the attack chain starts resolving (see `BattleState.npReadyAtChainSelection`). */
+function withChainSelection(state: BattleState): BattleState {
+  if (state.npReadyAtChainSelection !== undefined) return state;
+  const ready = state.servants.filter((servant) => servant.currentNpGauge >= FULL_TD_POINT).map((servant) => servant.servantId);
+  return { ...state, npReadyAtChainSelection: new Set(ready) };
+}
+
 export function resolveAction(
   state: BattleState,
   action: Action,
@@ -1192,9 +1203,9 @@ export function resolveAction(
     case "endTurn":
       return resolveEndTurn(state, randomFn);
     case "playCard":
-      return resolvePlayCard(state, action, constants, randomFn);
+      return resolvePlayCard(withChainSelection(state), action, constants, randomFn);
     case "castNp":
-      return resolveCastNp(state, action, constants, randomFn);
+      return resolveCastNp(withChainSelection(state), action, constants, randomFn);
     case "playExtraCard":
       return resolvePlayExtraCard(state, action, constants, randomFn);
     case "useCommandSeal":

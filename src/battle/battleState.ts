@@ -232,6 +232,14 @@ export interface BattleState {
   /** Directly-consecutive NPs cast this turn with no non-NP card played in between (research/04 §5.5's NP Chain Bonus); resets to 0 on any non-NP `playCard`. */
   readonly consecutiveNpChainCount: number;
   /**
+   * Servants whose NP gauge was at least 100% when this turn's attack chain was chosen — taken
+   * as the turn's first card or NP resolves, after every skill, Mystic Code skill and Order
+   * Change. An NP card can only be selected from a full gauge, so gauge gained from cards or NPs
+   * earlier in the same chain can't make an NP castable that turn (confirmed by the project
+   * owner, 2026-11-08). Absent until the first attack of a turn; cleared by `endTurn`.
+   */
+  readonly npReadyAtChainSelection?: ReadonlySet<number>;
+  /**
    * Turns remaining before each of the Mystic Code's 3 skill slots is usable again; 0 =
    * ready — the account-wide equivalent of `ServantInstance.skillCooldowns` (research/07
    * §2/§4: a Mystic Code has the same 3-slot skill/cooldown shape as a servant).
