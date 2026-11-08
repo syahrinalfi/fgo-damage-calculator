@@ -1243,3 +1243,36 @@ describe("optimizeQuestMinimumTurns equivalence with a turn-by-turn reference", 
     });
   }
 });
+
+describe("interchangeable CE copies", () => {
+  it("searches each arrangement of identical copies once", () => {
+    const data = { id: 9400340, atkGrowth: [0, 0, 300], hpGrowth: [0, 0, 150], cost: 12 } as unknown as CraftEssence.CraftEssence;
+    const results = optimizeQuest({
+      shortlist: [candidate(1), candidate(2), candidate(3)],
+      cePool: [{ data, level: 1, limitBreakCount: 0, inventoryId: "a" }, { data, level: 1, limitBreakCount: 0, inventoryId: "b" }],
+      waves: [wave()],
+      costBudget: 1000,
+      constants: CONSTANTS,
+      resolveHitContext,
+      randomFn: () => 0,
+    });
+    // No CE (1) + one copy on any of 3 slots (3) + both copies on any 2 of 3 slots (3); 13 if copies were told apart.
+    expect(results).toHaveLength(7);
+    expect(results.filter((result) => result.party.filter((member) => member.equippedCe !== undefined).length === 2)
+      .every((result) => new Set(result.party.map((member) => member.equippedCe?.inventoryId).filter(Boolean)).size === 2)).toBe(true);
+  });
+
+  it("still tells copies apart when their level or limit break differs", () => {
+    const data = { id: 9400340, atkGrowth: [0, 0, 300], hpGrowth: [0, 0, 150], cost: 12 } as unknown as CraftEssence.CraftEssence;
+    const results = optimizeQuest({
+      shortlist: [candidate(1), candidate(2), candidate(3)],
+      cePool: [{ data, level: 1, limitBreakCount: 0, inventoryId: "a" }, { data, level: 2, limitBreakCount: 0, inventoryId: "b" }],
+      waves: [wave()],
+      costBudget: 1000,
+      constants: CONSTANTS,
+      resolveHitContext,
+      randomFn: () => 0,
+    });
+    expect(results).toHaveLength(13);
+  });
+});

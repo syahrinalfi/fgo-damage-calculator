@@ -76,6 +76,55 @@ export function enumerateCeAssignments<CE>(pool: readonly CE[], slotCount: numbe
 }
 
 /**
+ * `enumerateCeAssignments`, but copies with the same `keyOf` are treated as interchangeable:
+ * each arrangement of CE kinds is produced once, and a kind is used at most as many times as
+ * there are copies (each slot still gets a different copy, taken in pool order). Swapping two
+ * identical copies can't change a simulation, so this drops only repeated work. With no shared
+ * keys the output equals `enumerateCeAssignments` row for row.
+ */
+export function enumerateDistinctCeAssignments<CE>(
+  pool: readonly CE[],
+  slotCount: number,
+  keyOf: (ce: CE) => string,
+): readonly (readonly (CE | undefined)[])[] {
+  const kinds: CE[][] = [];
+  const kindByKey = new Map<string, CE[]>();
+  for (const ce of pool) {
+    const key = keyOf(ce);
+    const copies = kindByKey.get(key);
+    if (copies === undefined) {
+      const kind = [ce];
+      kindByKey.set(key, kind);
+      kinds.push(kind);
+    } else {
+      copies.push(ce);
+    }
+  }
+  const used: number[] = kinds.map(() => 0);
+  const results: (CE | undefined)[][] = [];
+  const current: (CE | undefined)[] = new Array(slotCount).fill(undefined);
+  function fillSlot(slotIndex: number): void {
+    if (slotIndex === slotCount) {
+      results.push([...current]);
+      return;
+    }
+    current[slotIndex] = undefined;
+    fillSlot(slotIndex + 1);
+    kinds.forEach((copies, kindIndex) => {
+      const usedCount = used[kindIndex] as number;
+      if (usedCount === copies.length) return;
+      current[slotIndex] = copies[usedCount];
+      used[kindIndex] = usedCount + 1;
+      fillSlot(slotIndex + 1);
+      used[kindIndex] = usedCount;
+    });
+    current[slotIndex] = undefined;
+  }
+  fillSlot(0);
+  return results;
+}
+
+/**
  * Every ordered selection of `selectCount` distinct items from `items` (an "n permute r,"
  * `nPr = n!/(n-r)!`) — research/09 §4's "card-play order per turn" axis: pass a turn's
  * `handCards` (or their indices) as `items` and the number of cards the candidate plans to

@@ -10,7 +10,7 @@ import { resolveSkillActivationOptions, type ServantSkillSource } from "../battl
 import { isQuestCleared } from "../battle/turnLoop.js";
 import type { Wave } from "../quest/types.js";
 import { buildInitialBattleState, partyMemberBattleId, supportBattleId, type PartyMemberSpec } from "./battleStateBuilder.js";
-import { enumerateCeAssignments, enumeratePartyFormations } from "./candidateGeneration.js";
+import { enumerateDistinctCeAssignments, enumeratePartyFormations } from "./candidateGeneration.js";
 import { buildAttackChainCandidates, type NpAttackOption } from "./cardOrderCandidates.js";
 import { resolveNpAttackOption } from "./npActivationResolver.js";
 import { selectNoblePhantasmVersion } from "./npVersionSelection.js";
@@ -55,7 +55,7 @@ export interface QuestOptimizerOptions {
    * and NP paths resolve a support from its own data; explicit resolvers receive its battle id.
    */
   readonly supportCandidates?: readonly ServantCandidate[];
-  /** Owned CE copies eligible to equip — every no-reuse assignment of this pool to every fielded slot (front-line plus any benched sub-members) is tried (`enumerateCeAssignments`), including leaving a slot bare. */
+  /** Owned CE copies eligible to equip — every no-reuse assignment of this pool to every owned fielded slot (front-line plus any benched sub-members) is tried, including leaving a slot bare; copies with the same CE, level and limit break are interchangeable and tried once per arrangement (`enumerateDistinctCeAssignments`). */
   readonly cePool: readonly EquippedCraftEssence[];
   readonly waves: readonly Wave[];
   readonly costBudget: number;
@@ -175,6 +175,11 @@ export interface QuestOptimizerOptions {
   readonly commandSealsRemaining?: number;
   readonly fieldTraits?: ReadonlySet<number>;
   readonly randomFn?: () => number;
+}
+
+/** Copies of the same CE at the same level and limit break simulate identically, so the search tries one arrangement of them, not every copy order. */
+function ceCopyKey(ce: EquippedCraftEssence): string {
+  return `${ce.data.id}:${ce.level}:${ce.limitBreakCount ?? "-"}`;
 }
 
 interface PartySlot {
@@ -309,7 +314,7 @@ function* partySearches(options: QuestOptimizerOptions, randomFn: () => number):
   const ceAssignmentsForSlotCount = (slotCount: number): readonly (readonly (EquippedCraftEssence | undefined)[])[] => {
     const cached = ceAssignmentsBySlotCount.get(slotCount);
     if (cached !== undefined) return cached;
-    const computed = enumerateCeAssignments(options.cePool, slotCount);
+    const computed = enumerateDistinctCeAssignments(options.cePool, slotCount, ceCopyKey);
     ceAssignmentsBySlotCount.set(slotCount, computed);
     return computed;
   };

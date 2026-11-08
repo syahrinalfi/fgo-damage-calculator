@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   enumerateCeAssignments,
+  enumerateDistinctCeAssignments,
   enumerateOrderChangeTimings,
   enumerateOrderedSelections,
   enumeratePartyFormations,
@@ -174,5 +175,32 @@ describe("enumeratePartyFormations", () => {
 
   it("returns no formations when the shortlist is smaller than frontLineCount", () => {
     expect(enumeratePartyFormations(["a", "b"], 3, 3)).toEqual([]);
+  });
+});
+
+describe("enumerateDistinctCeAssignments", () => {
+  const byName = (copy: { readonly name: string }) => copy.name;
+
+  it("matches enumerateCeAssignments exactly, in order, when no two copies are interchangeable", () => {
+    const pool = [{ name: "A" }, { name: "B" }, { name: "C" }];
+    expect(enumerateDistinctCeAssignments(pool, 3, byName)).toEqual(enumerateCeAssignments(pool, 3));
+  });
+
+  it("tries interchangeable copies once per arrangement, still using a different copy in each slot", () => {
+    const first = { name: "Kaleidoscope", copy: 1 };
+    const second = { name: "Kaleidoscope", copy: 2 };
+    const result = enumerateDistinctCeAssignments([first, second], 2, byName);
+    expect(result).toEqual([
+      [undefined, undefined],
+      [undefined, first],
+      [first, undefined],
+      [first, second],
+    ]);
+    expect(enumerateCeAssignments([first, second], 2)).toHaveLength(7);
+  });
+
+  it("never assigns more copies of a kind than are owned", () => {
+    const only = { name: "Black Grail" };
+    expect(enumerateDistinctCeAssignments([only], 3, byName).every((row) => row.filter((ce) => ce === only).length <= 1)).toBe(true);
   });
 });

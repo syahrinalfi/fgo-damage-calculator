@@ -6,6 +6,7 @@ export { damageDealtAtSlot, negativeRemainingHpAtSlot, questProgress } from "./o
 export {
   enumerateServantSubsets,
   enumerateCeAssignments,
+  enumerateDistinctCeAssignments,
   enumerateOrderedSelections,
   enumerateSkillUsageSubsets,
   enumerateOrderChangeTimings,
