@@ -1003,6 +1003,15 @@ describe("optimizeQuestMinimumTurns", () => {
     expect(rolls(false)?.some((roll) => roll !== 0.9)).toBe(true);
   });
 
+  it("plans charge without face-card refund unless face-card finishes are allowed", () => {
+    const base = { shortlist: [candidate(1), candidate(2), candidate(3)], cePool: [], waves: [wave()], costBudget: 1000, constants: CONSTANTS, resolveHitContext, turnCount: 1, randomFn: () => 0.5 } as const;
+    const faceCardRates = (allowFaceCardFinishes: boolean) =>
+      optimizeQuest({ ...base, allowFaceCardFinishes })[0]?.best.actions.flatMap((action) => (action.type === "playCard" || action.type === "playExtraCard" ? [action.context.offensiveNPRate] : []));
+    expect(faceCardRates(false)?.length).toBeGreaterThan(0);
+    expect(faceCardRates(false)?.every((rate) => rate === 0)).toBe(true);
+    expect(faceCardRates(true)?.some((rate) => rate > 0)).toBe(true);
+  });
+
   it("uses Event CE preference to choose among otherwise equivalent strategies", () => {
     const eventCe = {
       data: { id: 777, atkGrowth: [0, 0], hpGrowth: [0, 0], cost: 1 } as unknown as CraftEssence.CraftEssence,

@@ -184,9 +184,10 @@ export interface QuestOptimizerOptions {
    */
   readonly searchLevel?: "quick" | "thorough";
   /**
-   * Let a face card or Extra Attack land a wave's clearing blow in multi-turn searches. Off by
-   * default: a line that needs particular face cards on a later turn depends on that turn's
-   * dealt hand, so by default every wave must fall to NPs (project owner's direction).
+   * Let face cards decide a line in multi-turn searches. Off by default (project owner's
+   * direction): a line that needs particular face cards depends on the dealt hand, so by default
+   * every wave must fall to NPs and face cards count for no NP gain while the search plans the
+   * next NP (the NP's own refund still counts). Finalist replays always use real refund.
    */
   readonly allowFaceCardFinishes?: boolean;
   /**
@@ -314,6 +315,8 @@ interface PartySearch {
   readonly party: readonly PartyMemberSpec[];
   readonly initialState: BattleState;
   readonly buildCandidatesForState: (state: BattleState) => FactoredTurnCandidates;
+  /** The chains really playable from `state` with no Order Change, without the search's pessimistic adjustments, for finalist replays. */
+  readonly buildReplayChains: (state: BattleState) => readonly ActionSequenceCandidate[];
 }
 
 type CoarseQuestResult = Pick<QuestOptimizerCandidate, "party" | "initialState" | "best">;
@@ -337,6 +340,7 @@ function* partySearches(options: QuestOptimizerOptions, randomFn: () => number):
   const resolveSkillOptions = options.resolveSkillOptions;
   const quickAttackerId = quickSearchAttacker(options);
   const minimumDamageRoll = options.minimumDamageRoll ?? options.searchLevel === "quick";
+  const faceCardFinishes = options.allowFaceCardFinishes === true;
   const defaultTargetServantId = options.defaultTargetServantId;
   const resolveSkillOptionSetsFn: ((state: BattleState) => readonly (readonly SkillActivation[])[]) | undefined =
     resolveSkillOptions !== undefined
@@ -423,7 +427,10 @@ function* partySearches(options: QuestOptimizerOptions, randomFn: () => number):
       // needed here — for a single-turn search (`turnCount` omitted), this is called exactly
       // once with `initialState` itself, so behavior is unchanged from before this option
       // existed.
-      const buildCandidatesForState = (state: BattleState): FactoredTurnCandidates => {
+      // `forSearch` applies the search's pessimistic view of attacks: the minimum damage roll, and
+      // (unless face-card finishes are allowed) no NP gain from face cards, whose refund depends on
+      // the dealt hand. Replays use the real values.
+      const buildTurn = (state: BattleState, forSearch: boolean): FactoredTurnCandidates => {
         const configuredTarget = options.targetEnemySlotIndex === undefined ? undefined : state.enemies[options.targetEnemySlotIndex];
         const targetEnemy = configuredTarget?.currentHp !== undefined && configuredTarget.currentHp > 0
           ? configuredTarget
@@ -474,8 +481,14 @@ function* partySearches(options: QuestOptimizerOptions, randomFn: () => number):
             targetEnemy.npcId,
             (servantId) => resolveHitContext({ card: Card.EXTRA, servantId }),
           );
-          const cardCandidates = minimumDamageRoll
-            ? builtChains.map((chain) => ({ label: chain.label, actions: chain.actions.map((action) => randomizeAttack(action, () => 0)) }))
+          const adjust = (action: Action): Action => {
+            const rolled = forSearch && minimumDamageRoll ? randomizeAttack(action, () => 0) : action;
+            return forSearch && !faceCardFinishes && (rolled.type === "playCard" || rolled.type === "playExtraCard")
+              ? { ...rolled, context: { ...rolled.context, offensiveNPRate: 0 } }
+              : rolled;
+          };
+          const cardCandidates = forSearch && (minimumDamageRoll || !faceCardFinishes)
+            ? builtChains.map((chain) => ({ label: chain.label, actions: chain.actions.map(adjust) }))
             : builtChains;
           if (resolveSkillOptionSetsFn === undefined) return { setups: [{ label: "", actions: [] }], chains: cardCandidates };
           const setups = new Map<string, ActionSequenceCandidate>();
@@ -496,7 +509,12 @@ function* partySearches(options: QuestOptimizerOptions, randomFn: () => number):
             };
       };
 
-      yield { party, initialState, buildCandidatesForState };
+      yield {
+        party,
+        initialState,
+        buildCandidatesForState: (state) => buildTurn(state, true),
+        buildReplayChains: (state) => buildTurn(state, false).groups[0]?.chains ?? [],
+      };
     }
   }
 }
@@ -654,7 +672,7 @@ export function optimizeQuestMinimumTurns(options: MinimumTurnOptimizerOptions):
       : found.cleared.map((candidate) => {
           const search = searchByParty.get(candidate.party);
           // A turn's first group holds its chains without an Order Change; the line's own swap is replayed as setup.
-          const chainsForState = (state: BattleState) => search?.buildCandidatesForState(state).groups[0]?.chains ?? [];
+          const chainsForState = (state: BattleState) => search?.buildReplayChains(state) ?? [];
           return { ...candidate, reliability: estimatePlayedLineReliability(candidate, chainsForState, options.constants, finalistReliability) };
         });
     return {
