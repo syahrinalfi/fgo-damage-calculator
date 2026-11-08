@@ -1,6 +1,7 @@
 import { Card } from "@atlasacademy/api-connector";
 import type { Action, AttackChainCard, DerivedHitContext } from "../battle/action.js";
 import type { HandCard } from "../battle/battleState.js";
+import { classifyChain, isArtsChainFrom } from "../battle/chainDetection.js";
 import { enumerateOrderedSelections } from "./candidateGeneration.js";
 import type { ActionSequenceCandidate } from "./turnSearch.js";
 
@@ -179,4 +180,16 @@ function sequentialMixedHandCardIndices(ordering: readonly AttackSource[], handS
     remaining.splice(at, 1);
     return at;
   });
+}
+
+/**
+ * Whether an attack chain's NP charge depends on which cards were dealt: it forms an Arts Chain
+ * (+20% NP gauge only with three Arts cards), or a face card is played before an NP (changing the
+ * NP's overkill refund). The dependable optimizer search plans neither.
+ */
+export function dependsOnDealtCards(actions: readonly Action[]): boolean {
+  const first = actions.find((action) => action.type === "playCard" || action.type === "castNp");
+  if (first !== undefined && "chainCards" in first && isArtsChainFrom(classifyChain(first.chainCards))) return true;
+  const lastNp = actions.map((action) => action.type).lastIndexOf("castNp");
+  return actions.slice(0, Math.max(lastNp, 0)).some((action) => action.type === "playCard");
 }

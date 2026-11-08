@@ -6,12 +6,12 @@ import type { BattleConstants } from "../battle/gameConstants.js";
 import { FRONT_LINE_SERVANT_COUNT } from "../battle/cardDeck.js";
 import { resolveCardHitContext } from "../battle/hitContextResolver.js";
 import { resolveOrderChangeSwapOptions } from "../battle/orderChangeSwapResolver.js";
-import { resolveSkillActivationOptions, type ServantSkillSource } from "../battle/skillActivationResolver.js";
+import { resolveMysticCodeActivationOptions, resolveSkillActivationOptions, type MysticCodeSkillSource, type ServantSkillSource } from "../battle/skillActivationResolver.js";
 import { isQuestCleared, resolveAction } from "../battle/turnLoop.js";
 import type { Wave } from "../quest/types.js";
 import { buildInitialBattleState, partyMemberBattleId, supportBattleId, type PartyMemberSpec } from "./battleStateBuilder.js";
 import { enumerateDistinctCeAssignments, enumeratePartyFormations, type OrderChangeChoice } from "./candidateGeneration.js";
-import { buildAttackChainCandidates, type NpAttackOption } from "./cardOrderCandidates.js";
+import { buildAttackChainCandidates, dependsOnDealtCards, type NpAttackOption } from "./cardOrderCandidates.js";
 import { resolveNpAttackOption } from "./npActivationResolver.js";
 import { selectNoblePhantasmVersion } from "./npVersionSelection.js";
 import {
@@ -186,10 +186,18 @@ export interface QuestOptimizerOptions {
   /**
    * Let face cards decide a line in multi-turn searches. Off by default (project owner's
    * direction): a line that needs particular face cards depends on the dealt hand, so by default
-   * every wave must fall to NPs and face cards count for no NP gain while the search plans the
-   * next NP (the NP's own refund still counts). Finalist replays always use real refund.
+   * every wave must fall to NPs, NPs are played before face cards, and while planning the next NP
+   * the search counts no NP gain from face cards and plans no Arts Chain (the NP's own refund
+   * still counts). Finalist replays always use the real cards.
    */
   readonly allowFaceCardFinishes?: boolean;
+  /**
+   * The equipped Mystic Code's skills and level, searched alongside servant skills when
+   * `skillSources` drives the skill axis (ignored with a caller's own `resolveSkillOptions`).
+   * Single-ally Mystic Code skills go to the turn's focus target (the attacker on the quick level).
+   * Order Change stays on its own axis (`hasOrderChangeMysticCodeSkill`).
+   */
+  readonly mysticCode?: MysticCodeSkillSource;
   /**
    * Simulate every attack at the lowest damage roll (0.9) so a line only counts as a clear when it
    * clears even on low rolls. Card draws and crits are unchanged. Defaults to on for the quick
@@ -339,6 +347,11 @@ function* partySearches(options: QuestOptimizerOptions, randomFn: () => number):
       ];
   const resolveSkillOptions = options.resolveSkillOptions;
   const quickAttackerId = quickSearchAttacker(options);
+  const mysticCode = options.mysticCode;
+  const firstFrontLine = (state: BattleState): number | undefined => state.servants.find((servant) => servant.isFrontLine)?.servantId;
+  /** Adds the Mystic Code's usable skills, single-ally ones aimed at `target`. */
+  const withMysticCode = (state: BattleState, servantOptions: readonly SkillActivation[], target: number | undefined): readonly SkillActivation[] =>
+    mysticCode === undefined || target === undefined ? servantOptions : [...servantOptions, ...resolveMysticCodeActivationOptions(state, mysticCode, target)];
   const minimumDamageRoll = options.minimumDamageRoll ?? options.searchLevel === "quick";
   const faceCardFinishes = options.allowFaceCardFinishes === true;
   const defaultTargetServantId = options.defaultTargetServantId;
@@ -348,16 +361,17 @@ function* partySearches(options: QuestOptimizerOptions, randomFn: () => number):
       : skillSources === undefined
         ? undefined
         : defaultTargetServantId !== undefined
-          ? (state) => [resolveSkillActivationOptions(state, skillSources, { defaultTargetServantId })]
+          ? (state) => [withMysticCode(state, resolveSkillActivationOptions(state, skillSources, { defaultTargetServantId }), firstFrontLine(state))]
           : quickAttackerId !== undefined
             ? (state) => {
                 const attackerOnField = state.servants.some((servant) => servant.servantId === quickAttackerId && servant.isFrontLine);
-                return [resolveSkillActivationOptions(state, skillSources, { defaultTargetServantId: (casterId) => (attackerOnField ? quickAttackerId : casterId) })];
+                const servantOptions = resolveSkillActivationOptions(state, skillSources, { defaultTargetServantId: (casterId) => (attackerOnField ? quickAttackerId : casterId) });
+                return [withMysticCode(state, servantOptions, attackerOnField ? quickAttackerId : firstFrontLine(state))];
               }
             : (state) =>
               state.servants
                 .filter((servant) => servant.isFrontLine)
-                .map((focus) => resolveSkillActivationOptions(state, skillSources, { defaultTargetServantId: () => focus.servantId }));
+                .map((focus) => withMysticCode(state, resolveSkillActivationOptions(state, skillSources, { defaultTargetServantId: () => focus.servantId }), focus.servantId));
   // A caller's own swap resolver is searched with both timings. The default swaps the way it is
   // played: the outgoing servant first uses whatever skills it has left, then leaves, then the
   // party (with the newcomer) picks its skills.
@@ -487,9 +501,14 @@ function* partySearches(options: QuestOptimizerOptions, randomFn: () => number):
               ? { ...rolled, context: { ...rolled.context, offensiveNPRate: 0 } }
               : rolled;
           };
-          const cardCandidates = forSearch && (minimumDamageRoll || !faceCardFinishes)
-            ? builtChains.map((chain) => ({ label: chain.label, actions: chain.actions.map(adjust) }))
+          // An Arts Chain's +20% NP gauge depends on being dealt three Arts cards, and face cards
+          // played before an NP change its overkill refund, so the dependable search plans neither.
+          const dependableChains = forSearch && !faceCardFinishes
+            ? builtChains.filter((chain) => !dependsOnDealtCards(chain.actions))
             : builtChains;
+          const cardCandidates = forSearch && (minimumDamageRoll || !faceCardFinishes)
+            ? dependableChains.map((chain) => ({ label: chain.label, actions: chain.actions.map(adjust) }))
+            : dependableChains;
           if (resolveSkillOptionSetsFn === undefined) return { setups: [{ label: "", actions: [] }], chains: cardCandidates };
           const setups = new Map<string, ActionSequenceCandidate>();
           for (const skillOptions of resolveSkillOptionSetsFn(skillState)) {

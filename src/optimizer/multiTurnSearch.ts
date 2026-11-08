@@ -168,20 +168,21 @@ export function startBeam(initialState: BattleState, scoreFn: SequenceScoreFn): 
 }
 
 /**
- * Best score first. Among equal scores (e.g. every line that cleared the wave), the line that kept
- * more resources: less total skill cooldown left to wait out, then more NP gauge. Without this,
- * ties are kept in arbitrary order and a line that saved its charge skills for later turns can
- * fall out of the beam.
+ * Best score first. Among equal scores (e.g. every line that cleared the wave): more NP gauge on
+ * the servants who cast NPs in the line (an Arts looper's refund charging the next NP), then less
+ * total skill cooldown left to wait out (charge skills saved for later turns). Without this, ties
+ * are kept in arbitrary order and the line that sets up the next turns can fall out of the beam.
  */
 const byScoreDescending = (a: BeamEntry, b: BeamEntry): number =>
-  b.score - a.score || totalCooldown(a.state) - totalCooldown(b.state) || totalNpGauge(b.state) - totalNpGauge(a.state);
+  b.score - a.score || npCasterGauge(b) - npCasterGauge(a) || totalCooldown(a.state) - totalCooldown(b.state);
 
 function totalCooldown(state: BattleState): number {
   return state.servants.reduce((sum, servant) => sum + servant.skillCooldowns[0] + servant.skillCooldowns[1] + servant.skillCooldowns[2], 0);
 }
 
-function totalNpGauge(state: BattleState): number {
-  return state.servants.reduce((sum, servant) => sum + servant.currentNpGauge, 0);
+function npCasterGauge(entry: BeamEntry): number {
+  const casters = new Set(entry.turnActions.flat().flatMap((action) => (action.type === "castNp" ? [action.servantId] : [])));
+  return entry.state.servants.reduce((sum, servant) => sum + (casters.has(servant.servantId) ? servant.currentNpGauge : 0), 0);
 }
 
 /** One attack chain after a setup; `full` is the caller's own candidate when it was given unfactored. */

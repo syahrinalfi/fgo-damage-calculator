@@ -14,7 +14,7 @@ export type SkillActivation = Extract<Action, { readonly type: "useSkill" | "use
 
 function labelForSkillActivation(action: SkillActivation): string {
   const target = action.targetServantId === undefined ? "" : `>${action.targetServantId}`;
-  return action.type === "useSkill" ? `useSkill:${action.servantId}.${action.skillSlot}${target}` : `useMysticCodeSkill:${action.slot}`;
+  return action.type === "useSkill" ? `useSkill:${action.servantId}.${action.skillSlot}${target}` : `useMysticCodeSkill:${action.slot}${target}`;
 }
 
 /**

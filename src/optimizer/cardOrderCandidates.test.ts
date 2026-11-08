@@ -4,7 +4,7 @@ import type { Action, DerivedHitContext } from "../battle/action.js";
 import type { BattleState, EnemyInstance, HandCard, ServantInstance } from "../battle/battleState.js";
 import { BUFF_ACTION_KEYS } from "../battle/buffActionKeys.js";
 import type { BattleConstants } from "../battle/gameConstants.js";
-import { buildAttackChainCandidates, buildCardOrderCandidates, type NpAttackOption } from "./cardOrderCandidates.js";
+import { buildAttackChainCandidates, buildCardOrderCandidates, dependsOnDealtCards, type NpAttackOption } from "./cardOrderCandidates.js";
 import { damageDealtAtSlot } from "./objectives.js";
 import { searchBestActionSequence } from "./turnSearch.js";
 
@@ -276,5 +276,27 @@ describe("buildCardOrderCandidates — end to end with searchBestActionSequence"
     for (let i = 1; i < results.length; i++) {
       expect(results[i - 1]?.score).toBeGreaterThanOrEqual(results[i]?.score ?? -Infinity);
     }
+  });
+});
+
+describe("dependsOnDealtCards", () => {
+  const np = (servantId: number, chainCards: Extract<Action, { type: "castNp" }>["chainCards"]): Action => ({ type: "castNp", servantId, targetNpcId: 1, context: {} as DerivedHitContext, chainCards, chainPosition: 1 });
+  const card = (chainCards: Extract<Action, { type: "playCard" }>["chainCards"], chainPosition: 1 | 2 | 3): Action => ({ type: "playCard", servantId: 2, handCardIndex: 0, targetNpcId: 1, context: {} as DerivedHitContext, chainCards, chainPosition });
+  const ARTS = "1" as Card;
+  const BUSTER = "2" as Card;
+
+  it("flags an Arts Chain built around an NP", () => {
+    const chain = [{ type: ARTS, servantId: 1, isNp: true as const }, { type: ARTS, servantId: 2 }, { type: ARTS, servantId: 3 }];
+    expect(dependsOnDealtCards([np(1, chain), card(chain, 2), card(chain, 3)])).toBe(true);
+  });
+
+  it("flags a face card played before an NP", () => {
+    const chain = [{ type: BUSTER, servantId: 2 }, { type: ARTS, servantId: 1, isNp: true as const }, { type: BUSTER, servantId: 3 }];
+    expect(dependsOnDealtCards([card(chain, 1), np(1, chain), card(chain, 3)])).toBe(true);
+  });
+
+  it("accepts an NP first with face cards that do not form an Arts Chain", () => {
+    const chain = [{ type: ARTS, servantId: 1, isNp: true as const }, { type: BUSTER, servantId: 2 }, { type: ARTS, servantId: 3 }];
+    expect(dependsOnDealtCards([np(1, chain), card(chain, 2), card(chain, 3)])).toBe(false);
   });
 });

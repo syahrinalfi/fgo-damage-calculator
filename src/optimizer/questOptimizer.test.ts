@@ -822,6 +822,26 @@ describe("optimizeQuest", () => {
     });
   });
 
+  it("searches the equipped Mystic Code's skills and aims a single-ally one at the attacker", () => {
+    const allyAtkUpFunc = {
+      funcId: 5, funcType: Func.FuncType.ADD_STATE, funcTargetType: Func.FuncTargetType.PT_ONE, funcTargetTeam: Func.FuncTargetTeam.PLAYER,
+      functvals: [], funcquestTvals: [], overWriteTvalsList: [], funcPopupText: "",
+      buffs: [{ type: "upAtk" as Buff.BuffType, buffGroup: 0, vals: [], ckSelfIndv: [], ckOpIndv: [] } as unknown as Buff.Buff],
+      svals: [{ Value: 1000, Turn: 1 }],
+    } as unknown as Func.Func;
+    const none: Skill.Skill["functions"] = [];
+    const noSkills = (servantId: number): ServantSkillSource => ({ servantId, skills: [{ skill: { functions: none, coolDown: [5] }, level: 1 }, { skill: { functions: none, coolDown: [5] }, level: 1 }, { skill: { functions: none, coolDown: [5] }, level: 1 }] });
+    const strong: ServantCandidate = { niceServant: niceServant({ atkGrowth: [0, 20000, 40000] }), build: build(1) };
+    const tough = wave({ initialEnemies: [waveEnemy({ hp: 50_000_000 })], enemyPool: [waveEnemy({ hp: 50_000_000 })] });
+    const results = optimizeQuest({
+      shortlist: [strong, candidate(2), candidate(3)], cePool: [], waves: [tough], costBudget: 1000, constants: CONSTANTS, resolveHitContext,
+      skillSources: [noSkills(1), noSkills(2), noSkills(3)],
+      mysticCode: { skills: [{ functions: [allyAtkUpFunc], coolDown: [10] }], level: 1 },
+      randomFn: () => 0,
+    });
+    expect(results[0]?.best.actions.find((action) => action.type === "useMysticCodeSkill")).toMatchObject({ slot: 1, targetServantId: 1 });
+  });
+
   it("wires hasOrderChangeMysticCodeSkill through without changing results when there is no benched sub-member to swap in", () => {
     const options = {
       shortlist: [candidate(1), candidate(2), candidate(3)],
@@ -992,6 +1012,10 @@ describe("optimizeQuestMinimumTurns", () => {
     expect(finalist?.best.actions.some((action) => action.type === "castNp")).toBe(true);
     expect(finalist?.reliability?.clearProbability).toBe(1);
     expect(estimateQuestCandidateReliability(finalist!, CONSTANTS, { trialCount: 20, seed: 7 }).clearProbability).toBeLessThan(1);
+    const attacks = finalist?.best.actions.filter((action) => action.type === "playCard" || action.type === "castNp") ?? [];
+    expect(attacks[0]?.type).toBe("castNp");
+    const chainTypes = attacks[0] !== undefined && "chainCards" in attacks[0] ? attacks[0].chainCards.map((card) => card.type) : [];
+    expect(chainTypes.every((type) => type === "1")).toBe(false);
   });
 
   it("can search every attack at the minimum damage roll", () => {
