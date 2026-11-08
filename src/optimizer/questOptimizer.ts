@@ -7,10 +7,10 @@ import { FRONT_LINE_SERVANT_COUNT } from "../battle/cardDeck.js";
 import { resolveCardHitContext } from "../battle/hitContextResolver.js";
 import { resolveOrderChangeSwapOptions } from "../battle/orderChangeSwapResolver.js";
 import { resolveSkillActivationOptions, type ServantSkillSource } from "../battle/skillActivationResolver.js";
-import { isQuestCleared } from "../battle/turnLoop.js";
+import { isQuestCleared, resolveAction } from "../battle/turnLoop.js";
 import type { Wave } from "../quest/types.js";
 import { buildInitialBattleState, partyMemberBattleId, supportBattleId, type PartyMemberSpec } from "./battleStateBuilder.js";
-import { enumerateDistinctCeAssignments, enumeratePartyFormations } from "./candidateGeneration.js";
+import { enumerateDistinctCeAssignments, enumeratePartyFormations, type OrderChangeChoice } from "./candidateGeneration.js";
 import { buildAttackChainCandidates, type NpAttackOption } from "./cardOrderCandidates.js";
 import { resolveNpAttackOption } from "./npActivationResolver.js";
 import { selectNoblePhantasmVersion } from "./npVersionSelection.js";
@@ -21,12 +21,15 @@ import {
   searchMultiTurnActionSequences,
   startBeam,
   validateMultiTurnSearchOptions,
+  flattenTurnCandidates,
+  type FactoredTurnCandidates,
   type MultiTurnResult,
+  type TurnCandidateGroup,
 } from "./multiTurnSearch.js";
 import { questProgress } from "./objectives.js";
-import { buildOrderChangeCandidates, type OrderChangeSwap } from "./orderChangeCandidates.js";
+import { buildOrderChangeGroups, swapsOutSpentServants, type OrderChangeSwap } from "./orderChangeCandidates.js";
 import { skillSourceFor } from "./rosterInputs.js";
-import { buildSkillAndCardOrderCandidates, type SkillActivation } from "./skillUsageCandidates.js";
+import { buildSkillSetups, type SkillActivation } from "./skillUsageCandidates.js";
 import { searchBestActionSequence, type ActionSequenceCandidate, type ActionSequenceResult, type SequenceScoreFn } from "./turnSearch.js";
 import {
   attributeQuestCandidate,
@@ -106,7 +109,10 @@ export interface QuestOptimizerOptions {
   readonly resolveNpOptions?: (state: BattleState, targetEnemy: EnemyInstance) => readonly NpAttackOption[];
   /** Explicit NiceNp override per servant. When omitted, the shortlisted servant's account build selects its legal NP version. Ignored when `resolveNpOptions` is supplied. */
   readonly npByServantId?: (servantId: number) => NoblePhantasm.NoblePhantasm | undefined;
-  /** Passthrough for the automatic skill-usage resolver's own `defaultTargetServantId` config — see that resolver's doc comment. Ignored unless `skillSources` is actually used (i.e. `resolveSkillOptions` is omitted). */
+  /**
+   * Passthrough for the automatic skill-usage resolver's own `defaultTargetServantId` config — see that resolver's doc comment. Ignored unless `skillSources` is actually used (i.e. `resolveSkillOptions` is omitted).
+   * When omitted, each turn is searched once per front-line servant as the focus target of every single-ally (`ptOne`) skill used that turn — how support skills are normally stacked on one attacker. Splitting single-ally skills across two different targets in one turn is not searched.
+   */
   readonly defaultTargetServantId?: (actingServantId: number) => number;
   /**
    * Resolves this party candidate's available (off-cooldown, live-sub-member) Order Change
@@ -167,6 +173,16 @@ export interface QuestOptimizerOptions {
   readonly scoreFn?: SequenceScoreFn;
   /** Beam retained after each simulated turn; defaults to a bounded 256-line frontier. */
   readonly beamWidth?: number;
+  /** Setups per turn that get every attack chain searched (`MultiTurnSearchOptions.fineSetupCount`); defaults to 32 (8 for the quick level). */
+  readonly fineSetupCount?: number;
+  /**
+   * How widely to search. `"thorough"` (default) tries every party, CE placement and single-ally
+   * skill target. `"quick"` (search level 1) needs `preferences.preferredAttackerId`: it only
+   * fields parties with that owned attacker on the front line, puts CEs on the attacker alone,
+   * aims every single-ally skill at the attacker while it is on the field, and defaults to a
+   * beam of 16 lines and 8 fully searched setups per turn.
+   */
+  readonly searchLevel?: "quick" | "thorough";
   /** Hard cap on distinct servants performing damaging actions across the searched line. */
   readonly maxAttackerCount?: number;
   readonly preferences?: QuestOptimizerPreferences;
@@ -257,11 +273,27 @@ function searchSettings(options: QuestOptimizerOptions): SearchSettings {
   return { scoreFn: options.scoreFn ?? questProgress(), randomFn: options.randomFn ?? Math.random, attributionPoolSize };
 }
 
+/** The attacker a `"quick"` search is built around; throws when the quick level has none. */
+function quickSearchAttacker(options: QuestOptimizerOptions): number | undefined {
+  if (options.searchLevel !== "quick") return undefined;
+  const attackerId = options.preferences?.preferredAttackerId;
+  if (attackerId === undefined) throw new RangeError('searchLevel "quick" needs preferences.preferredAttackerId');
+  return attackerId;
+}
+
+/** Explicit beam settings, else the quick level's narrower defaults, else the search's own defaults. */
+function beamWidths(options: QuestOptimizerOptions): { beamWidth?: number; fineSetupCount?: number } {
+  const quick = options.searchLevel === "quick";
+  const beamWidth = options.beamWidth ?? (quick ? 16 : undefined);
+  const fineSetupCount = options.fineSetupCount ?? (quick ? 8 : undefined);
+  return { ...(beamWidth === undefined ? {} : { beamWidth }), ...(fineSetupCount === undefined ? {} : { fineSetupCount }) };
+}
+
 /** One within-budget party (formation × CE assignment) ready to search, with its per-turn candidate builder. */
 interface PartySearch {
   readonly party: readonly PartyMemberSpec[];
   readonly initialState: BattleState;
-  readonly buildCandidatesForState: (state: BattleState) => readonly ActionSequenceCandidate[];
+  readonly buildCandidatesForState: (state: BattleState) => FactoredTurnCandidates;
 }
 
 type CoarseQuestResult = Pick<QuestOptimizerCandidate, "party" | "initialState" | "best">;
@@ -282,22 +314,40 @@ function* partySearches(options: QuestOptimizerOptions, randomFn: () => number):
           servantId: supportBattleId(support.build.servantId),
         })),
       ];
-  const resolveSkillOptionsFn =
-    options.resolveSkillOptions ??
-    (skillSources === undefined
-      ? undefined
-      : (state: BattleState) =>
-          resolveSkillActivationOptions(state, skillSources, {
-            ...(options.defaultTargetServantId !== undefined ? { defaultTargetServantId: options.defaultTargetServantId } : {}),
-          }));
+  const resolveSkillOptions = options.resolveSkillOptions;
+  const quickAttackerId = quickSearchAttacker(options);
+  const defaultTargetServantId = options.defaultTargetServantId;
+  const resolveSkillOptionSetsFn: ((state: BattleState) => readonly (readonly SkillActivation[])[]) | undefined =
+    resolveSkillOptions !== undefined
+      ? (state) => [resolveSkillOptions(state)]
+      : skillSources === undefined
+        ? undefined
+        : defaultTargetServantId !== undefined
+          ? (state) => [resolveSkillActivationOptions(state, skillSources, { defaultTargetServantId })]
+          : quickAttackerId !== undefined
+            ? (state) => {
+                const attackerOnField = state.servants.some((servant) => servant.servantId === quickAttackerId && servant.isFrontLine);
+                return [resolveSkillActivationOptions(state, skillSources, { defaultTargetServantId: (casterId) => (attackerOnField ? quickAttackerId : casterId) })];
+              }
+            : (state) =>
+              state.servants
+                .filter((servant) => servant.isFrontLine)
+                .map((focus) => resolveSkillActivationOptions(state, skillSources, { defaultTargetServantId: () => focus.servantId }));
+  // A caller's own swap resolver is searched in full; the default prunes to swapping out a spent
+  // servant before skills (`swapsOutSpentServants`).
+  const pruneOrderChange = options.resolveOrderChangeOptions === undefined;
   const resolveOrderChangeOptionsFn =
     options.resolveOrderChangeOptions ??
     (options.hasOrderChangeMysticCodeSkill === undefined
       ? undefined
-      : (state: BattleState) => resolveOrderChangeSwapOptions(state, options.hasOrderChangeMysticCodeSkill as boolean));
+      : (state: BattleState) => {
+          const withSkills = new Set((resolveSkillOptionSetsFn?.(state) ?? []).flat().flatMap((activation) => (activation.type === "useSkill" ? [activation.servantId] : [])));
+          return swapsOutSpentServants(resolveOrderChangeSwapOptions(state, options.hasOrderChangeMysticCodeSkill as boolean), (servantId) => withSkills.has(servantId));
+        });
 
   const maxBenchCount = options.maxBenchCount ?? 0;
   const ownedSlots: readonly PartySlot[] = options.shortlist.map((candidate) => ({ candidate, isSupport: false }));
+  const isQuickAttacker = (slot: PartySlot): boolean => !slot.isSupport && slot.candidate.build.servantId === quickAttackerId;
   const formations = [
     ...enumeratePartyFormations(ownedSlots, FRONT_LINE_SERVANT_COUNT, maxBenchCount),
     ...(options.supportCandidates ?? []).flatMap((candidate) => {
@@ -305,7 +355,7 @@ function* partySearches(options: QuestOptimizerOptions, randomFn: () => number):
       return enumeratePartyFormations([...ownedSlots, support], FRONT_LINE_SERVANT_COUNT, maxBenchCount)
         .filter((formation) => formation.frontLine.includes(support) || formation.bench.includes(support));
     }),
-  ];
+  ].filter((formation) => quickAttackerId === undefined || formation.frontLine.some(isQuickAttacker));
 
   // `enumerateCeAssignments` only depends on the fielded slot *count*, not which specific
   // servants fill it — many formations of the same total size (front-line + bench) share the
@@ -321,14 +371,15 @@ function* partySearches(options: QuestOptimizerOptions, randomFn: () => number):
 
   for (const formation of formations) {
     const fielded = [...formation.frontLine, ...formation.bench];
-    const ceAssignments = ceAssignmentsForSlotCount(fielded.filter((slot) => !slot.isSupport).length);
+    const ceSlots = fielded.filter((slot) => !slot.isSupport && (quickAttackerId === undefined || isQuickAttacker(slot)));
+    const ceAssignments = ceAssignmentsForSlotCount(ceSlots.length);
     for (const ceAssignment of ceAssignments) {
-      let ceIndex = 0;
       const party: PartyMemberSpec[] = fielded.map((slot, index) => {
         const isFrontLine = index < formation.frontLine.length;
         const base: PartyMemberSpec = { niceServant: slot.candidate.niceServant, build: slot.candidate.build, isFrontLine };
         if (slot.isSupport) return { ...base, isSupport: true };
-        const equippedCe = ceAssignment[ceIndex++];
+        const ceIndex = ceSlots.indexOf(slot);
+        const equippedCe = ceIndex < 0 ? undefined : ceAssignment[ceIndex];
         return equippedCe === undefined ? base : { ...base, equippedCe };
       });
       const supportNpGains = options.resolveHitContext === undefined ? supportNpGainsByBattleId(party) : new Map();
@@ -348,21 +399,21 @@ function* partySearches(options: QuestOptimizerOptions, randomFn: () => number):
       // needed here — for a single-turn search (`turnCount` omitted), this is called exactly
       // once with `initialState` itself, so behavior is unchanged from before this option
       // existed.
-      const buildCandidatesForState = (state: BattleState): readonly ActionSequenceCandidate[] => {
+      const buildCandidatesForState = (state: BattleState): FactoredTurnCandidates => {
         const configuredTarget = options.targetEnemySlotIndex === undefined ? undefined : state.enemies[options.targetEnemySlotIndex];
         const targetEnemy = configuredTarget?.currentHp !== undefined && configuredTarget.currentHp > 0
           ? configuredTarget
           : [...state.enemies].reverse().find((enemy) => enemy.currentHp > 0);
-        if (targetEnemy === undefined) return [];
+        if (targetEnemy === undefined) return { groups: [] };
 
         // Prefers the explicit `resolveHitContext` over the raw-data auto path — same
         // manual-wins-over-automatic precedence as the skill/order-change axes above. The
         // eager check at the top of this function already guarantees one of the two exists.
-        const resolveHitContext: (handCard: HandCard) => DerivedHitContext =
+        const resolveHitContextIn = (cardState: BattleState): ((handCard: HandCard) => DerivedHitContext) =>
           options.resolveHitContext ??
           ((handCard) => {
             const npGainByServantId = options.npGainByServantId as (servantId: number) => NoblePhantasm.NoblePhantasmGain;
-            const actingServant = state.servants.find((s) => s.servantId === handCard.servantId);
+            const actingServant = cardState.servants.find((s) => s.servantId === handCard.servantId);
             if (actingServant === undefined) {
               throw new RangeError(`No servant with servantId ${handCard.servantId} in this BattleState`);
             }
@@ -370,11 +421,17 @@ function* partySearches(options: QuestOptimizerOptions, randomFn: () => number):
             return resolveCardHitContext(handCard, actingServant, npGain, targetEnemy, randomFn);
           });
 
-        const buildForHand = (hand: BattleState["handCards"]): ReturnType<typeof buildAttackChainCandidates> => {
+        // With an Order Change, cards and NPs come from the post-swap party. Skills do too
+        // when the swap comes first, so the incoming servant's skills are offered and a
+        // single-ally skill never targets the servant who just left.
+        const buildForHand = (hand: BattleState["handCards"], choice?: OrderChangeChoice<OrderChangeSwap>): TurnCandidateGroup => {
+          const cardState = choice === undefined ? state : resolveAction(state, choice.swap, options.constants, randomFn);
+          const skillState = choice?.afterSkills === false ? cardState : state;
+          const resolveHitContext = resolveHitContextIn(cardState);
           const contextTemplates = hand.map(resolveHitContext);
           const npOptions =
-            options.resolveNpOptions?.(state, targetEnemy) ??
-            state.servants.flatMap((servant) => {
+            options.resolveNpOptions?.(cardState, targetEnemy) ??
+            cardState.servants.flatMap((servant) => {
               if (!servant.isFrontLine) return [];
               const member = party.find((candidate) => partyMemberBattleId(candidate) === servant.servantId);
               const np = (member?.isSupport === true ? undefined : options.npByServantId?.(servant.servantId)) ??
@@ -382,7 +439,7 @@ function* partySearches(options: QuestOptimizerOptions, randomFn: () => number):
                   ? undefined
                   : selectNoblePhantasmVersion(member.niceServant.noblePhantasms ?? [], member.build));
               if (np === undefined) return [];
-              const resolved = resolveNpAttackOption(state, servant.servantId, np, targetEnemy.npcId, randomFn);
+              const resolved = resolveNpAttackOption(cardState, servant.servantId, np, targetEnemy.npcId, randomFn);
               return resolved === undefined ? [] : [resolved];
             });
           const cardCandidates = buildAttackChainCandidates(
@@ -392,11 +449,16 @@ function* partySearches(options: QuestOptimizerOptions, randomFn: () => number):
             targetEnemy.npcId,
             (servantId) => resolveHitContext({ card: Card.EXTRA, servantId }),
           );
-          return resolveSkillOptionsFn === undefined ? cardCandidates : buildSkillAndCardOrderCandidates(resolveSkillOptionsFn(state), cardCandidates);
+          if (resolveSkillOptionSetsFn === undefined) return { setups: [{ label: "", actions: [] }], chains: cardCandidates };
+          const setups = new Map<string, ActionSequenceCandidate>();
+          for (const skillOptions of resolveSkillOptionSetsFn(skillState)) {
+            for (const setup of buildSkillSetups(skillOptions)) if (!setups.has(setup.label)) setups.set(setup.label, setup);
+          }
+          return { setups: [...setups.values()], chains: cardCandidates };
         };
         return resolveOrderChangeOptionsFn === undefined
-          ? buildForHand(state.handCards)
-          : buildOrderChangeCandidates(resolveOrderChangeOptionsFn(state), state.handCards, buildForHand);
+          ? { groups: [buildForHand(state.handCards)] }
+          : { groups: buildOrderChangeGroups(resolveOrderChangeOptionsFn(state), state.handCards, buildForHand, { afterSkillsTiming: !pruneOrderChange }) };
       };
 
       yield { party, initialState, buildCandidatesForState };
@@ -442,7 +504,7 @@ export function optimizeQuest(options: QuestOptimizerOptions): readonly QuestOpt
   for (const search of partySearches(options, randomFn)) {
     let best: ActionSequenceResult | undefined;
     if (options.turnCount === undefined) {
-      const candidates = search.buildCandidatesForState(search.initialState);
+      const candidates = flattenTurnCandidates(search.buildCandidatesForState(search.initialState));
       const maxAttackerCount = options.maxAttackerCount;
       const eligibleCandidates = maxAttackerCount === undefined
         ? candidates
@@ -457,7 +519,7 @@ export function optimizeQuest(options: QuestOptimizerOptions): readonly QuestOpt
         randomFn,
         scoreFn,
         {
-          ...(options.beamWidth === undefined ? {} : { beamWidth: options.beamWidth }),
+          ...beamWidths(options),
           ...(options.maxAttackerCount === undefined ? {} : { maxAttackerCount: options.maxAttackerCount }),
         },
       )[0];
@@ -517,7 +579,7 @@ export function optimizeQuestMinimumTurns(options: MinimumTurnOptimizerOptions):
     const horizon = found === undefined ? maxTurns : found.turns - 1;
     if (horizon < 1) break;
     const beamOptions = {
-      ...(questOptions.beamWidth === undefined ? {} : { beamWidth: questOptions.beamWidth }),
+      ...beamWidths(questOptions),
       maxAttackerCount: attackerLimit,
     };
     validateMultiTurnSearchOptions(beamOptions);

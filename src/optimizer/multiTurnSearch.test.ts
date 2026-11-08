@@ -5,12 +5,12 @@ import type { BattleState, EnemyInstance, HandCard, ServantInstance } from "../b
 import { BUFF_ACTION_KEYS } from "../battle/buffActionKeys.js";
 import type { BattleConstants } from "../battle/gameConstants.js";
 import { damageDealtAtSlot } from "./objectives.js";
-import { advanceBeam, attackingServantIds, searchMultiTurnActionSequences, startBeam, type PerTurnCandidateBuilder } from "./multiTurnSearch.js";
+import { advanceBeam, attackingServantIds, flattenTurnCandidates, searchMultiTurnActionSequences, startBeam, type PerTurnCandidateBuilder } from "./multiTurnSearch.js";
 import { simulateActionSequence, type ActionSequenceCandidate, type SequenceScoreFn } from "./turnSearch.js";
 import { ActionUnavailableError } from "../battle/actionError.js";
 import { resolveAction } from "../battle/turnLoop.js";
 import { buildAttackChainCandidates, type NpAttackOption } from "./cardOrderCandidates.js";
-import { buildSkillAndCardOrderCandidates, type SkillActivation } from "./skillUsageCandidates.js";
+import { buildSkillAndCardOrderCandidates, buildSkillSetups, type SkillActivation } from "./skillUsageCandidates.js";
 
 const BUSTER = "2" as Card;
 const ARTS = "1" as Card;
@@ -284,5 +284,76 @@ describe("advanceBeam shared setup and NP pre-filter", () => {
     );
     expect(beam.some((entry) => entry.label.startsWith("useSkill:1.1|") && entry.label.includes("NP:1"))).toBe(true);
     expect(beam.some((entry) => entry.label.includes("NP:2"))).toBe(false);
+  });
+
+  it("coarse-then-fine: scores every setup with one NP-first chain and searches every chain only for the best setups (a heuristic: it may miss the exhaustive best)", () => {
+    const start = state({ servants: [servant(1), servant(2), servant(3)] });
+    const skills: readonly SkillActivation[] = [
+      { type: "useSkill", servantId: 1, skillSlot: 1, effects: [{ kind: "gainNp", rawAmount: 10000, targetType: "self" }], cooldownTurns: 5 },
+      { type: "useSkill", servantId: 3, skillSlot: 1, effects: [], cooldownTurns: 5 },
+    ];
+    const npOption: NpAttackOption = { servantId: 1, cardType: BUSTER, context: { ...BUSTER_CONTEXT, isNP: true, npDamageMultiplier: 3 }, targetNpcIds: [9001], label: "NP:1" };
+    const chains = buildAttackChainCandidates(start.handCards, start.handCards.map((card) => ({ ...BUSTER_CONTEXT, card: { type: card.card, position: 1 } })), [npOption], 9001);
+    const candidates = buildSkillAndCardOrderCandidates(skills, chains);
+    const scoreFn = damageDealtAtSlot(0);
+    const setupOf = (label: string) => label.split("|")[0];
+    const exhaustive = advanceBeam(startBeam(start, scoreFn), 0, start, () => candidates, ALL_POSITIONS, () => 0.5, scoreFn, { beamWidth: candidates.length });
+    const pruned = advanceBeam(startBeam(start, scoreFn), 0, start, () => candidates, ALL_POSITIONS, () => 0.5, scoreFn, { beamWidth: candidates.length, fineSetupCount: 1 });
+
+    const countBySetup = (entries: readonly { label: string }[]) => entries.reduce((counts, entry) => counts.set(setupOf(entry.label) as string, (counts.get(setupOf(entry.label) as string) ?? 0) + 1), new Map<string, number>());
+    const exhaustiveCounts = countBySetup(exhaustive);
+    const prunedCounts = countBySetup(pruned);
+    const topSetup = setupOf(pruned[0]!.label) as string;
+
+    expect(prunedCounts.size).toBe(exhaustiveCounts.size);
+    expect(prunedCounts.get(topSetup)).toBe(exhaustiveCounts.get(topSetup));
+    for (const [setup, count] of prunedCounts) if (setup !== topSetup) expect(count).toBe(1);
+    const chargedSetups = [...prunedCounts.keys()].filter((setup) => setup.includes("useSkill:1.1"));
+    expect(chargedSetups.length).toBeGreaterThan(0);
+    for (const setup of chargedSetups) expect(pruned.filter((entry) => setupOf(entry.label) === setup).every((entry) => entry.label.includes("NP:1") || setup === topSetup)).toBe(true);
+    expect(pruned[0]!.score).toBeLessThanOrEqual(exhaustive[0]!.score);
+  });
+
+  it("searches factored setups × chains exactly like the same lines given as a flat list", () => {
+    const start = state({ servants: [servant(1), servant(2, { currentNpGauge: 9500 }), servant(3)] });
+    const skills: readonly SkillActivation[] = [
+      { type: "useSkill", servantId: 1, skillSlot: 1, effects: [{ kind: "gainNp", rawAmount: 10000, targetType: "self" }], cooldownTurns: 5 },
+      { type: "useSkill", servantId: 3, skillSlot: 1, effects: [], cooldownTurns: 5 },
+    ];
+    const npOption = (servantId: number): NpAttackOption => ({ servantId, cardType: BUSTER, context: { ...BUSTER_CONTEXT, isNP: true, npDamageMultiplier: 3 }, targetNpcIds: [9001], label: `NP:${servantId}` });
+    const chains = buildAttackChainCandidates(start.handCards, start.handCards.map((card) => ({ ...BUSTER_CONTEXT, card: { type: card.card, position: 1 } })), [npOption(1), npOption(2)], 9001);
+    const factored = { groups: [{ setups: buildSkillSetups(skills), chains }] };
+    const scoreFn = damageDealtAtSlot(0);
+    const run = (builder: PerTurnCandidateBuilder) =>
+      advanceBeam(startBeam(start, scoreFn), 0, start, builder, ALL_POSITIONS, () => 0.5, scoreFn, { beamWidth: 1000 }).map((entry) => [entry.label, entry.score]);
+
+    expect(flattenTurnCandidates(factored).map((c) => c.label)).toEqual(buildSkillAndCardOrderCandidates(skills, chains).map((c) => c.label));
+    expect(run(() => factored)).toEqual(run(() => buildSkillAndCardOrderCandidates(skills, chains)));
+  });
+
+  it("keeps one line when chains differ only in face cards played after the wave is cleared", () => {
+    const start = state({ servants: [servant(1, { currentNpGauge: 10000 }), servant(2), servant(3)], enemies: [enemy({ currentHp: 1, maxHp: 1 })] });
+    const npOption: NpAttackOption = { servantId: 1, cardType: BUSTER, context: { ...BUSTER_CONTEXT, isNP: true, npDamageMultiplier: 3 }, targetNpcIds: [9001], label: "NP:1" };
+    const chains = buildAttackChainCandidates(start.handCards, start.handCards.map((card) => ({ ...BUSTER_CONTEXT, card: { type: card.card, position: 1 } })), [npOption], 9001);
+    const npFirst = chains.filter((chain) => chain.actions[0]?.type === "castNp");
+    const scoreFn = damageDealtAtSlot(0);
+    const beam = advanceBeam(startBeam(start, scoreFn), 0, start, () => ({ groups: [{ setups: [{ label: "", actions: [] }], chains: npFirst }] }), ALL_POSITIONS, () => 0.5, scoreFn, { beamWidth: 1000 });
+
+    const makeup = (chain: ActionSequenceCandidate) => {
+      const first = chain.actions[0];
+      return first !== undefined && "chainCards" in first ? first.chainCards.map((card) => `${card.type}:${card.servantId}`).sort().join() : "";
+    };
+    expect(npFirst.length).toBeGreaterThan(new Set(npFirst.map(makeup)).size);
+    expect(beam).toHaveLength(new Set(npFirst.map(makeup)).size);
+
+    const sameMakeup = npFirst.filter((chain) => makeup(chain) === makeup(npFirst[0]!));
+    const after = (chain: ActionSequenceCandidate) => resolveAction(simulateActionSequence(start, chain.actions, ALL_POSITIONS, () => 0.5), { type: "endTurn" }, ALL_POSITIONS, () => 0.5);
+    expect(sameMakeup.length).toBeGreaterThan(1);
+    for (const chain of sameMakeup.slice(1)) expect(after(chain)).toEqual(after(sameMakeup[0]!));
+  });
+
+  it("rejects a fineSetupCount below 1", () => {
+    const start = state();
+    expect(() => searchMultiTurnActionSequences(start, 1, () => [], CONSTANTS, () => 0.5, damageDealtAtSlot(0), { fineSetupCount: 0 })).toThrow(RangeError);
   });
 });

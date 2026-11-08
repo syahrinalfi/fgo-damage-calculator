@@ -13,7 +13,8 @@ import type { ActionSequenceCandidate } from "./turnSearch.js";
 export type SkillActivation = Extract<Action, { readonly type: "useSkill" | "useMysticCodeSkill" }>;
 
 function labelForSkillActivation(action: SkillActivation): string {
-  return action.type === "useSkill" ? `useSkill:${action.servantId}.${action.skillSlot}` : `useMysticCodeSkill:${action.slot}`;
+  const target = action.targetServantId === undefined ? "" : `>${action.targetServantId}`;
+  return action.type === "useSkill" ? `useSkill:${action.servantId}.${action.skillSlot}${target}` : `useMysticCodeSkill:${action.slot}`;
 }
 
 /**
@@ -36,16 +37,22 @@ export function buildSkillAndCardOrderCandidates(
   skillOptions: readonly SkillActivation[],
   cardOrderCandidates: readonly ActionSequenceCandidate[],
 ): readonly ActionSequenceCandidate[] {
-  const skillSubsets = enumerateSkillUsageSubsets(skillOptions);
   const results: ActionSequenceCandidate[] = [];
-  for (const subset of skillSubsets) {
-    const skillLabel = subset.length === 0 ? "noSkills" : subset.map(labelForSkillActivation).join("+");
+  for (const setup of buildSkillSetups(skillOptions)) {
     for (const cardCandidate of cardOrderCandidates) {
       results.push({
-        label: `${skillLabel}|${cardCandidate.label}`,
-        actions: [...subset, ...cardCandidate.actions],
+        label: `${setup.label}|${cardCandidate.label}`,
+        actions: [...setup.actions, ...cardCandidate.actions],
       });
     }
   }
   return results;
+}
+
+/** Every skill-usage subset as a setup (no card actions), labelled as `buildSkillAndCardOrderCandidates` labels its prefix. */
+export function buildSkillSetups(skillOptions: readonly SkillActivation[]): readonly ActionSequenceCandidate[] {
+  return enumerateSkillUsageSubsets(skillOptions).map((subset) => ({
+    label: subset.length === 0 ? "noSkills" : subset.map(labelForSkillActivation).join("+"),
+    actions: subset,
+  }));
 }

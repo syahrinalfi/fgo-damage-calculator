@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Action } from "../battle/action.js";
 import type { HandCard } from "../battle/battleState.js";
-import { buildOrderChangeCandidates, reassignHandCardOwnership, type OrderChangeSwap } from "./orderChangeCandidates.js";
+import { buildOrderChangeCandidates, reassignHandCardOwnership, swapsOutSpentServants, type OrderChangeSwap } from "./orderChangeCandidates.js";
 import type { ActionSequenceCandidate } from "./turnSearch.js";
 
 const swap: OrderChangeSwap = { type: "orderChange", outgoingServantId: 1, incomingServantId: 4 };
@@ -38,6 +38,20 @@ describe("buildOrderChangeCandidates", () => {
     expect(noSwap?.actions).toEqual([playCardAction(1)]);
   });
 
+  it("can leave out the after-skills timing", () => {
+    const result = buildOrderChangeCandidates([swap], hand([1]), candidatesForHand, { afterSkillsTiming: false });
+    expect(result.map((r) => r.label.split("|")[0])).toEqual(["noOrderChange", "orderChange:1->4@beforeSkills"]);
+  });
+
+  it("tells the builder which swap and timing each candidate set is for", () => {
+    const seen: string[] = [];
+    buildOrderChangeCandidates([swap], hand([1]), (h, choice) => {
+      seen.push(choice === undefined ? "none" : `${choice.swap.incomingServantId}@${choice.afterSkills ? "after" : "before"}`);
+      return candidatesForHand(h);
+    });
+    expect(seen.sort()).toEqual(["4@after", "4@before", "none"]);
+  });
+
   it("rebuilds the hand (and therefore the card candidate's servantId) before generating candidates for a swap choice", () => {
     const result = buildOrderChangeCandidates([swap], hand([1]), candidatesForHand);
     const beforeSkills = result.find((r) => r.label.includes("beforeSkills"));
@@ -71,5 +85,12 @@ describe("buildOrderChangeCandidates", () => {
 
   it("returns no candidates when buildCandidatesForHand itself returns none", () => {
     expect(buildOrderChangeCandidates([swap], hand([1]), () => [])).toEqual([]);
+  });
+});
+
+describe("swapsOutSpentServants", () => {
+  it("keeps only swaps whose outgoing servant has no usable skill this turn", () => {
+    const swaps: readonly OrderChangeSwap[] = [swap, { type: "orderChange", outgoingServantId: 2, incomingServantId: 4 }];
+    expect(swapsOutSpentServants(swaps, (servantId) => servantId === 1)).toEqual([swaps[1]]);
   });
 });

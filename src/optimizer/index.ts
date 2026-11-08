@@ -1,7 +1,7 @@
 export type { ActionSequenceCandidate, ActionSequenceResult, SequenceScoreFn } from "./turnSearch.js";
 export { simulateActionSequence, searchBestActionSequence } from "./turnSearch.js";
-export type { PerTurnCandidateBuilder, MultiTurnResult, MultiTurnSearchOptions } from "./multiTurnSearch.js";
-export { attackingServantIds, searchMultiTurnActionSequences } from "./multiTurnSearch.js";
+export type { FactoredTurnCandidates, PerTurnCandidateBuilder, MultiTurnResult, MultiTurnSearchOptions, TurnCandidateGroup } from "./multiTurnSearch.js";
+export { attackingServantIds, flattenTurnCandidates, searchMultiTurnActionSequences } from "./multiTurnSearch.js";
 export { damageDealtAtSlot, negativeRemainingHpAtSlot, questProgress } from "./objectives.js";
 export {
   enumerateServantSubsets,
@@ -18,9 +18,9 @@ export { buildAttackChainCandidates, buildCardOrderCandidates } from "./cardOrde
 export { resolveNpAttackOption } from "./npActivationResolver.js";
 export { npStrengtheningKey, selectNoblePhantasmVersion } from "./npVersionSelection.js";
 export type { SkillActivation } from "./skillUsageCandidates.js";
-export { buildSkillAndCardOrderCandidates } from "./skillUsageCandidates.js";
+export { buildSkillAndCardOrderCandidates, buildSkillSetups } from "./skillUsageCandidates.js";
 export type { OrderChangeSwap } from "./orderChangeCandidates.js";
-export { buildOrderChangeCandidates, reassignHandCardOwnership } from "./orderChangeCandidates.js";
+export { buildOrderChangeCandidates, buildOrderChangeGroups, reassignHandCardOwnership, swapsOutSpentServants } from "./orderChangeCandidates.js";
 export type { PartyMemberSpec, InitialBattleStateOptions } from "./battleStateBuilder.js";
 export { buildInitialBattleState, partyMemberBattleId, supportBattleId } from "./battleStateBuilder.js";
 export { buildBorrowedSupportCandidate } from "./supportBuild.js";

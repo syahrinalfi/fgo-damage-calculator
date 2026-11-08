@@ -26,7 +26,34 @@ import type { ActionSequenceCandidate, SequenceScoreFn } from "./turnSearch.js";
  */
 
 /** Resolves a `BattleState` to that turn's candidate `ActionSequenceCandidate`s (not including a trailing `endTurn` — this module appends that itself once a candidate is chosen for simulation). Receives the 0-indexed turn number within this multi-turn search (not `BattleState.currentTurn`, which already reflects however many turns preceded this search) so a caller can vary its own per-turn options if needed, though most callers can ignore it and derive everything from `state` alone (skill cooldowns, hand, etc. are already reflected there). */
-export type PerTurnCandidateBuilder = (state: BattleState, turnIndex: number) => readonly ActionSequenceCandidate[];
+export type PerTurnCandidateBuilder = (state: BattleState, turnIndex: number) => readonly ActionSequenceCandidate[] | FactoredTurnCandidates;
+
+/**
+ * One turn's candidates without materializing setups × chains: every setup (skills, Mystic Code
+ * skills, Order Change — no attacks) may be followed by every chain of its group. A line is
+ * labelled `${setup.label}|${chain.label}` (just the chain's label after an empty setup label)
+ * and plays `[...setup.actions, ...chain.actions]`.
+ */
+export interface TurnCandidateGroup {
+  readonly setups: readonly ActionSequenceCandidate[];
+  readonly chains: readonly ActionSequenceCandidate[];
+}
+
+export interface FactoredTurnCandidates {
+  readonly groups: readonly TurnCandidateGroup[];
+}
+
+/** `${setup.label}|${chain.label}`, or the chain's own label after an empty setup label. */
+function lineLabel(setup: ActionSequenceCandidate, chain: Pick<ActionSequenceCandidate, "label">): string {
+  return setup.label === "" ? chain.label : `${setup.label}|${chain.label}`;
+}
+
+/** Every line of a turn as a plain list, for callers that simulate each candidate themselves. */
+export function flattenTurnCandidates(candidates: readonly ActionSequenceCandidate[] | FactoredTurnCandidates): readonly ActionSequenceCandidate[] {
+  if (Array.isArray(candidates)) return candidates as readonly ActionSequenceCandidate[];
+  return (candidates as FactoredTurnCandidates).groups.flatMap((group) =>
+    group.setups.flatMap((setup) => group.chains.map((chain) => ({ label: lineLabel(setup, chain), actions: [...setup.actions, ...chain.actions] }))));
+}
 
 /** One fully-simulated multi-turn line — `turnActions[i]` is turn `i`'s chosen candidate's own actions (no trailing `endTurn`, which was still applied to produce `finalState`). */
 export interface MultiTurnResult {
@@ -41,9 +68,17 @@ export interface MultiTurnSearchOptions {
   readonly beamWidth?: number;
   /** Maximum number of distinct servants allowed to perform damaging actions across the full horizon. */
   readonly maxAttackerCount?: number;
+  /**
+   * Coarse-then-fine width: per turn, every setup (the skills, Mystic Code skills and Order Change
+   * before the first attack) is first scored with one representative attack chain, and only the
+   * best `fineSetupCount` setups across the whole frontier get every chain simulated. A value at
+   * least the number of setups makes the turn exhaustive. Default 32.
+   */
+  readonly fineSetupCount?: number;
 }
 
 const DEFAULT_BEAM_WIDTH = 256;
+const DEFAULT_FINE_SETUP_COUNT = 32;
 
 /** Servants that actually perform a face-card, Extra, or NP attack; setup/support actions do not count. */
 export function attackingServantIds(actions: readonly Action[]): ReadonlySet<number> {
@@ -110,6 +145,10 @@ export function validateMultiTurnSearchOptions(options: MultiTurnSearchOptions):
   if (options.maxAttackerCount !== undefined && (!Number.isInteger(options.maxAttackerCount) || options.maxAttackerCount < 1)) {
     throw new RangeError(`maxAttackerCount must be a positive integer, got ${options.maxAttackerCount}`);
   }
+  const fineSetupCount = options.fineSetupCount ?? DEFAULT_FINE_SETUP_COUNT;
+  if (!Number.isInteger(fineSetupCount) || fineSetupCount < 1) {
+    throw new RangeError(`fineSetupCount must be a positive integer, got ${fineSetupCount}`);
+  }
 }
 
 /** The beam before any turn has been searched: the starting state alone. */
@@ -119,11 +158,31 @@ export function startBeam(initialState: BattleState, scoreFn: SequenceScoreFn): 
 
 const byScoreDescending = (a: BeamEntry, b: BeamEntry): number => b.score - a.score;
 
+/** One attack chain after a setup; `full` is the caller's own candidate when it was given unfactored. */
+interface Chain {
+  readonly label: string;
+  readonly actions: readonly Action[];
+  readonly full?: ActionSequenceCandidate;
+}
+
+/** One distinct setup reached from one retained line, with the attack chains that may follow it. */
+interface SetupGroup {
+  readonly branch: BeamEntry;
+  readonly setup: ActionSequenceCandidate;
+  readonly setupState: BattleState;
+  readonly chains: readonly Chain[];
+}
+
 /**
- * Searches one more turn from every retained line: simulates each candidate plus a trailing
- * `endTurn`, drops unavailable lines and lines over the attacker cap, and keeps the best
- * `beamWidth`. The frontier after turn N depends only on the turns searched so far, never on how
- * many turns a caller will eventually search, so callers may stop or continue at any turn.
+ * Searches one more turn from every retained line and keeps the best `beamWidth`. Each setup
+ * (the actions before the first attack) is simulated once per line. Coarse-then-fine
+ * (research/09 §4): each setup is first scored with one representative chain — the first legal
+ * one casting the most ready NPs — and only the best `fineSetupCount` setups across the frontier
+ * have every chain simulated. Chains that differ only in face cards played after the wave is
+ * already cleared lead to the same battle, so only the first is kept. Lines over the attacker
+ * cap, unavailable lines, and chains casting an NP that is not full after the setup are dropped.
+ * The frontier after turn N depends only on the turns searched so far, never on how many turns a
+ * caller will eventually search, so callers may stop or continue at any turn.
  */
 export function advanceBeam(
   frontier: readonly BeamEntry[],
@@ -136,51 +195,130 @@ export function advanceBeam(
   options: MultiTurnSearchOptions = {},
 ): readonly BeamEntry[] {
   const beamWidth = options.beamWidth ?? DEFAULT_BEAM_WIDTH;
-  const expanded: BeamEntry[] = [];
-  const actionIds = new WeakMap<Action, number>();
-  let nextActionId = 0;
-  const actionId = (action: Action): number => {
-    let id = actionIds.get(action);
-    if (id === undefined) {
-      id = nextActionId++;
-      actionIds.set(action, id);
-    }
-    return id;
-  };
+  const fineSetupCount = options.fineSetupCount ?? DEFAULT_FINE_SETUP_COUNT;
+  const groups: SetupGroup[] = [];
   for (const branch of frontier) {
-    // Candidates share their setup (skills, Mystic Code skills, Order Change) as the same action
-    // objects, so each distinct setup is simulated once per line; `null` marks an unavailable one.
-    const setupStates = new Map<string, BattleState | null>();
-    for (const candidate of buildCandidatesForTurn(branch.state, turnIndex)) {
-      const attackerIds = new Set([...branch.attackerIds, ...attackingServantIds(candidate.actions)]);
-      if (options.maxAttackerCount !== undefined && attackerIds.size > options.maxAttackerCount) continue;
-      const firstAttack = candidate.actions.findIndex(isAttack);
-      const setupLength = firstAttack < 0 ? candidate.actions.length : firstAttack;
-      const setupKey = candidate.actions.slice(0, setupLength).map(actionId).join(",");
-      let setupState = setupStates.get(setupKey);
-      if (setupState === undefined) {
-        setupState = simulateOrUnavailable(branch.state, candidate.actions, 0, setupLength, constants, randomFn);
-        setupStates.set(setupKey, setupState);
-      }
-      if (setupState === null || hasUnreadyNp(setupState, candidate.actions, setupLength)) continue;
-      const stateAfterActions = simulateOrUnavailable(setupState, candidate.actions, setupLength, candidate.actions.length, constants, randomFn);
-      if (stateAfterActions === null) continue;
-      const stateAfterTurn = resolveAction(stateAfterActions, { type: "endTurn" }, constants, randomFn);
-      expanded.push({
-        label: branch.label === "" ? candidate.label : `${branch.label}>>${candidate.label}`,
-        turnActions: [...branch.turnActions, candidate.actions],
-        state: stateAfterTurn,
-        attackerIds,
-        score: scoreFn(stateAfterTurn, initialState),
-      });
-      if (expanded.length >= beamWidth * 2) {
-        expanded.sort(byScoreDescending);
-        expanded.length = beamWidth;
+    for (const { setup, chains } of setupsAndChains(buildCandidatesForTurn(branch.state, turnIndex))) {
+      const setupState = simulateOrUnavailable(branch.state, setup.actions, 0, setup.actions.length, constants, randomFn);
+      if (setupState === null) continue;
+      const usable = chains.filter((chain) =>
+        !hasUnreadyNp(setupState, chain.actions) &&
+        (options.maxAttackerCount === undefined || new Set([...branch.attackerIds, ...attackingServantIds(chain.actions)]).size <= options.maxAttackerCount));
+      if (usable.length > 0) groups.push({ branch, setup, setupState, chains: usable });
+    }
+  }
+
+  const expanded: BeamEntry[] = [];
+  const keep = (entry: BeamEntry | null): void => {
+    if (entry === null) return;
+    expanded.push(entry);
+    if (expanded.length >= beamWidth * 2) {
+      expanded.sort(byScoreDescending);
+      expanded.length = beamWidth;
+    }
+  };
+  const simulateLine = (group: SetupGroup, chain: Chain, seenAfterClear?: Set<string>): BeamEntry | null => {
+    let state = group.setupState;
+    for (let index = 0; index < chain.actions.length; index += 1) {
+      const next = simulateOrUnavailable(state, chain.actions, index, index + 1, constants, randomFn);
+      if (next === null) return null;
+      state = next;
+      if (seenAfterClear !== undefined && waveCleared(state) && chain.actions.slice(index + 1).every(isFaceCard)) {
+        const key = clearedChainKey(chain.actions, index);
+        if (seenAfterClear.has(key)) return null;
+        seenAfterClear.add(key);
+        seenAfterClear = undefined;
       }
     }
+    const stateAfterTurn = resolveAction(state, { type: "endTurn" }, constants, randomFn);
+    const candidate = chain.full ?? { label: lineLabel(group.setup, chain), actions: [...group.setup.actions, ...chain.actions] };
+    return {
+      label: group.branch.label === "" ? candidate.label : `${group.branch.label}>>${candidate.label}`,
+      turnActions: [...group.branch.turnActions, candidate.actions],
+      state: stateAfterTurn,
+      attackerIds: new Set([...group.branch.attackerIds, ...attackingServantIds(chain.actions)]),
+      score: scoreFn(stateAfterTurn, initialState),
+    };
+  };
+  const searchEveryChain = (group: SetupGroup, alreadyKept?: Chain): void => {
+    const seenAfterClear = new Set<string>();
+    if (alreadyKept !== undefined) simulateLine(group, alreadyKept, seenAfterClear);
+    for (const chain of group.chains) if (chain !== alreadyKept) keep(simulateLine(group, chain, seenAfterClear));
+  };
+
+  if (groups.length <= fineSetupCount) {
+    for (const group of groups) searchEveryChain(group);
+  } else {
+    const coarse: { readonly group: SetupGroup; readonly entry: BeamEntry; readonly representative: Chain }[] = [];
+    for (const group of groups) {
+      const representatives = [...group.chains].sort((a, b) => npCastCount(b.actions) - npCastCount(a.actions));
+      for (const representative of representatives) {
+        const entry = simulateLine(group, representative);
+        if (entry === null) continue;
+        coarse.push({ group, entry, representative });
+        keep(entry);
+        break;
+      }
+    }
+    coarse.sort((a, b) => b.entry.score - a.entry.score);
+    for (const { group, representative } of coarse.slice(0, fineSetupCount)) searchEveryChain(group, representative);
   }
   expanded.sort(byScoreDescending);
   return expanded.slice(0, beamWidth);
+}
+
+/** Normalizes a turn's candidates into setups with their chains; an unfactored list is grouped by shared setup action objects. */
+function setupsAndChains(candidates: readonly ActionSequenceCandidate[] | FactoredTurnCandidates): readonly { readonly setup: ActionSequenceCandidate; readonly chains: readonly Chain[] }[] {
+  if (!Array.isArray(candidates)) {
+    return (candidates as FactoredTurnCandidates).groups.flatMap((group) => group.setups.map((setup) => ({ setup, chains: group.chains })));
+  }
+  const ids = new Map<Action, number>();
+  const byKey = new Map<string, { readonly setup: ActionSequenceCandidate; readonly chains: Chain[] }>();
+  for (const candidate of candidates as readonly ActionSequenceCandidate[]) {
+    const firstAttack = candidate.actions.findIndex(isAttack);
+    const setupLength = firstAttack < 0 ? candidate.actions.length : firstAttack;
+    const prefix = candidate.actions.slice(0, setupLength);
+    const key = prefix.map((action) => {
+      if (!ids.has(action)) ids.set(action, ids.size);
+      return ids.get(action);
+    }).join(",");
+    let entry = byKey.get(key);
+    if (entry === undefined) {
+      entry = { setup: { label: "", actions: prefix }, chains: [] };
+      byKey.set(key, entry);
+    }
+    entry.chains.push({ label: candidate.label, actions: candidate.actions.slice(setupLength), full: candidate });
+  }
+  return [...byKey.values()];
+}
+
+function npCastCount(actions: readonly Action[]): number {
+  return actions.filter((action) => action.type === "castNp").length;
+}
+
+function isFaceCard(action: Action): boolean {
+  return action.type === "playCard" || action.type === "playExtraCard";
+}
+
+/** Every enemy of the current wave is down (a break-bar enemy is already replaced by its next bar). */
+function waveCleared(state: BattleState): boolean {
+  return state.enemies.every((enemy) => enemy.currentHp <= 0);
+}
+
+/**
+ * What decides the battle once the wave is cleared at `clearIndex`: the attacks up to it and
+ * the chain's card makeup (Buster/Arts/Quick/Brave/Mighty classification and the Extra Attack
+ * depend on which cards are in the chain, not their order). Face cards played afterwards hit
+ * nothing.
+ */
+function clearedChainKey(actions: readonly Action[], clearIndex: number): string {
+  const prefix = actions.slice(0, clearIndex + 1).map((action) =>
+    action.type === "playCard" ? `c${action.handCardIndex}` : action.type === "castNp" ? `n${action.servantId}` : action.type === "playExtraCard" ? "x" : action.type);
+  const first = actions.find(isAttack);
+  const chainCards = first !== undefined && "chainCards" in first
+    ? first.chainCards.map((card) => `${String(card.type)}:${card.servantId}:${"isNp" in card && card.isNp === true ? 1 : 0}`).sort()
+    : [];
+  return `${prefix.join(",")}#${chainCards.join(",")}`;
 }
 
 function isAttack(action: Action): boolean {
@@ -211,7 +349,7 @@ function simulateOrUnavailable(
  * full when the chain is chosen (`BattleState.npReadyAtChainSelection`), so the engine would
  * reject the line anyway; skipping it here avoids simulating its cards first.
  */
-function hasUnreadyNp(setupState: BattleState, actions: readonly Action[], setupLength: number): boolean {
+function hasUnreadyNp(setupState: BattleState, actions: readonly Action[], setupLength = 0): boolean {
   for (let index = setupLength; index < actions.length; index += 1) {
     const action = actions[index] as Action;
     if (action.type !== "castNp") continue;

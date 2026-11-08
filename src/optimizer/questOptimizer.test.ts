@@ -1,7 +1,7 @@
 import { Func, type Buff, type Card, type CardDetail, type CraftEssence, type NoblePhantasm, type Servant as ServantModule, type Skill } from "@atlasacademy/api-connector";
 import { describe, expect, it } from "vitest";
 import type { DerivedHitContext } from "../battle/action.js";
-import type { BattleState, HandCard } from "../battle/battleState.js";
+import type { BattleState, EquippedCraftEssence, HandCard } from "../battle/battleState.js";
 import { BUFF_ACTION_KEYS } from "../battle/buffActionKeys.js";
 import type { BattleConstants } from "../battle/gameConstants.js";
 import type { ServantSkillSource } from "../battle/skillActivationResolver.js";
@@ -707,6 +707,117 @@ describe("optimizeQuest", () => {
     expect(withSkill).toHaveLength(1);
     expect(withSkill[0]?.best.score).toBeGreaterThan(withoutSkill[0]?.best.score ?? Infinity);
     expect(withSkill[0]?.best.actions[0]?.type).toBe("useSkill");
+  });
+
+  it("tries each front-line ally as the target of a single-ally skill instead of only the caster", () => {
+    const allyAtkUpFunc = {
+      funcId: 2,
+      funcType: Func.FuncType.ADD_STATE,
+      funcTargetType: Func.FuncTargetType.PT_ONE,
+      funcTargetTeam: Func.FuncTargetTeam.PLAYER,
+      functvals: [],
+      funcquestTvals: [],
+      overWriteTvalsList: [],
+      funcPopupText: "",
+      buffs: [{ type: "upAtk" as Buff.BuffType, buffGroup: 0, vals: [], ckSelfIndv: [], ckOpIndv: [] } as unknown as Buff.Buff],
+      svals: [{ Value: 1000, Turn: 3 }],
+    } as unknown as Func.Func;
+    const none: Skill.Skill["functions"] = [];
+    const skillSources: readonly ServantSkillSource[] = [{
+      servantId: 2,
+      skills: [{ skill: { functions: [allyAtkUpFunc], coolDown: [5] }, level: 1 }, { skill: { functions: none, coolDown: [5] }, level: 1 }, { skill: { functions: none, coolDown: [5] }, level: 1 }],
+    }];
+    const strong: ServantCandidate = { niceServant: niceServant({ atkGrowth: [0, 20000, 40000] }), build: build(1) };
+    const tough = wave({ initialEnemies: [waveEnemy({ hp: 50_000_000 })], enemyPool: [waveEnemy({ hp: 50_000_000 })] });
+    const options = { shortlist: [strong, candidate(2), candidate(3)], cePool: [], waves: [tough], costBudget: 1000, constants: CONSTANTS, resolveHitContext, skillSources, randomFn: () => 0 } as const;
+
+    const casterOnly = optimizeQuest({ ...options, defaultTargetServantId: (id) => id });
+    const searched = optimizeQuest(options);
+    const skill = searched[0]?.best.actions.find((action) => action.type === "useSkill");
+
+    expect(skill).toMatchObject({ servantId: 2, targetServantId: 1 });
+    expect(searched[0]?.best.score).toBeGreaterThan(casterOnly[0]?.best.score ?? Infinity);
+  });
+
+  it("searches Order Change with single-ally skills without targeting a servant who was swapped out", () => {
+    const allyAtkUpFunc = {
+      funcId: 3,
+      funcType: Func.FuncType.ADD_STATE,
+      funcTargetType: Func.FuncTargetType.PT_ONE,
+      funcTargetTeam: Func.FuncTargetTeam.PLAYER,
+      functvals: [],
+      funcquestTvals: [],
+      overWriteTvalsList: [],
+      funcPopupText: "",
+      buffs: [{ type: "upAtk" as Buff.BuffType, buffGroup: 0, vals: [], ckSelfIndv: [], ckOpIndv: [] } as unknown as Buff.Buff],
+      svals: [{ Value: 500, Turn: 3 }],
+    } as unknown as Func.Func;
+    const none: Skill.Skill["functions"] = [];
+    const source = (servantId: number): ServantSkillSource => ({
+      servantId,
+      skills: [{ skill: { functions: [allyAtkUpFunc], coolDown: [5] }, level: 1 }, { skill: { functions: none, coolDown: [5] }, level: 1 }, { skill: { functions: none, coolDown: [5] }, level: 1 }],
+    });
+    const run = () => optimizeQuest({
+      shortlist: [candidate(1), candidate(2), candidate(3), candidate(4)],
+      cePool: [],
+      waves: [wave()],
+      costBudget: 1000,
+      constants: CONSTANTS,
+      resolveHitContext,
+      skillSources: [source(1), source(2), source(3), source(4)],
+      hasOrderChangeMysticCodeSkill: true,
+      maxBenchCount: 1,
+      turnCount: 2,
+      randomFn: () => 0,
+    });
+    expect(run).not.toThrow();
+    expect(run().some((result) => result.best.actions.some((action) => action.type === "orderChange"))).toBe(true);
+  });
+
+  describe('searchLevel "quick"', () => {
+    const allyAtkUpFunc = {
+      funcId: 4,
+      funcType: Func.FuncType.ADD_STATE,
+      funcTargetType: Func.FuncTargetType.PT_ONE,
+      funcTargetTeam: Func.FuncTargetTeam.PLAYER,
+      functvals: [],
+      funcquestTvals: [],
+      overWriteTvalsList: [],
+      funcPopupText: "",
+      buffs: [{ type: "upAtk" as Buff.BuffType, buffGroup: 0, vals: [], ckSelfIndv: [], ckOpIndv: [] } as unknown as Buff.Buff],
+      svals: [{ Value: 500, Turn: 3 }],
+    } as unknown as Func.Func;
+    const none: Skill.Skill["functions"] = [];
+    const source = (servantId: number): ServantSkillSource => ({
+      servantId,
+      skills: [{ skill: { functions: [allyAtkUpFunc], coolDown: [5] }, level: 1 }, { skill: { functions: none, coolDown: [5] }, level: 1 }, { skill: { functions: none, coolDown: [5] }, level: 1 }],
+    });
+    const ce = (inventoryId: string): EquippedCraftEssence => ({ data: { id: 1, cost: 0, atkGrowth: [0], hpGrowth: [0], skills: [] } as unknown as EquippedCraftEssence["data"], level: 1, limitBreakCount: 0, inventoryId });
+    const base = {
+      shortlist: [candidate(1), candidate(2), candidate(3), candidate(4)],
+      cePool: [ce("a")],
+      waves: [wave()],
+      costBudget: 1000,
+      constants: CONSTANTS,
+      resolveHitContext,
+      skillSources: [source(1), source(2), source(3), source(4)],
+      randomFn: () => 0,
+      attributionPoolSize: 50,
+    } as const;
+
+    it("needs a preferred attacker", () => {
+      expect(() => optimizeQuest({ ...base, searchLevel: "quick" })).toThrow(RangeError);
+    });
+
+    it("fields only parties with the attacker in front, gives it the CE and aims single-ally skills at it", () => {
+      const results = optimizeQuest({ ...base, searchLevel: "quick", preferences: { preferredAttackerId: 3 } });
+      expect(results.length).toBeGreaterThan(0);
+      for (const result of results) {
+        expect(result.party.find((member) => member.build.servantId === 3)?.isFrontLine).toBe(true);
+        expect(result.party.filter((member) => member.equippedCe !== undefined).every((member) => member.build.servantId === 3)).toBe(true);
+        for (const action of result.best.actions) if (action.type === "useSkill") expect(action.targetServantId).toBe(3);
+      }
+    });
   });
 
   it("wires hasOrderChangeMysticCodeSkill through without changing results when there is no benched sub-member to swap in", () => {
