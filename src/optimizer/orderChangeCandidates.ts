@@ -19,16 +19,6 @@ export function reassignHandCardOwnership(handCards: readonly HandCard[], swap: 
   return handCards.map((handCard) => (handCard.servantId === swap.outgoingServantId ? { ...handCard, servantId: swap.incomingServantId } : handCard));
 }
 
-/**
- * The optimizer's default Order Change pruning: only swaps whose outgoing servant has no skill
- * left to use this turn — the way Order Change is used in practice (bring in a fresh support once
- * one is spent). With a spent outgoing servant the after-skills timing only delays the incoming
- * servant's skills, so callers pair this with `afterSkillsTiming: false`.
- */
-export function swapsOutSpentServants(swaps: readonly OrderChangeSwap[], hasUsableSkill: (servantId: number) => boolean): readonly OrderChangeSwap[] {
-  return swaps.filter((swap) => !hasUsableSkill(swap.outgoingServantId));
-}
-
 /** Inserts `swap` right before the first `playCard`/`castNp` action in `actions` — used for the `afterSkills: true` timing, where the swap resolves after this turn's skill-usage-plan prefix but must still land before any card is played. Every action is assumed to be a card play once no more skill/order-change actions remain (this project's own "skills (and now order-change) before cards" convention, `./skillUsageCandidates.js`), so a sequence with no `playCard`/`castNp` at all (skills-only) appends `swap` at the end. */
 function insertBeforeFirstCard(actions: readonly Action[], swap: OrderChangeSwap): Action[] {
   const cardIndex = actions.findIndex((action) => action.type === "playCard" || action.type === "castNp");
@@ -100,17 +90,25 @@ export function buildOrderChangeGroups(
   swapOptions: readonly OrderChangeSwap[],
   handCards: readonly HandCard[],
   buildGroupForHand: (hand: readonly HandCard[], choice?: OrderChangeChoice<OrderChangeSwap>) => TurnCandidateGroup,
-  { afterSkillsTiming = true }: { readonly afterSkillsTiming?: boolean } = {},
+  {
+    afterSkillsTiming = true,
+    beforeSwap,
+  }: {
+    readonly afterSkillsTiming?: boolean;
+    /** Actions played just before a before-skills swap, e.g. the outgoing servant's remaining skills. */
+    readonly beforeSwap?: (choice: OrderChangeChoice<OrderChangeSwap>) => ActionSequenceCandidate;
+  } = {},
 ): readonly TurnCandidateGroup[] {
   return enumerateOrderChangeTimings(swapOptions)
     .filter((timing) => afterSkillsTiming || timing[0]?.afterSkills !== true)
     .map((timing) => {
       const choice = timing[0];
-      const label = labelForChoice(timing);
+      const prefix = choice === undefined || choice.afterSkills || beforeSwap === undefined ? undefined : beforeSwap(choice);
+      const label = prefix === undefined || prefix.label === "" ? labelForChoice(timing) : `${prefix.label}|${labelForChoice(timing)}`;
       const group = choice === undefined ? buildGroupForHand(handCards) : buildGroupForHand(reassignHandCardOwnership(handCards, choice.swap), choice);
       const setups = group.setups.map((setup): ActionSequenceCandidate => ({
         label: setup.label === "" ? label : `${label}|${setup.label}`,
-        actions: choice === undefined ? setup.actions : choice.afterSkills ? [...setup.actions, choice.swap] : [choice.swap, ...setup.actions],
+        actions: choice === undefined ? setup.actions : choice.afterSkills ? [...setup.actions, choice.swap] : [...(prefix?.actions ?? []), choice.swap, ...setup.actions],
       }));
       return { setups, chains: group.chains };
     });

@@ -257,7 +257,7 @@ describe("advanceBeam shared setup and NP pre-filter", () => {
     });
   }
 
-  it("keeps exactly the lines a full per-candidate simulation keeps, in the same order", () => {
+  it("keeps the best line of each setup that a full per-candidate simulation reaches", () => {
     const start = state({ servants: [servant(1), servant(2, { currentNpGauge: 9500 }), servant(3)] });
     const skills: readonly SkillActivation[] = [
       { type: "useSkill", servantId: 1, skillSlot: 1, effects: [{ kind: "gainNp", rawAmount: 10000, targetType: "self" }], cooldownTurns: 5 },
@@ -275,14 +275,15 @@ describe("advanceBeam shared setup and NP pre-filter", () => {
     const scoreFn = damageDealtAtSlot(0);
 
     const reference = referenceAdvance(start, candidates, scoreFn);
-    const beam = advanceBeam(startBeam(start, scoreFn), 0, start, () => candidates, ALL_POSITIONS, () => 0.5, scoreFn, { beamWidth: candidates.length });
+    const beam = advanceBeam(startBeam(start, scoreFn), 0, start, () => candidates, ALL_POSITIONS, () => 0.5, scoreFn, { beamWidth: candidates.length, bestLinePerSetup: true });
 
     expect(reference.length).toBeGreaterThan(0);
     expect(reference.length).toBeLessThan(candidates.length);
-    expect(beam.map((entry) => [entry.label, entry.score])).toEqual(
-      [...reference].sort((a, b) => b.score - a.score).map((entry) => [entry.label, entry.score]),
-    );
-    expect(beam.some((entry) => entry.label.startsWith("useSkill:1.1|") && entry.label.includes("NP:1"))).toBe(true);
+    const setupOf = (label: string) => label.split("|")[0] as string;
+    const bestBySetup = new Map<string, number>();
+    for (const line of reference) bestBySetup.set(setupOf(line.label), Math.max(bestBySetup.get(setupOf(line.label)) ?? -Infinity, line.score));
+    expect(beam.map((entry) => setupOf(entry.label)).sort()).toEqual([...bestBySetup.keys()].sort());
+    for (const entry of beam) expect(entry.score).toBe(bestBySetup.get(setupOf(entry.label)));
     expect(beam.some((entry) => entry.label.includes("NP:2"))).toBe(false);
   });
 
@@ -344,12 +345,35 @@ describe("advanceBeam shared setup and NP pre-filter", () => {
       return first !== undefined && "chainCards" in first ? first.chainCards.map((card) => `${card.type}:${card.servantId}`).sort().join() : "";
     };
     expect(npFirst.length).toBeGreaterThan(new Set(npFirst.map(makeup)).size);
-    expect(beam).toHaveLength(new Set(npFirst.map(makeup)).size);
+    // At most one line per card makeup survives; makeups that end in the same battle state merge further.
+    expect(beam.length).toBeGreaterThan(0);
+    expect(beam.length).toBeLessThanOrEqual(new Set(npFirst.map(makeup)).size);
 
     const sameMakeup = npFirst.filter((chain) => makeup(chain) === makeup(npFirst[0]!));
     const after = (chain: ActionSequenceCandidate) => resolveAction(simulateActionSequence(start, chain.actions, ALL_POSITIONS, () => 0.5), { type: "endTurn" }, ALL_POSITIONS, () => 0.5);
     expect(sameMakeup.length).toBeGreaterThan(1);
     for (const chain of sameMakeup.slice(1)) expect(after(chain)).toEqual(after(sameMakeup[0]!));
+  });
+
+  it("drops lines whose wave-clearing blow is a face card unless face-card finishes are allowed", () => {
+    const start = state({ servants: [servant(1, { currentNpGauge: 10000 }), servant(2), servant(3)], enemies: [enemy({ currentHp: 1, maxHp: 1 })] });
+    const npOption: NpAttackOption = { servantId: 1, cardType: BUSTER, context: { ...BUSTER_CONTEXT, isNP: true, npDamageMultiplier: 3 }, targetNpcIds: [9001], label: "NP:1" };
+    const chains = buildAttackChainCandidates(start.handCards, start.handCards.map((card) => ({ ...BUSTER_CONTEXT, card: { type: card.card, position: 1 } })), [npOption], 9001);
+    const scoreFn = damageDealtAtSlot(0);
+    const firstAttack = (label: string) => label.split(">")[0];
+    const run = (faceCardFinishes: boolean) =>
+      advanceBeam(startBeam(start, scoreFn), 0, start, () => chains, ALL_POSITIONS, () => 0.5, scoreFn, { beamWidth: 1000, faceCardFinishes });
+
+    expect(run(true).some((entry) => firstAttack(entry.label) !== "NP:1")).toBe(true);
+    expect(run(false).length).toBeGreaterThan(0);
+    expect(run(false).every((entry) => firstAttack(entry.label) === "NP:1")).toBe(true);
+  });
+
+  it("keeps one line per identical battle state", () => {
+    const start = state();
+    const twins = [oneBusterCandidate("a"), oneBusterCandidate("b")];
+    const scoreFn = damageDealtAtSlot(0);
+    expect(advanceBeam(startBeam(start, scoreFn), 0, start, () => twins, CONSTANTS, () => 0.5, scoreFn)).toHaveLength(1);
   });
 
   it("rejects a fineSetupCount below 1", () => {

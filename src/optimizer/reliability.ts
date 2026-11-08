@@ -1,8 +1,9 @@
 import type { Action, DerivedHitContext } from "../battle/action.js";
+import type { BattleState } from "../battle/battleState.js";
 import type { BattleConstants } from "../battle/gameConstants.js";
 import { isQuestCleared, resolveAction } from "../battle/turnLoop.js";
 import { buildInitialBattleState, type PartyMemberSpec } from "./battleStateBuilder.js";
-import type { ActionSequenceResult } from "./turnSearch.js";
+import type { ActionSequenceCandidate, ActionSequenceResult } from "./turnSearch.js";
 
 export interface ReliabilityEstimate {
   readonly trialCount: number;
@@ -87,7 +88,8 @@ function withRandomModifier(context: DerivedHitContext, randomModifier: number):
   return { ...context, randomModifier };
 }
 
-function randomizeAttack(action: Action, randomFn: () => number): Action {
+/** Gives an attack action a fresh damage roll, `0.9 + randomFn() * 0.2` (pass `() => 0` for the minimum roll). */
+export function randomizeAttack(action: Action, randomFn: () => number): Action {
   if (action.type !== "playCard" && action.type !== "playExtraCard" && action.type !== "castNp") return action;
   const randomModifier = 0.9 + randomFn() * 0.2;
   if (action.type !== "castNp") {
@@ -130,6 +132,57 @@ export function estimateQuestCandidateReliability(
       });
       for (const action of candidate.best.actions) {
         state = resolveAction(state, randomizeAttack(action, randomFn), constants, randomFn);
+      }
+      return isQuestCleared(state);
+    },
+  });
+}
+
+/** Where each NP sits in a chain: `servantId` per attack slot, `null` for a face card. */
+function npSlots(actions: readonly Action[]): readonly (number | null)[] {
+  return actions.filter((action) => action.type === "playCard" || action.type === "castNp").map((action) => (action.type === "castNp" ? action.servantId : null));
+}
+
+/**
+ * Estimates how often a line clears when played the way a player would on freshly dealt hands:
+ * each turn keeps the line's skills, Mystic Code skills and Order Change, casts the same NPs in
+ * the same chain slots, and fills the face-card slots with the first such chain `chainsForState`
+ * offers for the hand actually dealt; damage rolls are re-rolled. A turn whose NPs cannot be cast
+ * that way fails the trial. `estimateQuestCandidateReliability` instead replays the exact log,
+ * so any change in the dealt hand fails it.
+ */
+export function estimatePlayedLineReliability(
+  candidate: ReplayCandidate,
+  chainsForState: (state: BattleState) => readonly ActionSequenceCandidate[],
+  constants: BattleConstants,
+  config: ReliabilityConfig,
+): ReliabilityEstimate {
+  const turns: Action[][] = [[]];
+  for (const action of candidate.best.actions) {
+    if (action.type === "endTurn") turns.push([]);
+    else (turns[turns.length - 1] as Action[]).push(action);
+  }
+  if (turns[turns.length - 1]?.length === 0) turns.pop();
+  return estimateClearReliability({
+    ...config,
+    runTrial: (randomFn) => {
+      let state = buildInitialBattleState(candidate.party, candidate.initialState.waves, {
+        costBudget: candidate.initialState.costBudget,
+        commandSealsRemaining: candidate.initialState.commandSealsRemaining,
+        fieldTraits: candidate.initialState.fieldTraits,
+        randomFn,
+      });
+      for (const turn of turns) {
+        const firstAttack = turn.findIndex((action) => action.type === "playCard" || action.type === "castNp" || action.type === "playExtraCard");
+        const setupLength = firstAttack < 0 ? turn.length : firstAttack;
+        for (const action of turn.slice(0, setupLength)) state = resolveAction(state, action, constants, randomFn);
+        if (setupLength < turn.length) {
+          const wanted = npSlots(turn.slice(setupLength)).join();
+          const chain = chainsForState(state).find((option) => npSlots(option.actions).join() === wanted);
+          if (chain === undefined) return false;
+          for (const action of chain.actions) state = resolveAction(state, randomizeAttack(action, randomFn), constants, randomFn);
+        }
+        state = resolveAction(state, { type: "endTurn" }, constants, randomFn);
       }
       return isQuestCleared(state);
     },

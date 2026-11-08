@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Action } from "../battle/action.js";
 import type { HandCard } from "../battle/battleState.js";
-import { buildOrderChangeCandidates, reassignHandCardOwnership, swapsOutSpentServants, type OrderChangeSwap } from "./orderChangeCandidates.js";
+import { buildOrderChangeCandidates, buildOrderChangeGroups, reassignHandCardOwnership, type OrderChangeSwap } from "./orderChangeCandidates.js";
 import type { ActionSequenceCandidate } from "./turnSearch.js";
 
 const swap: OrderChangeSwap = { type: "orderChange", outgoingServantId: 1, incomingServantId: 4 };
@@ -36,6 +36,18 @@ describe("buildOrderChangeCandidates", () => {
     const result = buildOrderChangeCandidates([swap], hand([1]), candidatesForHand);
     const noSwap = result.find((r) => r.label.startsWith("noOrderChange|"));
     expect(noSwap?.actions).toEqual([playCardAction(1)]);
+  });
+
+  it("plays the outgoing servant's skills just before a before-skills swap in factored groups", () => {
+    const outgoing: Action = { type: "useSkill", servantId: 1, skillSlot: 2, effects: [], cooldownTurns: 5 };
+    const groups = buildOrderChangeGroups([swap], hand([1]), (h) => ({ setups: [{ label: "noSkills", actions: [] }, { label: "s", actions: [skillAction] }], chains: candidatesForHand(h) }), {
+      afterSkillsTiming: false,
+      beforeSwap: () => ({ label: "useSkill:1.2", actions: [outgoing] }),
+    });
+    expect(groups.map((group) => group.setups.map((setup) => [setup.label, setup.actions]))).toEqual([
+      [["noOrderChange|noSkills", []], ["noOrderChange|s", [skillAction]]],
+      [["useSkill:1.2|orderChange:1->4@beforeSkills|noSkills", [outgoing, swap]], ["useSkill:1.2|orderChange:1->4@beforeSkills|s", [outgoing, swap, skillAction]]],
+    ]);
   });
 
   it("can leave out the after-skills timing", () => {
@@ -88,9 +100,3 @@ describe("buildOrderChangeCandidates", () => {
   });
 });
 
-describe("swapsOutSpentServants", () => {
-  it("keeps only swaps whose outgoing servant has no usable skill this turn", () => {
-    const swaps: readonly OrderChangeSwap[] = [swap, { type: "orderChange", outgoingServantId: 2, incomingServantId: 4 }];
-    expect(swapsOutSpentServants(swaps, (servantId) => servantId === 1)).toEqual([swaps[1]]);
-  });
-});

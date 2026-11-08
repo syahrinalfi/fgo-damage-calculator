@@ -20,7 +20,7 @@ export { npStrengtheningKey, selectNoblePhantasmVersion } from "./npVersionSelec
 export type { SkillActivation } from "./skillUsageCandidates.js";
 export { buildSkillAndCardOrderCandidates, buildSkillSetups } from "./skillUsageCandidates.js";
 export type { OrderChangeSwap } from "./orderChangeCandidates.js";
-export { buildOrderChangeCandidates, buildOrderChangeGroups, reassignHandCardOwnership, swapsOutSpentServants } from "./orderChangeCandidates.js";
+export { buildOrderChangeCandidates, buildOrderChangeGroups, reassignHandCardOwnership } from "./orderChangeCandidates.js";
 export type { PartyMemberSpec, InitialBattleStateOptions } from "./battleStateBuilder.js";
 export { buildInitialBattleState, partyMemberBattleId, supportBattleId } from "./battleStateBuilder.js";
 export { buildBorrowedSupportCandidate } from "./supportBuild.js";
@@ -31,6 +31,7 @@ export {
   MAX_RELIABILITY_TRIALS,
   createSeededRandom,
   estimateClearReliability,
+  estimatePlayedLineReliability,
   estimateQuestCandidateReliability,
   validateReliabilityConfig,
 } from "./reliability.js";

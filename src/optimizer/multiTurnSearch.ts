@@ -75,6 +75,17 @@ export interface MultiTurnSearchOptions {
    * least the number of setups makes the turn exhaustive. Default 32.
    */
   readonly fineSetupCount?: number;
+  /**
+   * Whether a face card or Extra Attack may land the blow that clears a wave. `false` keeps only
+   * lines whose waves fall to NPs, which do not depend on the next turn's dealt hand. Default
+   * `true`.
+   */
+  readonly faceCardFinishes?: boolean;
+  /**
+   * Keep only the best line per setup from each retained line, so the beam holds different plans
+   * rather than copies of one plan with different face cards. Default `false`.
+   */
+  readonly bestLinePerSetup?: boolean;
 }
 
 const DEFAULT_BEAM_WIDTH = 256;
@@ -156,7 +167,22 @@ export function startBeam(initialState: BattleState, scoreFn: SequenceScoreFn): 
   return [{ label: "", turnActions: [], state: initialState, attackerIds: new Set(), score: scoreFn(initialState, initialState) }];
 }
 
-const byScoreDescending = (a: BeamEntry, b: BeamEntry): number => b.score - a.score;
+/**
+ * Best score first. Among equal scores (e.g. every line that cleared the wave), the line that kept
+ * more resources: less total skill cooldown left to wait out, then more NP gauge. Without this,
+ * ties are kept in arbitrary order and a line that saved its charge skills for later turns can
+ * fall out of the beam.
+ */
+const byScoreDescending = (a: BeamEntry, b: BeamEntry): number =>
+  b.score - a.score || totalCooldown(a.state) - totalCooldown(b.state) || totalNpGauge(b.state) - totalNpGauge(a.state);
+
+function totalCooldown(state: BattleState): number {
+  return state.servants.reduce((sum, servant) => sum + servant.skillCooldowns[0] + servant.skillCooldowns[1] + servant.skillCooldowns[2], 0);
+}
+
+function totalNpGauge(state: BattleState): number {
+  return state.servants.reduce((sum, servant) => sum + servant.currentNpGauge, 0);
+}
 
 /** One attack chain after a setup; `full` is the caller's own candidate when it was given unfactored. */
 interface Chain {
@@ -208,20 +234,41 @@ export function advanceBeam(
     }
   }
 
-  const expanded: BeamEntry[] = [];
-  const keep = (entry: BeamEntry | null): void => {
-    if (entry === null) return;
-    expanded.push(entry);
-    if (expanded.length >= beamWidth * 2) {
-      expanded.sort(byScoreDescending);
-      expanded.length = beamWidth;
+  // Only one line per identical battle state with the same attackers keeps a beam slot (they have
+  // the same future), and with `bestLinePerSetup` only the best line per setup: otherwise ties
+  // (every line that cleared the wave) crowd the beam with copies of one plan that differ only in
+  // face cards, and a plan that saved its charge skills for later turns falls out.
+  const bestBySetup = new Map<SetupGroup | BeamEntry, BeamEntry>();
+  const trimToBeam = (): BeamEntry[] => {
+    const ranked = [...bestBySetup.entries()].sort(([, a], [, b]) => byScoreDescending(a, b));
+    const seen = new Set<string>();
+    const kept: BeamEntry[] = [];
+    bestBySetup.clear();
+    for (const [group, entry] of ranked) {
+      const key = `${battleStateKey(entry.state)}|${[...entry.attackerIds].sort().join()}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      kept.push(entry);
+      bestBySetup.set(group, entry);
+      if (kept.length === beamWidth) break;
     }
+    return kept;
   };
+  const keep = (setupGroup: SetupGroup, entry: BeamEntry | null): void => {
+    if (entry === null) return;
+    const group = options.bestLinePerSetup === true ? setupGroup : entry;
+    const current = bestBySetup.get(group);
+    if (current !== undefined && byScoreDescending(current, entry) <= 0) return;
+    bestBySetup.set(group, entry);
+    if (bestBySetup.size >= beamWidth * 2) trimToBeam();
+  };
+  const faceCardFinishes = options.faceCardFinishes ?? true;
   const simulateLine = (group: SetupGroup, chain: Chain, seenAfterClear?: Set<string>): BeamEntry | null => {
     let state = group.setupState;
     for (let index = 0; index < chain.actions.length; index += 1) {
       const next = simulateOrUnavailable(state, chain.actions, index, index + 1, constants, randomFn);
       if (next === null) return null;
+      if (!faceCardFinishes && isFaceCard(chain.actions[index] as Action) && !waveCleared(state) && waveCleared(next)) return null;
       state = next;
       if (seenAfterClear !== undefined && waveCleared(state) && chain.actions.slice(index + 1).every(isFaceCard)) {
         const key = clearedChainKey(chain.actions, index);
@@ -243,7 +290,7 @@ export function advanceBeam(
   const searchEveryChain = (group: SetupGroup, alreadyKept?: Chain): void => {
     const seenAfterClear = new Set<string>();
     if (alreadyKept !== undefined) simulateLine(group, alreadyKept, seenAfterClear);
-    for (const chain of group.chains) if (chain !== alreadyKept) keep(simulateLine(group, chain, seenAfterClear));
+    for (const chain of group.chains) if (chain !== alreadyKept) keep(group, simulateLine(group, chain, seenAfterClear));
   };
 
   if (groups.length <= fineSetupCount) {
@@ -256,15 +303,19 @@ export function advanceBeam(
         const entry = simulateLine(group, representative);
         if (entry === null) continue;
         coarse.push({ group, entry, representative });
-        keep(entry);
+        keep(group, entry);
         break;
       }
     }
-    coarse.sort((a, b) => b.entry.score - a.entry.score);
+    coarse.sort((a, b) => byScoreDescending(a.entry, b.entry));
     for (const { group, representative } of coarse.slice(0, fineSetupCount)) searchEveryChain(group, representative);
   }
-  expanded.sort(byScoreDescending);
-  return expanded.slice(0, beamWidth);
+  return trimToBeam();
+}
+
+/** Everything about a battle that can change between turns (the quest's static waves left out). */
+function battleStateKey(state: BattleState): string {
+  return JSON.stringify(state, (key, value: unknown) => (key === "waves" ? undefined : value instanceof Set ? [...value] : value));
 }
 
 /** Normalizes a turn's candidates into setups with their chains; an unfactored list is grouped by shared setup action objects. */

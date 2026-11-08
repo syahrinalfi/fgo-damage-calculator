@@ -9,6 +9,7 @@ import { isQuestCleared } from "../battle/turnLoop.js";
 import type { ServantBuild } from "../account/types.js";
 import type { Wave, WaveEnemy } from "../quest/types.js";
 import { optimizeQuest, optimizeQuestMinimumTurns, type ServantCandidate } from "./questOptimizer.js";
+import { estimateQuestCandidateReliability } from "./reliability.js";
 import type { NpAttackOption } from "./cardOrderCandidates.js";
 import type { SkillActivation } from "./skillUsageCandidates.js";
 import { npStrengtheningKey } from "./npVersionSelection.js";
@@ -563,6 +564,7 @@ describe("optimizeQuest", () => {
       resolveHitContext,
       turnCount: 2,
       randomFn: () => 0,
+      allowFaceCardFinishes: true,
     });
 
     expect(results[0]?.best.finalState.currentWaveIndex).toBe(1);
@@ -897,6 +899,7 @@ describe("optimizeQuestMinimumTurns", () => {
       resolveHitContext,
       maxTurns: 6,
       randomFn: () => 0,
+      allowFaceCardFinishes: true,
     });
     expect(result.minimumTurns).toBe(2);
     expect(result.attackerLimitUsed).toBe(2);
@@ -916,6 +919,7 @@ describe("optimizeQuestMinimumTurns", () => {
       resolveHitContext,
       maxTurns: 1,
       randomFn: () => 0,
+      allowFaceCardFinishes: true,
     });
     expect(result.attackerLimitUsed).toBe(1);
     expect(result.candidates.length).toBeLessThanOrEqual(5);
@@ -934,6 +938,7 @@ describe("optimizeQuestMinimumTurns", () => {
       constants: CONSTANTS,
       resolveHitContext,
       maxTurns: 1,
+      allowFaceCardFinishes: true,
       reliability: { trialCount: 8, seed: 42 },
     } as const;
     const first = optimizeQuestMinimumTurns(options);
@@ -943,6 +948,59 @@ describe("optimizeQuestMinimumTurns", () => {
     expect(first.candidates.map((candidate) => candidate.strategyKey)).toEqual(
       second.candidates.map((candidate) => candidate.strategyKey),
     );
+  });
+
+  it("replays finalists on fresh hands with the same skills and NPs, so an NP clear is reliable however the cards fall", () => {
+    const damageFunc = {
+      funcId: 1,
+      funcType: Func.FuncType.DAMAGE_NP,
+      funcTargetType: Func.FuncTargetType.ENEMY,
+      funcTargetTeam: Func.FuncTargetTeam.ENEMY,
+      functvals: [],
+      funcquestTvals: [],
+      overWriteTvalsList: [],
+      funcPopupText: "",
+      buffs: [],
+      svals: [{ Value: 100000 }],
+      svals2: [{ Value: 100000 }],
+      svals3: [{ Value: 100000 }],
+    } as unknown as Func.Func;
+    const np = {
+      id: 1001, num: 1, card: "2", name: "NP", effectFlags: ["attackEnemyOne"],
+      npGain: { buster: [50], arts: [50], quick: [50], extra: [50], defence: [50], np: [80] },
+      npDistribution: [100], functions: [damageFunc], individuality: [],
+    } as unknown as NoblePhantasm.NoblePhantasm;
+    const charge = (state: BattleState): readonly SkillActivation[] => {
+      const actor = state.servants.find((servant) => servant.servantId === 1);
+      return actor === undefined || actor.skillCooldowns[0] !== 0 ? [] : [{ type: "useSkill", servantId: 1, skillSlot: 1, effects: [{ kind: "gainNp", rawAmount: 10000, targetType: "self" }], cooldownTurns: 5 }];
+    };
+    const result = optimizeQuestMinimumTurns({
+      shortlist: [candidate(1), candidate(2), candidate(3)],
+      cePool: [],
+      waves: [wave({ initialEnemies: [waveEnemy({ hp: 10000 })], enemyPool: [waveEnemy({ hp: 10000 })] })],
+      costBudget: 1000,
+      constants: CONSTANTS,
+      resolveHitContext,
+      resolveSkillOptions: charge,
+      npByServantId: () => np,
+      maxTurns: 1,
+      randomFn: () => 0.5,
+      reliability: { trialCount: 20, seed: 7 },
+    });
+    const finalist = result.candidates[0];
+    expect(result.minimumTurns).toBe(1);
+    expect(finalist?.best.actions.some((action) => action.type === "castNp")).toBe(true);
+    expect(finalist?.reliability?.clearProbability).toBe(1);
+    expect(estimateQuestCandidateReliability(finalist!, CONSTANTS, { trialCount: 20, seed: 7 }).clearProbability).toBeLessThan(1);
+  });
+
+  it("can search every attack at the minimum damage roll", () => {
+    const base = { shortlist: [candidate(1), candidate(2), candidate(3)], cePool: [], waves: [wave()], costBudget: 1000, constants: CONSTANTS, resolveHitContext, turnCount: 1, randomFn: () => 0.5 } as const;
+    const rolls = (minimumDamageRoll: boolean) =>
+      optimizeQuest({ ...base, minimumDamageRoll })[0]?.best.actions.flatMap((action) => ("context" in action ? [action.context.randomModifier] : []));
+    expect(rolls(true)?.length).toBeGreaterThan(0);
+    expect(rolls(true)?.every((roll) => roll === 0.9)).toBe(true);
+    expect(rolls(false)?.some((roll) => roll !== 0.9)).toBe(true);
   });
 
   it("uses Event CE preference to choose among otherwise equivalent strategies", () => {
@@ -961,6 +1019,7 @@ describe("optimizeQuestMinimumTurns", () => {
       maxTurns: 1,
       preferences: { eventCeIds: [777] },
       randomFn: () => 0,
+      allowFaceCardFinishes: true,
     });
     expect(result.candidates[0]?.party.some((member) => member.equippedCe?.data.id === 777)).toBe(true);
   });
@@ -976,6 +1035,7 @@ describe("optimizeQuestMinimumTurns", () => {
       resolveHitContext,
       maxTurns: 1,
       randomFn: () => 0,
+      allowFaceCardFinishes: true,
     });
     expect(result.minimumTurns).toBeNull();
     expect(result.searchedThroughTurn).toBe(1);
@@ -1007,6 +1067,7 @@ describe("upgrade advisor integration", () => {
       maxTurns: 1,
       maxAttackers: 1,
       randomFn: () => 0.5,
+      allowFaceCardFinishes: true,
     });
     expect(report.baseline.minimumTurns).toBeNull();
     expect(report.recommendations[0]).toMatchObject({ kind: "npLevel", servantId: 1, from: 1, to: 2 });
@@ -1055,6 +1116,7 @@ describe("upgrade advisor integration", () => {
       maxTurns: 1,
       maxAttackers: 1,
       randomFn: () => 0.5,
+      allowFaceCardFinishes: true,
     };
     const scenarios = buildUpgradeScenarios(options).filter((scenario) =>
       scenario.kind === "ceMlb" && scenario.inventoryId === "target",
@@ -1092,6 +1154,7 @@ describe("upgrade advisor integration", () => {
       maxTurns: 1,
       maxAttackers: 3,
       randomFn: () => 0,
+      allowFaceCardFinishes: true,
     });
     expect(report.baseline.minimumTurns).toBeNull();
     expect(report.recommendations[0]).toMatchObject({
@@ -1152,6 +1215,7 @@ describe("upgrade advisor integration", () => {
       maxTurns: 1,
       maxAttackers: 3,
       randomFn: () => 0.5,
+      allowFaceCardFinishes: true,
     };
     const report = findClearUpgradeRecommendations(optimizerOptions, { ownedServantCandidates: [owned] });
 

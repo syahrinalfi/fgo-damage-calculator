@@ -27,7 +27,7 @@ import {
   type TurnCandidateGroup,
 } from "./multiTurnSearch.js";
 import { questProgress } from "./objectives.js";
-import { buildOrderChangeGroups, swapsOutSpentServants, type OrderChangeSwap } from "./orderChangeCandidates.js";
+import { buildOrderChangeGroups, type OrderChangeSwap } from "./orderChangeCandidates.js";
 import { skillSourceFor } from "./rosterInputs.js";
 import { buildSkillSetups, type SkillActivation } from "./skillUsageCandidates.js";
 import { searchBestActionSequence, type ActionSequenceCandidate, type ActionSequenceResult, type SequenceScoreFn } from "./turnSearch.js";
@@ -38,7 +38,7 @@ import {
   type QuestOptimizerPreferences,
   type RankedQuestCandidate,
 } from "./resultRanking.js";
-import { createSeededRandom, estimateQuestCandidateReliability, validateReliabilityConfig, type ReliabilityConfig } from "./reliability.js";
+import { createSeededRandom, estimatePlayedLineReliability, randomizeAttack, validateReliabilityConfig, type ReliabilityConfig } from "./reliability.js";
 
 /** One shortlisted servant a caller wants the search to consider fielding — not yet tied to a CE or front-line/bench role, both decided per enumerated combination. */
 export interface ServantCandidate {
@@ -183,6 +183,18 @@ export interface QuestOptimizerOptions {
    * beam of 16 lines and 8 fully searched setups per turn.
    */
   readonly searchLevel?: "quick" | "thorough";
+  /**
+   * Let a face card or Extra Attack land a wave's clearing blow in multi-turn searches. Off by
+   * default: a line that needs particular face cards on a later turn depends on that turn's
+   * dealt hand, so by default every wave must fall to NPs (project owner's direction).
+   */
+  readonly allowFaceCardFinishes?: boolean;
+  /**
+   * Simulate every attack at the lowest damage roll (0.9) so a line only counts as a clear when it
+   * clears even on low rolls. Card draws and crits are unchanged. Defaults to on for the quick
+   * level, off otherwise.
+   */
+  readonly minimumDamageRoll?: boolean;
   /** Hard cap on distinct servants performing damaging actions across the searched line. */
   readonly maxAttackerCount?: number;
   readonly preferences?: QuestOptimizerPreferences;
@@ -273,6 +285,9 @@ function searchSettings(options: QuestOptimizerOptions): SearchSettings {
   return { scoreFn: options.scoreFn ?? questProgress(), randomFn: options.randomFn ?? Math.random, attributionPoolSize };
 }
 
+/** The quick level's default finalist replay: 100 seeded trials. */
+const QUICK_RELIABILITY: ReliabilityConfig = { trialCount: 100, seed: 1 };
+
 /** The attacker a `"quick"` search is built around; throws when the quick level has none. */
 function quickSearchAttacker(options: QuestOptimizerOptions): number | undefined {
   if (options.searchLevel !== "quick") return undefined;
@@ -281,12 +296,17 @@ function quickSearchAttacker(options: QuestOptimizerOptions): number | undefined
   return attackerId;
 }
 
-/** Explicit beam settings, else the quick level's narrower defaults, else the search's own defaults. */
-function beamWidths(options: QuestOptimizerOptions): { beamWidth?: number; fineSetupCount?: number } {
+/** Explicit beam settings, else the quick level's narrower defaults, else the search's own defaults; face-card finishes off unless allowed. */
+function beamWidths(options: QuestOptimizerOptions): { beamWidth?: number; fineSetupCount?: number; faceCardFinishes: boolean; bestLinePerSetup: boolean } {
   const quick = options.searchLevel === "quick";
   const beamWidth = options.beamWidth ?? (quick ? 16 : undefined);
   const fineSetupCount = options.fineSetupCount ?? (quick ? 8 : undefined);
-  return { ...(beamWidth === undefined ? {} : { beamWidth }), ...(fineSetupCount === undefined ? {} : { fineSetupCount }) };
+  return {
+    ...(beamWidth === undefined ? {} : { beamWidth }),
+    ...(fineSetupCount === undefined ? {} : { fineSetupCount }),
+    faceCardFinishes: options.allowFaceCardFinishes === true,
+    bestLinePerSetup: true,
+  };
 }
 
 /** One within-budget party (formation × CE assignment) ready to search, with its per-turn candidate builder. */
@@ -316,6 +336,7 @@ function* partySearches(options: QuestOptimizerOptions, randomFn: () => number):
       ];
   const resolveSkillOptions = options.resolveSkillOptions;
   const quickAttackerId = quickSearchAttacker(options);
+  const minimumDamageRoll = options.minimumDamageRoll ?? options.searchLevel === "quick";
   const defaultTargetServantId = options.defaultTargetServantId;
   const resolveSkillOptionSetsFn: ((state: BattleState) => readonly (readonly SkillActivation[])[]) | undefined =
     resolveSkillOptions !== undefined
@@ -333,17 +354,20 @@ function* partySearches(options: QuestOptimizerOptions, randomFn: () => number):
               state.servants
                 .filter((servant) => servant.isFrontLine)
                 .map((focus) => resolveSkillActivationOptions(state, skillSources, { defaultTargetServantId: () => focus.servantId }));
-  // A caller's own swap resolver is searched in full; the default prunes to swapping out a spent
-  // servant before skills (`swapsOutSpentServants`).
-  const pruneOrderChange = options.resolveOrderChangeOptions === undefined;
+  // A caller's own swap resolver is searched with both timings. The default swaps the way it is
+  // played: the outgoing servant first uses whatever skills it has left, then leaves, then the
+  // party (with the newcomer) picks its skills.
+  const defaultOrderChange = options.resolveOrderChangeOptions === undefined;
   const resolveOrderChangeOptionsFn =
     options.resolveOrderChangeOptions ??
     (options.hasOrderChangeMysticCodeSkill === undefined
       ? undefined
-      : (state: BattleState) => {
-          const withSkills = new Set((resolveSkillOptionSetsFn?.(state) ?? []).flat().flatMap((activation) => (activation.type === "useSkill" ? [activation.servantId] : [])));
-          return swapsOutSpentServants(resolveOrderChangeSwapOptions(state, options.hasOrderChangeMysticCodeSkill as boolean), (servantId) => withSkills.has(servantId));
-        });
+      : (state: BattleState) => resolveOrderChangeSwapOptions(state, options.hasOrderChangeMysticCodeSkill as boolean));
+  /** The outgoing servant's usable skills (first focus target), played just before a default swap. */
+  const outgoingSkills = (state: BattleState, swap: OrderChangeSwap): ActionSequenceCandidate => {
+    const own = (resolveSkillOptionSetsFn?.(state)[0] ?? []).filter((activation) => activation.type === "useSkill" && activation.servantId === swap.outgoingServantId);
+    return buildSkillSetups(own).find((setup) => setup.actions.length === own.length) ?? { label: "", actions: [] };
+  };
 
   const maxBenchCount = options.maxBenchCount ?? 0;
   const ownedSlots: readonly PartySlot[] = options.shortlist.map((candidate) => ({ candidate, isSupport: false }));
@@ -425,7 +449,8 @@ function* partySearches(options: QuestOptimizerOptions, randomFn: () => number):
         // when the swap comes first, so the incoming servant's skills are offered and a
         // single-ally skill never targets the servant who just left.
         const buildForHand = (hand: BattleState["handCards"], choice?: OrderChangeChoice<OrderChangeSwap>): TurnCandidateGroup => {
-          const cardState = choice === undefined ? state : resolveAction(state, choice.swap, options.constants, randomFn);
+          const beforeSwap = choice === undefined || choice.afterSkills || !defaultOrderChange ? [] : outgoingSkills(state, choice.swap).actions;
+          const cardState = choice === undefined ? state : [...beforeSwap, choice.swap].reduce((current, action) => resolveAction(current, action, options.constants, randomFn), state);
           const skillState = choice?.afterSkills === false ? cardState : state;
           const resolveHitContext = resolveHitContextIn(cardState);
           const contextTemplates = hand.map(resolveHitContext);
@@ -442,13 +467,16 @@ function* partySearches(options: QuestOptimizerOptions, randomFn: () => number):
               const resolved = resolveNpAttackOption(cardState, servant.servantId, np, targetEnemy.npcId, randomFn);
               return resolved === undefined ? [] : [resolved];
             });
-          const cardCandidates = buildAttackChainCandidates(
+          const builtChains = buildAttackChainCandidates(
             hand,
             contextTemplates,
             npOptions,
             targetEnemy.npcId,
             (servantId) => resolveHitContext({ card: Card.EXTRA, servantId }),
           );
+          const cardCandidates = minimumDamageRoll
+            ? builtChains.map((chain) => ({ label: chain.label, actions: chain.actions.map((action) => randomizeAttack(action, () => 0)) }))
+            : builtChains;
           if (resolveSkillOptionSetsFn === undefined) return { setups: [{ label: "", actions: [] }], chains: cardCandidates };
           const setups = new Map<string, ActionSequenceCandidate>();
           for (const skillOptions of resolveSkillOptionSetsFn(skillState)) {
@@ -458,7 +486,14 @@ function* partySearches(options: QuestOptimizerOptions, randomFn: () => number):
         };
         return resolveOrderChangeOptionsFn === undefined
           ? { groups: [buildForHand(state.handCards)] }
-          : { groups: buildOrderChangeGroups(resolveOrderChangeOptionsFn(state), state.handCards, buildForHand, { afterSkillsTiming: !pruneOrderChange }) };
+          : {
+              groups: buildOrderChangeGroups(
+                resolveOrderChangeOptionsFn(state),
+                state.handCards,
+                buildForHand,
+                defaultOrderChange ? { afterSkillsTiming: false, beforeSwap: (choice) => outgoingSkills(state, choice.swap) } : {},
+              ),
+            };
       };
 
       yield { party, initialState, buildCandidatesForState };
@@ -536,7 +571,11 @@ export interface MinimumTurnOptimizerOptions extends Omit<QuestOptimizerOptions,
   /** Progressive widening stops at this many damage dealers. Defaults to the largest fieldable party. */
   readonly maxAttackers?: number;
   readonly maxResults?: number;
-  /** Optional seeded finalist replay. Omit to skip the additional probability pass. */
+  /**
+   * Seeded finalist replay on freshly dealt hands (`estimatePlayedLineReliability`); cleared
+   * finalists are then ranked by clear rate. Defaults to 100 trials for the quick level; omit
+   * otherwise to skip the extra pass.
+   */
   readonly reliability?: ReliabilityConfig;
 }
 
@@ -608,12 +647,16 @@ export function optimizeQuestMinimumTurns(options: MinimumTurnOptimizerOptions):
   }
 
   if (found !== undefined) {
-    const evaluated = reliability === undefined
+    const finalistReliability = reliability ?? (questOptions.searchLevel === "quick" ? QUICK_RELIABILITY : undefined);
+    const searchByParty = new Map(searches.map((search) => [search.party, search]));
+    const evaluated = finalistReliability === undefined
       ? found.cleared
-      : found.cleared.map((candidate) => ({
-          ...candidate,
-          reliability: estimateQuestCandidateReliability(candidate, options.constants, reliability),
-        }));
+      : found.cleared.map((candidate) => {
+          const search = searchByParty.get(candidate.party);
+          // A turn's first group holds its chains without an Order Change; the line's own swap is replayed as setup.
+          const chainsForState = (state: BattleState) => search?.buildCandidatesForState(state).groups[0]?.chains ?? [];
+          return { ...candidate, reliability: estimatePlayedLineReliability(candidate, chainsForState, options.constants, finalistReliability) };
+        });
     return {
       minimumTurns: found.turns,
       searchedThroughTurn: found.turns,
