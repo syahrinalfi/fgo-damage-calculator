@@ -14,7 +14,8 @@ import type { ActiveBuffInstance } from "../buffs/types.js";
  * of scope until a concrete case is worked through), unlike `RemoveBuffEffect` below, whose
  * one confirmed example (research/05 §5) is enemy-targeted.
  */
-export type SkillTargetType = "self" | "ptOne" | "ptAll";
+/** `ptOther`: the front-line allies other than the caster; `ptOtherFull`: every ally other than the caster, bench included. */
+export type SkillTargetType = "self" | "ptOne" | "ptAll" | "ptOther" | "ptOtherFull";
 
 /**
  * One already-resolved buff grant a `useSkill`/`useMysticCodeSkill` `Action` applies —

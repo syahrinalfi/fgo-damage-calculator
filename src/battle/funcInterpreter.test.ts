@@ -101,10 +101,29 @@ describe("resolveSkillEffects — addState/addStateShort", () => {
     expect(effect?.kind === "grantBuff" ? effect.buff.afterAttack : undefined).toEqual({ mainOnly: true, effects: [{ kind: "gainNp", rawAmount: 1000, targetType: "self" }] });
   });
 
-  it("flags an unsupported funcTargetType (ptOther) as unmodeled rather than guessing", () => {
+  it("grants a presence buff with no Value (e.g. Invincible) at amount 0 instead of dropping the skill", () => {
+    const f = func({ funcType: Func.FuncType.ADD_STATE, funcTargetType: Func.FuncTargetType.PT_ONE, buffs: [buff({ type: "invincible" as Buff.BuffType })], svals: [{ Turn: 1, Count: 1 }] });
+    expect(resolveSkillEffects(skill([f]), 1)).toMatchObject({ effects: [{ kind: "grantBuff", buff: { type: "invincible", amount: 0 }, rawTurn: 1, rawCount: 1, targetType: "ptOne" }], unmodeled: [] });
+  });
+
+  it("maps ptOther and ptOtherFull to the allies other than the caster", () => {
+    const grant = (funcTargetType: Func.FuncTargetType) => resolveSkillEffects(skill([func({ funcType: Func.FuncType.ADD_STATE_SHORT, funcTargetType, buffs: [buff()], svals: [{ Value: 300, Turn: 3 }] })]), 1).effects[0];
+    expect(grant(Func.FuncTargetType.PT_OTHER)).toMatchObject({ kind: "grantBuff", targetType: "ptOther" });
+    expect(grant(Func.FuncTargetType.PT_OTHER_FULL)).toMatchObject({ kind: "grantBuff", targetType: "ptOtherFull" });
+  });
+
+  it("drops a self NP-type switch (tdTypeChange) so the selected NP form is kept", () => {
+    const keep = func({ funcType: Func.FuncType.ADD_STATE_SHORT, funcTargetType: Func.FuncTargetType.SELF, buffs: [buff({ type: "upNpdamage" as Buff.BuffType })], svals: [{ Value: 200, Turn: 3 }] });
+    const change = func({ funcType: Func.FuncType.ADD_STATE_SHORT, funcTargetType: Func.FuncTargetType.COMMAND_TYPE_SELF_TREASURE_DEVICE, buffs: [buff({ type: "tdTypeChangeArts" as Buff.BuffType })], svals: [{ Turn: 3 }] });
+    const result = resolveSkillEffects(skill([keep, change]), 1);
+    expect(result.unmodeled).toEqual([]);
+    expect(result.effects).toHaveLength(1);
+  });
+
+  it("flags an unsupported funcTargetType (ptRandom) as unmodeled rather than guessing", () => {
     const f = func({
       funcType: Func.FuncType.ADD_STATE,
-      funcTargetType: Func.FuncTargetType.PT_OTHER,
+      funcTargetType: Func.FuncTargetType.PT_RANDOM,
       buffs: [buff()],
       svals: [{ Value: 200, Turn: 3 }],
     });

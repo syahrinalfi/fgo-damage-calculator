@@ -48,8 +48,8 @@ export { resolveAction, isQuestCleared, NP_GAUGE_CAP_BY_LEVEL } from "./turnLoop
 export type { FuncInterpretationResult } from "./funcInterpreter.js";
 export { npFunctionSvalsAt, resolveSkillEffects, resolveNpEffects } from "./funcInterpreter.js";
 export { resolveCardHitContext } from "./hitContextResolver.js";
-export type { SkillActivation, SkillSlotSource, ServantSkillSource, ResolveSkillActivationOptionsConfig } from "./skillActivationResolver.js";
-export { resolveSkillActivationOptions } from "./skillActivationResolver.js";
+export type { MysticCodeSkillSource, SkillActivation, SkillSlotSource, ServantSkillSource, ResolveSkillActivationOptionsConfig } from "./skillActivationResolver.js";
+export { resolveMysticCodeActivationOptions, resolveSkillActivationOptions } from "./skillActivationResolver.js";
 export type { OrderChangeSwap } from "./orderChangeSwapResolver.js";
 export { resolveOrderChangeSwapOptions } from "./orderChangeSwapResolver.js";
 export { allocateCritStars, critChanceForStars, rollIsCrit } from "./critStarLottery.js";

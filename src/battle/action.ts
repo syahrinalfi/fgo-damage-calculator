@@ -130,7 +130,13 @@ export type Action =
       readonly targetServantId?: number;
       readonly targetNpcId?: number;
     }
-  | { readonly type: "orderChange"; readonly outgoingServantId: number; readonly incomingServantId: number }
+  | {
+      readonly type: "orderChange";
+      readonly outgoingServantId: number;
+      readonly incomingServantId: number;
+      /** The Order Change skill's cooldown, set on Mystic Code slot 3; `ORDER_CHANGE_COOLDOWN_TURNS` when omitted. */
+      readonly cooldownTurns?: number;
+    }
   | { readonly type: "useCommandSeal"; readonly effect: CommandSealEffect }
   | { readonly type: "endTurn" };
 

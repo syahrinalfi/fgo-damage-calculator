@@ -779,6 +779,9 @@ function resolveAllyTargets(
       }
       return [target.servantId];
     }
+    case "ptOther":
+    case "ptOtherFull":
+      return servants.filter((s) => s.servantId !== actingServantId && (targetType === "ptOtherFull" || s.isFrontLine)).map((s) => s.servantId);
   }
 }
 
@@ -1192,6 +1195,13 @@ function resolveUseMysticCodeSkill(
 }
 
 /**
+ * Order Change's cooldown when the action does not carry one: every Order Change Mystic Code on NA
+ * (Chaldea Combat Uniform, Chaldea Uniform - Decisive Battle; Atlas `nice_mystic_code`) has 13 turns
+ * at level 10 and 15 at level 1, longer than the optimizer's 6-turn cap, so it is once per battle.
+ */
+export const ORDER_CHANGE_COOLDOWN_TURNS = 13;
+
+/**
  * `orderChange` — swaps a front-line servant out for a benched one, per research/07 §3-4
  * (`funcType: replaceMember`, confirmed by the project owner's direct gameplay knowledge).
  * `outgoingServantId` must currently be front-line and `incomingServantId` currently
@@ -1205,7 +1215,8 @@ function resolveUseMysticCodeSkill(
  * swap, only *which servant* that slot's card belongs to changes"). The outgoing servant's
  * undealt cards in the card bag change owner the same way, keeping their types (project
  * owner's gameplay knowledge, research/07 §4); nothing is drawn, returned or reshuffled, so
- * Order Change stays decoupled from the bag-depletion mechanic (research/03 §6.5).
+ * Order Change stays decoupled from the bag-depletion mechanic (research/03 §6.5). The swap puts
+ * Mystic Code slot 3 on cooldown, so it cannot be used again within the battle.
  *
  * HP, NP gauge, buffs, and skill cooldowns need no adjustment here beyond the `isFrontLine`
  * flip itself: they already live on the `ServantInstance`, not the hand slot, and
@@ -1232,8 +1243,10 @@ function resolveOrderChange(state: BattleState, action: Extract<Action, { type: 
     return s;
   });
   const reown = (hc: HandCard): HandCard => (hc.servantId === outgoing.servantId ? { ...hc, servantId: incoming.servantId } : hc);
+  const mysticCodeSkillCooldowns = [...state.mysticCodeSkillCooldowns] as [number, number, number];
+  mysticCodeSkillCooldowns[2] = action.cooldownTurns ?? ORDER_CHANGE_COOLDOWN_TURNS;
 
-  return { ...state, servants, handCards: state.handCards.map(reown), cardBag: state.cardBag.map(reown) };
+  return { ...state, servants, handCards: state.handCards.map(reown), cardBag: state.cardBag.map(reown), mysticCodeSkillCooldowns };
 }
 
 /**

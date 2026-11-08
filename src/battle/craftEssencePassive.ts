@@ -72,6 +72,8 @@ function targetIds(
       return new Set([source.servantId]);
     case "ptAll":
     case "ptOne":
+    case "ptOther":
+    case "ptOtherFull":
       // Field-dependent CE auras need add/remove handling across Order Change.
       // Ignoring them is conservative; applying them permanently could invent a clear.
       return new Set();

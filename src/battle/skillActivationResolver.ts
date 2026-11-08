@@ -86,3 +86,34 @@ export function resolveSkillActivationOptions(
   }
   return results;
 }
+
+/** An equipped Mystic Code's three skills (in slot order) and its level. */
+export interface MysticCodeSkillSource {
+  readonly skills: readonly Pick<Skill.Skill, "functions" | "coolDown">[];
+  readonly level: number;
+}
+
+/**
+ * The Mystic Code skills usable now (`BattleState.mysticCodeSkillCooldowns` at 0), resolved like
+ * servant skills: a skill with an unmodeled function, an enemy target this resolver cannot pick,
+ * or a `self` effect (a Mystic Code has no servant to be "self") is skipped. Single-ally effects
+ * go to `targetServantId`. Order Change (`replaceMember`) is unmodeled here; it has its own axis.
+ */
+export function resolveMysticCodeActivationOptions(state: BattleState, mysticCode: MysticCodeSkillSource, targetServantId: number): readonly SkillActivation[] {
+  const results: SkillActivation[] = [];
+  mysticCode.skills.slice(0, 3).forEach((skill, index) => {
+    if (state.mysticCodeSkillCooldowns[index] !== 0) return;
+    const { effects, unmodeled } = resolveSkillEffects(skill, mysticCode.level);
+    if (unmodeled.length > 0 || effects.length === 0) return;
+    if (effects.some(needsUnresolvableEnemyTarget) || effects.some((effect) => "targetType" in effect && effect.targetType === "self")) return;
+    const cooldownTurns = skill.coolDown[mysticCode.level - 1];
+    if (cooldownTurns === undefined) return;
+    const slot = (index + 1) as 1 | 2 | 3;
+    results.push(
+      effects.some(needsAllyTarget)
+        ? { type: "useMysticCodeSkill", slot, effects, cooldownTurns, targetServantId }
+        : { type: "useMysticCodeSkill", slot, effects, cooldownTurns },
+    );
+  });
+  return results;
+}

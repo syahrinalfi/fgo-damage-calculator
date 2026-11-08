@@ -66,6 +66,10 @@ function allyTargetType(target: Func.FuncTargetType): SkillTargetType | null {
       return "ptOne";
     case Func.FuncTargetType.PT_ALL:
       return "ptAll";
+    case Func.FuncTargetType.PT_OTHER:
+      return "ptOther";
+    case Func.FuncTargetType.PT_OTHER_FULL:
+      return "ptOtherFull";
     default:
       return null;
   }
@@ -83,7 +87,9 @@ function enemyTargetType(target: Func.FuncTargetType): "enemyOne" | "enemyAll" |
 }
 
 function removalTargetType(target: Func.FuncTargetType): BuffRemovalTargetType | null {
-  return allyTargetType(target) ?? enemyTargetType(target);
+  const ally = allyTargetType(target);
+  if (ally === "ptOther" || ally === "ptOtherFull") return null;
+  return ally ?? enemyTargetType(target);
 }
 
 /** `Turn`/`Count` `Vals` fields absent from a live `DataVal` read the same as an explicit `-1` (research/01 §6.3-6.4's "unlimited" marker, `grantBuff`'s own `rawDurationToRemaining`, `./buffLifecycle.js`) — a buff with no stated duration limit is not itself a signal this interpreter treats as unmodelable. */
@@ -121,7 +127,8 @@ function resolveFunc(func: Func.Func, svals: DataVal.DataVal): readonly SkillEff
     case Func.FuncType.ADD_STATE:
     case Func.FuncType.ADD_STATE_SHORT: {
       const target = allyTargetType(func.funcTargetType);
-      if (svals.Value === undefined) return [];
+      // Presence buffs (Invincible, Evade, debuff immunity) carry no `Value`; their effect is being there.
+      const amount = svals.Value ?? 0;
       const rawTurn = rawOrUnlimited(svals.Turn);
       const rawCount = rawOrUnlimited(svals.Count);
       if (target === null) {
@@ -130,7 +137,7 @@ function resolveFunc(func: Func.Func, svals: DataVal.DataVal): readonly SkillEff
         return func.buffs.map(
           (buff): EnemyBuffGrantEffect => ({
             kind: "grantEnemyBuff",
-            buff: buildActiveBuffInstance(buff, svals.Value as number, func, svals),
+            buff: buildActiveBuffInstance(buff, amount, func, svals),
             rawTurn,
             rawCount,
             rawChance: svals.Rate ?? 1000,
@@ -141,7 +148,7 @@ function resolveFunc(func: Func.Func, svals: DataVal.DataVal): readonly SkillEff
       return func.buffs.map(
         (buff): BuffGrantEffect => ({
           kind: "grantBuff",
-          buff: buildActiveBuffInstance(buff, svals.Value as number, func, svals),
+          buff: buildActiveBuffInstance(buff, amount, func, svals),
           rawTurn,
           rawCount,
           targetType: target,
@@ -262,6 +269,16 @@ function isConfirmedNoOp(func: Func.Func): boolean {
 }
 
 /**
+ * A buff that switches the caster's own NP card type (Space Ishtar's "Venus Driver": `tdTypeChange`
+ * on `commandTypeSelfTreasureDevice`). The player picks the type in-game; the optimizer instead
+ * fixes the NP form up front (`ServantBuild.selectedNpId`), so the switch is dropped and the
+ * selected form is kept for the whole battle.
+ */
+function keepsSelectedNpForm(func: Func.Func): boolean {
+  return func.funcTargetType === Func.FuncTargetType.COMMAND_TYPE_SELF_TREASURE_DEVICE && func.buffs.every((buff) => buff.type.startsWith("tdTypeChange"));
+}
+
+/**
  * Resolves every `Func` in `skill.functions` at `skillLevel` (1-indexed, `NiceSkill.svals`
  * convention, research/01 §6.3-6.4) into the `SkillEffect[]` a `useSkill`/
  * `useMysticCodeSkill` `Action` carries — see this module's own doc comment for full scope
@@ -271,7 +288,7 @@ export function resolveSkillEffects(skill: Pick<Skill.Skill, "functions">, skill
   const effects: SkillEffect[] = [];
   const unmodeled: Func.FuncType[] = [];
   for (const func of skill.functions) {
-    if (isConfirmedNoOp(func)) continue;
+    if (isConfirmedNoOp(func) || keepsSelectedNpForm(func)) continue;
     const svals = func.svals[skillLevel - 1];
     if (svals === undefined) {
       unmodeled.push(func.funcType);
@@ -339,7 +356,7 @@ export function resolveNpEffects(np: Pick<NoblePhantasm.NoblePhantasm, "function
   const effects: SkillEffect[] = [];
   const unmodeled: Func.FuncType[] = [];
   for (const func of np.functions) {
-    if (isConfirmedNoOp(func)) continue;
+    if (isConfirmedNoOp(func) || keepsSelectedNpForm(func)) continue;
     const svals = npFunctionSvalsAt(func, npLevel, stage);
     if (svals === undefined) {
       unmodeled.push(func.funcType);

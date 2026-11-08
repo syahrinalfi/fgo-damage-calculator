@@ -1,7 +1,7 @@
 import { Func, type Buff, type Skill, type Trait } from "@atlasacademy/api-connector";
 import { describe, expect, it } from "vitest";
 import type { BattleState, ServantInstance } from "./battleState.js";
-import { resolveSkillActivationOptions, type ServantSkillSource, type SkillSlotSource } from "./skillActivationResolver.js";
+import { resolveMysticCodeActivationOptions, resolveSkillActivationOptions, type ServantSkillSource, type SkillSlotSource } from "./skillActivationResolver.js";
 
 function trait(id: number): Trait.Trait {
   return { id, name: `trait${id}` } as unknown as Trait.Trait;
@@ -85,7 +85,7 @@ function state(servants: readonly ServantInstance[]): BattleState {
 
 const SELF_BUFF_FUNC = func({ funcType: Func.FuncType.ADD_STATE, funcTargetType: Func.FuncTargetType.SELF, buffs: [buff()], svals: [{ Value: 200, Turn: 3 }] });
 const PT_ONE_BUFF_FUNC = func({ funcType: Func.FuncType.ADD_STATE, funcTargetType: Func.FuncTargetType.PT_ONE, buffs: [buff()], svals: [{ Value: 200, Turn: 3 }] });
-const UNMODELED_FUNC = func({ funcType: Func.FuncType.ADD_STATE, funcTargetType: Func.FuncTargetType.PT_OTHER, buffs: [buff()], svals: [{ Value: 200, Turn: 3 }] });
+const UNMODELED_FUNC = func({ funcType: Func.FuncType.ADD_STATE, funcTargetType: Func.FuncTargetType.PT_RANDOM, buffs: [buff()], svals: [{ Value: 200, Turn: 3 }] });
 const ENEMY_DISPEL_FUNC = func({ funcType: Func.FuncType.SUB_STATE, funcTargetType: Func.FuncTargetType.ENEMY, functvals: [trait(300)] });
 
 describe("resolveSkillActivationOptions", () => {
@@ -145,5 +145,17 @@ describe("resolveSkillActivationOptions", () => {
     const sourceB: ServantSkillSource = { servantId: 2, skills: [skillSlot([SELF_BUFF_FUNC]), EMPTY_SLOT, EMPTY_SLOT] };
     const result = resolveSkillActivationOptions(state([servant(1), servant(2)]), [sourceA, sourceB]);
     expect(result.map((r) => (r.type === "useSkill" ? r.servantId : null))).toEqual([1, 2]);
+  });
+});
+
+describe("resolveMysticCodeActivationOptions", () => {
+  const selfFunc = func({ funcType: Func.FuncType.ADD_STATE, funcTargetType: Func.FuncTargetType.SELF, buffs: [buff()], svals: [{ Value: 200, Turn: 3 }] });
+  const mysticCode = { skills: [{ functions: [PT_ONE_BUFF_FUNC], coolDown: [10] }, { functions: [selfFunc], coolDown: [10] }, { functions: [PT_ONE_BUFF_FUNC], coolDown: [10] }], level: 1 };
+
+  it("offers the off-cooldown single-ally skills aimed at the given target, skipping self effects", () => {
+    const battle = { ...state([servant(1), servant(2), servant(3)]), mysticCodeSkillCooldowns: [0, 0, 4] as [number, number, number] };
+    expect(resolveMysticCodeActivationOptions(battle, mysticCode, 2)).toEqual([
+      { type: "useMysticCodeSkill", slot: 1, effects: expect.any(Array), cooldownTurns: 10, targetServantId: 2 },
+    ]);
   });
 });

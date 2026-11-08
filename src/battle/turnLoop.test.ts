@@ -1275,6 +1275,15 @@ describe("resolveAction — useSkill", () => {
     expect(result.servants.find((s) => s.servantId === 4)?.activeBuffs).toHaveLength(0);
   });
 
+  it("grants ptOther to the other front-line servants and ptOtherFull to every other servant, bench included", () => {
+    const servants = [servant({ servantId: 1, skillCooldowns: [0, 0, 0] }), servant({ servantId: 2 }), servant({ servantId: 3 }), servant({ servantId: 4, isFrontLine: false })];
+    const holders = (targetType: BuffGrantEffect["targetType"]) =>
+      resolveAction(state({ servants }), { type: "useSkill", servantId: 1, skillSlot: 1, effects: [buffGrantEffect({ targetType })], cooldownTurns: 5 }, CONSTANTS)
+        .servants.filter((s) => s.activeBuffs.length > 0).map((s) => s.servantId);
+    expect(holders("ptOther")).toEqual([2, 3]);
+    expect(holders("ptOtherFull")).toEqual([2, 3, 4]);
+  });
+
   it("grants a ptOne-targeted buff only to targetServantId", () => {
     const action: Action = {
       type: "useSkill",
@@ -1654,6 +1663,14 @@ describe("resolveAction — orderChange", () => {
     const action: Action = { type: "orderChange", outgoingServantId: 1, incomingServantId: 4 };
     const result = resolveAction(state({ servants: [servant({ servantId: 1 }), servant({ servantId: 2 }), servant({ servantId: 3 }), benched], cardBag: bag }), action, CONSTANTS);
     expect(result.cardBag.map((hc) => [hc.card, hc.servantId])).toEqual([[BUSTER, 4], [QUICK, 4], [ARTS, 2]]);
+  });
+
+  it("puts Mystic Code slot 3 on cooldown, so Order Change is used once per battle", () => {
+    const benched = servant({ servantId: 4, isFrontLine: false });
+    const swap: Action = { type: "orderChange", outgoingServantId: 1, incomingServantId: 4 };
+    const battle = state({ servants: [servant({ servantId: 1 }), servant({ servantId: 2 }), servant({ servantId: 3 }), benched] });
+    expect(resolveAction(battle, swap, CONSTANTS).mysticCodeSkillCooldowns).toEqual([0, 0, 13]);
+    expect(resolveAction(battle, { ...swap, cooldownTurns: 15 }, CONSTANTS).mysticCodeSkillCooldowns).toEqual([0, 0, 15]);
   });
 
   it("leaves other servants' hand-card slots and front-line status untouched", () => {
