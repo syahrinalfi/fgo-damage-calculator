@@ -60,6 +60,13 @@ export const BUFF_ACTION_KEYS = {
   RESIST_INSTANT_DEATH: "resistInstantdeath",
   NONRESIST_INSTANT_DEATH: "nonresistInstantdeath",
   GRANT_INSTANT_DEATH: "grantInstantdeath",
+  /**
+   * Debuff landing check (fgo-docs README "How MISS and GUARD are determined", research/00):
+   * `GRANT_STATE` (`upGrantstate`, "Debuff Chance Up") is the caster's side and
+   * `RESISTANCE_STATE` (`upTolerance`, "Debuff Resist Up") the target's side.
+   */
+  GRANT_STATE: "grantState",
+  RESISTANCE_STATE: "resistanceState",
 } as const;
 
 /**

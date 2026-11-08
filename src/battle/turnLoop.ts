@@ -8,21 +8,23 @@ import {
   FULL_TD_POINT,
 } from "../engine/constants.js";
 import { resolveGuts } from "../buffs/index.js";
+import { traitGatePasses } from "../buffs/buffEvaluation.js";
 import { advanceTurnBuffs, consumeBuffUse, grantBuff, removeBuffsByTrait } from "./buffLifecycle.js";
 import type { Action, AttackChainCard, CommandSealEffect } from "./action.js";
 import { ActionUnavailableError } from "./actionError.js";
-import { buildEnemyInstance, enemyToBattleUnit, servantToBattleUnit, type BattleState, type EnemyInstance, type ServantInstance } from "./battleState.js";
+import { buildEnemyInstance, enemyToBattleUnit, servantToBattleUnit, type BattleState, type EnemyInstance, type HandCard, type ServantInstance } from "./battleState.js";
 import { BUFF_ACTION_KEYS } from "./buffActionKeys.js";
 import { buildCombinedCardDeck } from "./cardDeck.js";
 import { drawCardBagHand } from "./cardBag.js";
 import { allocateCritStars, critChanceForStars, rollIsCrit } from "./critStarLottery.js";
 import { classifyChain, extraCardChainTypeFrom, isArtsChainFrom, isBusterChainFrom, isMightyChainFrom, isQuickChainFrom, type ChainClassification } from "./chainDetection.js";
 import type { BattleConstants } from "./gameConstants.js";
-import { resolveHit, type HitResolutionContext } from "./hitResolution.js";
+import { attackingCardTraits, resolveHit, type HitResolutionContext } from "./hitResolution.js";
 import { resolveUnitActionModifier } from "./modifiers.js";
 import { findEnemyByNpcId, resolveShiftTargets } from "../quest/types.js";
 import type {
   BuffGrantEffect,
+  EnemyBuffGrantEffect,
   DelayNpTurnEffect,
   ForceInstantDeathEffect,
   GainHpEffect,
@@ -430,13 +432,39 @@ function resolvePlayCard(
     chainLeadCardType,
   };
 
-  const hitState = applyHit(state, servant, enemy, constants, context, randomFn);
+  const hitState = applyAfterAttackTriggers(applyHit(state, servant, enemy, constants, context, randomFn), action.servantId, context, true, enemy.npcId, constants, randomFn);
   const handCards = hitState.handCards.filter((_, index) => index !== action.handCardIndex);
   const handCardStars = hitState.handCardStars.filter((_, index) => index !== action.handCardIndex);
   const nextState =
     action.chainPosition === 3 ? applyChainCompletionBonus(hitState, action.chainCards, classification) : hitState;
 
   return { ...nextState, handCards, handCardStars, consecutiveNpChainCount: 0 };
+}
+
+/**
+ * Runs the attacker's after-attack trigger buffs (`ActiveBuffInstance.afterAttack`) once its
+ * normal attack has resolved: each buff whose `ckSelfIndv` passes against the attacker's traits
+ * plus the card's applies its triggered skill's effects as the attacker. `isMainAttack` is false
+ * for the Extra Attack, which `…MainOnly` triggers skip.
+ */
+function applyAfterAttackTriggers(
+  state: BattleState,
+  servantId: number,
+  context: HitResolutionContext,
+  isMainAttack: boolean,
+  targetNpcId: number,
+  constants: BattleConstants,
+  randomFn: () => number,
+): BattleState {
+  const attacker = servantToBattleUnit(findServantAny(state, servantId));
+  const traits = new Set([...attacker.traits, ...attackingCardTraits(constants, context)]);
+  let next = state;
+  for (const buff of attacker.activeBuffs) {
+    const trigger = buff.afterAttack;
+    if (trigger === undefined || (trigger.mainOnly && !isMainAttack) || !traitGatePasses(buff.ckSelfIndv, traits)) continue;
+    for (const effect of trigger.effects) next = applySkillEffect(next, servantId, effect, undefined, targetNpcId, constants, randomFn);
+  }
+  return next;
 }
 
 /**
@@ -649,7 +677,7 @@ function resolvePlayExtraCard(
     isMightyChain: isMightyChainFrom(classification),
     extraCardChainType: extraCardChainTypeFrom(classification),
   };
-  const nextState = applyHit(state, servant, enemy, constants, context, randomFn);
+  const nextState = applyAfterAttackTriggers(applyHit(state, servant, enemy, constants, context, randomFn), action.servantId, context, false, enemy.npcId, constants, randomFn);
   return { ...nextState, consecutiveNpChainCount: 0 };
 }
 
@@ -1012,6 +1040,44 @@ function applyDelayNpTurnEffect(state: BattleState, effect: DelayNpTurnEffect, t
   return { ...state, enemies: state.enemies.map(delayed) };
 }
 
+/**
+ * Applies one `EnemyBuffGrantEffect` (`./skillEffect.js`): each targeted enemy keeps the buff only
+ * if the fgo-docs status-effect check passes (fail when `resistance + roll[0, 1000) > chance`).
+ * The applied buff's own traits (`vals`, e.g. `buffNegativeEffect`) are added to both sides of
+ * the trait check, since Debuff Chance Up/Resist Up gate on them (Morgan's "Item Construction
+ * EX" `upGrantstate` carries `ckSelfIndv: [buffNegativeEffect]`, "Magic Resistance A"
+ * `upTolerance` carries `ckOpIndv: [buffNegativeEffect]`).
+ */
+function applyEnemyBuffGrantEffect(
+  state: BattleState,
+  actingServantId: number | undefined,
+  effect: EnemyBuffGrantEffect,
+  targetNpcId: number | undefined,
+  constants: BattleConstants,
+  randomFn: () => number,
+): BattleState {
+  if (effect.targetType === "enemyOne" && targetNpcId === undefined) {
+    throw new RangeError("An enemyOne skill effect requires action.targetNpcId");
+  }
+  const caster = actingServantId === undefined ? undefined : servantToBattleUnit(findServantAny(state, actingServantId));
+  const buffTraits = [...(effect.buff.vals ?? [])];
+  const casterTraits = new Set([...(caster?.traits ?? []), ...buffTraits]);
+  const lands = (enemy: EnemyInstance): boolean => {
+    const enemyTraits = new Set([...enemyToBattleUnit(enemy).traits, ...buffTraits]);
+    const grant = caster === undefined ? 0 : resolveUnitActionModifier(constants.buff, BUFF_ACTION_KEYS.GRANT_STATE, caster.activeBuffs, { holderTraits: casterTraits, targetTraits: enemyTraits });
+    const resist = resolveUnitActionModifier(constants.buff, BUFF_ACTION_KEYS.RESISTANCE_STATE, enemy.activeBuffs, { holderTraits: enemyTraits, targetTraits: casterTraits });
+    const chance = effect.rawChance + grant * 1000;
+    return resist * 1000 + Math.floor(randomFn() * 1000) <= chance;
+  };
+  const isTarget = (enemy: EnemyInstance): boolean => enemy.currentHp > 0 && (effect.targetType === "enemyAll" || enemy.npcId === targetNpcId);
+  return {
+    ...state,
+    enemies: state.enemies.map((enemy) =>
+      isTarget(enemy) && lands(enemy) ? { ...enemy, activeBuffs: grantBuff(enemy.activeBuffs, effect.buff, effect.rawTurn, effect.rawCount) } : enemy,
+    ),
+  };
+}
+
 /** Dispatches one `SkillEffect` (`./skillEffect.js`) to the matching `apply*Effect` function, folding the result back into `state`. */
 function applySkillEffect(
   state: BattleState,
@@ -1025,6 +1091,8 @@ function applySkillEffect(
   switch (effect.kind) {
     case "grantBuff":
       return { ...state, servants: applyBuffGrantEffect(state.servants, actingServantId, effect, targetServantId) };
+    case "grantEnemyBuff":
+      return applyEnemyBuffGrantEffect(state, actingServantId, effect, targetNpcId, constants, randomFn);
     case "gainNp":
       return { ...state, servants: applyGainNpEffect(state.servants, actingServantId, effect, targetServantId) };
     case "gainHp":
@@ -1134,9 +1202,10 @@ function resolveUseMysticCodeSkill(
  * currently owned by `outgoingServantId` to `incomingServantId` — the card *type* in that
  * slot is untouched, only which servant it resolves against (research/07 §4: "the card
  * type shown in that slot for the rest of the turn is identical to what it was before the
- * swap, only *which servant* that slot's card belongs to changes"). The card bag itself is
- * never touched — Order Change is decoupled from the bag-depletion mechanic (research/03
- * §6.5/research/07 §4).
+ * swap, only *which servant* that slot's card belongs to changes"). The outgoing servant's
+ * undealt cards in the card bag change owner the same way, keeping their types (project
+ * owner's gameplay knowledge, research/07 §4); nothing is drawn, returned or reshuffled, so
+ * Order Change stays decoupled from the bag-depletion mechanic (research/03 §6.5).
  *
  * HP, NP gauge, buffs, and skill cooldowns need no adjustment here beyond the `isFrontLine`
  * flip itself: they already live on the `ServantInstance`, not the hand slot, and
@@ -1162,9 +1231,9 @@ function resolveOrderChange(state: BattleState, action: Extract<Action, { type: 
     }
     return s;
   });
-  const handCards = state.handCards.map((hc) => (hc.servantId === outgoing.servantId ? { ...hc, servantId: incoming.servantId } : hc));
+  const reown = (hc: HandCard): HandCard => (hc.servantId === outgoing.servantId ? { ...hc, servantId: incoming.servantId } : hc);
 
-  return { ...state, servants, handCards };
+  return { ...state, servants, handCards: state.handCards.map(reown), cardBag: state.cardBag.map(reown) };
 }
 
 /**

@@ -159,6 +159,13 @@ describe("resolveNpAttackOption", () => {
     expect(option?.targetHitContexts?.map((target) => target.hitContexts[0]?.starEnemyServerMod)).toEqual([0.9, 1.1]);
   });
 
+  it("carries the NP's own traits into every hit context for card-type buff checks", () => {
+    const damage = func({ funcType: Func.FuncType.DAMAGE_NP, funcTargetType: Func.FuncTargetType.ENEMY, svals: dataVals([{ Value: 3000 }]), svals2: dataVals([{ Value: 3000 }]), svals3: dataVals([{ Value: 3000 }]) });
+    const individuality = [{ id: 4002, name: "cardBuster" }, { id: 4007, name: "cardNP" }] as NoblePhantasm.NoblePhantasm["individuality"];
+    const option = resolveNpAttackOption(state([enemy(9001)]), 1, np({ npDistribution: [50, 50], functions: [damage], individuality }), 9001, () => 0.5);
+    expect(option?.hitContexts?.map((context) => context.cardTraits)).toEqual([[4002, 4007], [4002, 4007]]);
+  });
+
   it("marks damageNpPierce hit contexts to ignore ordinary defense", () => {
     const damage = func({
       funcType: Func.FuncType.DAMAGE_NP_PIERCE,

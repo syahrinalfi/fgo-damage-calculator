@@ -1,14 +1,41 @@
-import type { Skill } from "@atlasacademy/api-connector";
+import type { Servant as ServantModule, Skill } from "@atlasacademy/api-connector";
+import type { AppendSkillSlot, ServantBuild } from "../account/types.js";
 import { grantBuff } from "./buffLifecycle.js";
 import type { EquippedCraftEssence, ServantInstance } from "./battleState.js";
 import { resolveSkillEffects } from "./funcInterpreter.js";
 import type { SkillEffect, SkillTargetType } from "./skillEffect.js";
 import { NP_GAUGE_CAP_BY_LEVEL } from "./turnLoop.js";
 
+/** One always-on passive skill and the level its `svals` are read at. */
+export interface PassiveSkillAtLevel {
+  readonly skill: Pick<Skill.Skill, "functions">;
+  readonly level: number;
+}
+
 export interface CraftEssencePassiveSource {
   readonly servantId: number;
   readonly isFrontLine: boolean;
   readonly equippedCe?: EquippedCraftEssence;
+  /** The servant's own always-on passives (`servantPassiveSkills`), applied before its CE. */
+  readonly servantPassives?: readonly PassiveSkillAtLevel[];
+}
+
+/** Atlas numbers a servant's append skills from 100, in the in-game slot order. */
+const FIRST_APPEND_SKILL_NUM = 100;
+
+/**
+ * A servant's own always-on passives (research/00 "Passive/innate skills"): every
+ * `classPassive` entry, which mixes class skills (Magic Resistance) with the servant's own
+ * innate ones, plus each append skill the build has unlocked, at its level. `extraPassive` is
+ * left out: it holds event-only bonuses, not part of a general calculation.
+ */
+export function servantPassiveSkills(niceServant: ServantModule.Servant, build: Pick<ServantBuild, "appendSkillLevels">): readonly PassiveSkillAtLevel[] {
+  const classPassives = (niceServant.classPassive ?? []).map((skill) => ({ skill, level: 1 }));
+  const appends = (niceServant.appendPassive ?? []).flatMap((append) => {
+    const level = build.appendSkillLevels[(append.num - FIRST_APPEND_SKILL_NUM + 1) as AppendSkillSlot];
+    return level === undefined ? [] : [{ skill: append.skill, level }];
+  });
+  return [...classPassives, ...appends];
 }
 
 export interface CraftEssencePassiveResult {
@@ -90,7 +117,10 @@ function applyPassiveEffect(
   }
 }
 
-/** Applies supported pre-battle CE effects in party order before turn 1 is dealt. */
+/**
+ * Applies supported pre-battle passive effects in party order before turn 1 is dealt: each
+ * member's own passives, then its CE's. Both use the same self-only rules above.
+ */
 export function applyCraftEssencePassives(
   servants: readonly ServantInstance[],
   sources: readonly CraftEssencePassiveSource[],
@@ -98,9 +128,9 @@ export function applyCraftEssencePassives(
   let currentServants = servants;
   let startingStars = 0;
   for (const source of sources) {
-    if (source.equippedCe === undefined) continue;
-    for (const skill of selectCraftEssencePassiveSkills(source.equippedCe)) {
-      const { effects } = resolveSkillEffects(skill, 1);
+    const ceSkills = source.equippedCe === undefined ? [] : selectCraftEssencePassiveSkills(source.equippedCe).map((skill) => ({ skill, level: 1 }));
+    for (const { skill, level } of [...(source.servantPassives ?? []), ...ceSkills]) {
+      const { effects } = resolveSkillEffects(skill, level);
       for (const effect of effects) {
         const applied = applyPassiveEffect(currentServants, source, effect);
         currentServants = applied.servants;

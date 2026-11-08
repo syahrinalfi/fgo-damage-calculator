@@ -192,6 +192,22 @@ describe("buildInitialBattleState", () => {
     ]);
   });
 
+  it("applies the servant's own class passives and unlocked append skills before turn 1", () => {
+    const append = (num: number, functions: readonly Func.Func[]) => ({ num, skill: { functions: functions.map((f) => ({ ...f, svals: Array.from({ length: 10 }, (_, i) => ({ ...f.svals[0], Value: (f.svals[0]?.Value ?? 0) * (i + 1) })) })) } });
+    const kit = niceServant({
+      classPassive: [passiveSkill(0, 0, [selfBuff(Buff.BuffType.UP_COMMANDALL, 80)])],
+      extraPassive: [passiveSkill(0, 0, [selfBuff(Buff.BuffType.UP_ATK, 999)])],
+      appendPassive: [append(100, [selfBuff(Buff.BuffType.UP_CRITICALDAMAGE, 30)]), append(101, [gainNp(100)]), append(102, [selfBuff(Buff.BuffType.UP_DAMAGE, 30)])],
+    } as unknown as Partial<ServantModule.Servant>);
+    const withKit: PartyMemberSpec = { niceServant: kit, build: build({ servantId: 1, appendSkillLevels: { 2: 10, 3: 1 } }), isFrontLine: true };
+    const state = buildInitialBattleState([withKit, member(2, true), member(3, true)], [wave()], { costBudget: 100 });
+    const servant = state.servants[0];
+
+    expect(servant?.activeBuffs.map((b) => [b.type, b.amount])).toEqual([[Buff.BuffType.UP_COMMANDALL, 80], [Buff.BuffType.UP_DAMAGE, 30]]);
+    expect(servant?.currentNpGauge).toBe(1000);
+    expect(state.servants[1]?.activeBuffs).toEqual([]);
+  });
+
   it("allocates a front-line CE star bomb to the opening hand but ignores a benched holder", () => {
     const starCe = craftEssence({ skills: [passiveSkill(0, 1, [gainStars(10)])] });
     const state = buildInitialBattleState([

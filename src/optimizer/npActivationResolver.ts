@@ -59,6 +59,7 @@ function buildResolvedAttack(
   if (!NP_COLORS.has(cardType)) return undefined;
   const offensiveNPRate = np.npGain.np[servant.npLevel - 1];
   if (offensiveNPRate === undefined) return undefined;
+  const cardTraits = (np.individuality ?? []).map((trait) => trait.id);
 
   if (damageEntry === undefined) {
     const context = {
@@ -72,6 +73,7 @@ function buildResolvedAttack(
       npEnemyServerMod: targetEnemy.serverMod.tdRate / 1000,
       baseStarRate: servant.starGen,
       starEnemyServerMod: targetEnemy.serverMod.starRate / 1000,
+      cardTraits,
     } as const;
     return {
       context,
@@ -169,6 +171,7 @@ function buildResolvedAttack(
       npEnemyServerMod: enemy.serverMod.tdRate / 1000,
       baseStarRate: servant.starGen,
       starEnemyServerMod: enemy.serverMod.starRate / 1000,
+      cardTraits,
       ...(ignoreDefense ? { ignoreDefense: true } : {}),
     }));
   const targetHitContexts = targets.map((enemy) => ({ targetNpcId: enemy.npcId, hitContexts: contextsFor(enemy) }));

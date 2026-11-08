@@ -15,6 +15,23 @@ export function traitGatePasses(required: readonly { id: number }[], have: Reado
 }
 
 /**
+ * `1 + Σ buffRate / 1000` over the holder's `buffRate` buffs whose `upBuffRateTraits` the
+ * buff carries in its own `vals` — e.g. Oberon's +100% "Boost NP Strength Up" doubles every
+ * NP damage up (`buffNpDamageUp`) on its holder. No primary source states the combining
+ * rule; additive stacking is this project's provisional reading of `buffRate`'s per-mille
+ * `Value`.
+ */
+function buffRateMultiplier(instance: ActiveBuffInstance, instances: readonly ActiveBuffInstance[]): number {
+  let rate = 0;
+  for (const booster of instances) {
+    const traits = booster.upBuffRateTraits;
+    if (traits === undefined || traits.size === 0) continue;
+    if ([...traits].every((trait) => instance.vals?.has(trait) === true)) rate += booster.amount;
+  }
+  return 1 + rate / 1000;
+}
+
+/**
  * Resolves one `BuffAction`'s net modifier from a unit's currently-active buffs, using the
  * live `BuffConstant` for that action (research/05-buffs-and-debuffs.md §2) — the official
  * type-to-action registry (`NiceBuffList.ActionList.json`, exposed via
@@ -53,9 +70,9 @@ export function resolveBuffActionModifier(
     if (!gatesPass) continue;
 
     if (constant.plusTypes.includes(instance.type)) {
-      plusTotal += instance.amount;
+      plusTotal += instance.amount * buffRateMultiplier(instance, instances);
     } else if (constant.minusTypes.includes(instance.type)) {
-      minusTotal += instance.amount;
+      minusTotal += instance.amount * buffRateMultiplier(instance, instances);
     }
   }
 

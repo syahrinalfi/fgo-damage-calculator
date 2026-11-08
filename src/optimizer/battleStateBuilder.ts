@@ -4,7 +4,7 @@ import { allocateCritStars } from "../battle/critStarLottery.js";
 import { drawCardBagHand } from "../battle/cardBag.js";
 import { buildCombinedCardDeck } from "../battle/cardDeck.js";
 import { buildEnemyInstance, buildServantInstance, type BattleState, type EquippedCraftEssence, type HandCard } from "../battle/battleState.js";
-import { applyCraftEssencePassives } from "../battle/craftEssencePassive.js";
+import { applyCraftEssencePassives, servantPassiveSkills } from "../battle/craftEssencePassive.js";
 import type { Wave } from "../quest/types.js";
 
 /**
@@ -79,6 +79,7 @@ export function buildInitialBattleState(party: readonly PartyMemberSpec[], waves
   const { servants, startingStars } = applyCraftEssencePassives(baseServants, party.map((member) => ({
     servantId: partyMemberBattleId(member),
     isFrontLine: member.isFrontLine,
+    servantPassives: servantPassiveSkills(member.niceServant, member.build),
     ...(member.equippedCe === undefined ? {} : { equippedCe: member.equippedCe }),
   })));
   const costSpent = party.reduce(

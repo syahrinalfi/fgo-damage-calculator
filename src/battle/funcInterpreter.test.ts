@@ -73,6 +73,34 @@ describe("resolveSkillEffects — addState/addStateShort", () => {
     expect(result.effects.map((e) => (e.kind === "grantBuff" ? e.buff.type : null))).toEqual(["upAtk", "upDefence"]);
   });
 
+  it("resolves an enemy-targeted addStateShort into an EnemyBuffGrantEffect carrying its Rate", () => {
+    const f = func({
+      funcType: Func.FuncType.ADD_STATE_SHORT,
+      funcTargetType: Func.FuncTargetType.ENEMY_ALL,
+      buffs: [buff({ type: "downDefence" as Buff.BuffType })],
+      svals: [{ Value: 300, Turn: 3, Rate: 1000 }],
+    });
+    expect(resolveSkillEffects(skill([f]), 1)).toEqual({
+      effects: [{ kind: "grantEnemyBuff", buff: { type: "downDefence", amount: 300, ckSelfIndv: [], ckOpIndv: [], buffGroup: 0, vals: new Set([100]) }, rawTurn: 3, rawCount: -1, rawChance: 1000, targetType: "enemyAll" }],
+      unmodeled: [],
+    });
+  });
+
+  it("resolves an after-attack trigger buff's attached skill at its Value2 level", () => {
+    const triggered = { functions: [func({ funcType: Func.FuncType.GAIN_NP, funcTargetType: Func.FuncTargetType.SELF, svals: [{ Value: 500 }, { Value: 1000 }] })] };
+    const f = {
+      ...func({
+        funcType: Func.FuncType.ADD_STATE_SHORT,
+        funcTargetType: Func.FuncTargetType.PT_ONE,
+        buffs: [buff({ type: "commandattackAfterFunctionMainOnly" as Buff.BuffType })],
+        svals: [{ Value: 966533, Value2: 2, Turn: 3 }],
+      }),
+      triggerSkills: { 966533: triggered },
+    } as unknown as Func.Func;
+    const [effect] = resolveSkillEffects(skill([f]), 1).effects;
+    expect(effect?.kind === "grantBuff" ? effect.buff.afterAttack : undefined).toEqual({ mainOnly: true, effects: [{ kind: "gainNp", rawAmount: 1000, targetType: "self" }] });
+  });
+
   it("flags an unsupported funcTargetType (ptOther) as unmodeled rather than guessing", () => {
     const f = func({
       funcType: Func.FuncType.ADD_STATE,
@@ -158,11 +186,9 @@ describe("resolveSkillEffects — lossNp (ally-real, enemy-no-op)", () => {
     expect(resolveSkillEffects(skill([f]), 1).effects).toEqual([{ kind: "lossNp", rawAmount: 1000, targetType: "self" }]);
   });
 
-  it("flags an enemy-targeted lossNp as unmodeled — confirmed a no-op, not a gap", () => {
+  it("drops an enemy-targeted lossNp without flagging it — confirmed a no-op, not a gap", () => {
     const f = func({ funcType: Func.FuncType.LOSS_NP, funcTargetType: Func.FuncTargetType.ENEMY, svals: [{ Value: 2000 }] });
-    const result = resolveSkillEffects(skill([f]), 1);
-    expect(result.effects).toEqual([]);
-    expect(result.unmodeled).toEqual([Func.FuncType.LOSS_NP]);
+    expect(resolveSkillEffects(skill([f]), 1)).toEqual({ effects: [], unmodeled: [] });
   });
 });
 
@@ -172,11 +198,22 @@ describe("resolveSkillEffects — delayNpturn (enemy-real, self-no-op)", () => {
     expect(resolveSkillEffects(skill([f]), 1).effects).toEqual([{ kind: "delayNpTurn", rawTurns: 1, targetType: "enemyAll" }]);
   });
 
-  it("flags a self-targeted delayNpturn as unmodeled — confirmed a no-op, not a gap", () => {
+  it("drops a self-targeted delayNpturn without flagging it — confirmed a no-op, not a gap", () => {
     const f = func({ funcType: Func.FuncType.DELAY_NPTURN, funcTargetType: Func.FuncTargetType.SELF, svals: [{ Value: 1 }] });
-    const result = resolveSkillEffects(skill([f]), 1);
-    expect(result.effects).toEqual([]);
-    expect(result.unmodeled).toEqual([Func.FuncType.DELAY_NPTURN]);
+    expect(resolveSkillEffects(skill([f]), 1)).toEqual({ effects: [], unmodeled: [] });
+  });
+});
+
+describe("resolveSkillEffects — hastenNpturn (ally-no-op, enemy-unmodeled)", () => {
+  it("drops an ally-targeted hastenNpturn so the rest of the skill stays usable", () => {
+    const gain = func({ funcType: Func.FuncType.GAIN_NP, funcTargetType: Func.FuncTargetType.PT_ONE, svals: [{ Value: 5000 }] });
+    const hasten = func({ funcType: Func.FuncType.HASTEN_NPTURN, funcTargetType: Func.FuncTargetType.PT_ONE, svals: [{ Value: 1 }] });
+    expect(resolveSkillEffects(skill([gain, hasten]), 1)).toEqual({ effects: [{ kind: "gainNp", rawAmount: 5000, targetType: "ptOne" }], unmodeled: [] });
+  });
+
+  it("still flags an enemy-targeted hastenNpturn, which charges the enemy's NP", () => {
+    const f = func({ funcType: Func.FuncType.HASTEN_NPTURN, funcTargetType: Func.FuncTargetType.ENEMY, svals: [{ Value: 1 }] });
+    expect(resolveSkillEffects(skill([f]), 1).unmodeled).toEqual([Func.FuncType.HASTEN_NPTURN]);
   });
 });
 

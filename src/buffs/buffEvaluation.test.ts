@@ -55,6 +55,14 @@ describe("resolveBuffActionModifier", () => {
     expect(resolveBuffActionModifier(makeCriticalPointConstant(), [], NO_TRAITS)).toBe(0);
   });
 
+  it("scales only the buffs a buffRate booster names in its upBuffRateTraits (Oberon's Boost NP Strength Up)", () => {
+    const npDamageUp = makeInstance({ amount: 300, vals: new Set([3004, 3030]) });
+    const plainAtkUp = makeInstance({ amount: 200, vals: new Set([3004]) });
+    const booster = makeInstance({ type: "buffRate" as Buff.BuffType, amount: 1000, upBuffRateTraits: new Set([3030]) });
+    expect(resolveBuffActionModifier(makeAtkConstant(), [npDamageUp, booster], NO_TRAITS)).toBeCloseTo(0.6, 10);
+    expect(resolveBuffActionModifier(makeAtkConstant(), [plainAtkUp, booster], NO_TRAITS)).toBeCloseTo(0.2, 10);
+  });
+
   it("converts a single plus-type buff's raw per-mille amount to a decimal fraction", () => {
     const instances = [makeInstance({ amount: 200 })];
     expect(resolveBuffActionModifier(makeAtkConstant(), instances, NO_TRAITS)).toBeCloseTo(0.2, 10);

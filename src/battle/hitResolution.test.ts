@@ -167,6 +167,33 @@ describe("resolveHit", () => {
     expect(result.defeated).toBe(false);
   });
 
+  describe("card-type buffs gate on the attacking card's traits", () => {
+    const busterCardConstants: BattleConstants = {
+      ...CONSTANTS,
+      card: { "2": { 1: { ...CARD_CONSTANTS["2" as keyof typeof CARD_CONSTANTS]![1]!, individuality: [{ id: 4002, name: "cardBuster" }, { id: 4008, name: "faceCard" }] } } } as unknown as CardDetail.CardConstantMap,
+    };
+    const gated = (traitId: number) =>
+      makeUnit({ activeBuffs: [makeBuff({ type: "upCommandatk" as ActiveBuffInstance["type"], amount: 500, ckSelfIndv: [{ id: traitId, name: "card" } as ActiveBuffInstance["ckSelfIndv"][number]] })] });
+    const damage = (attacker: BattleUnit, context: HitResolutionContext) => resolveHit(attacker, makeUnit(), 100_000, 100_000, busterCardConstants, context).damage;
+    const npContext: HitResolutionContext = { ...CONTEXT, isNP: true };
+
+    it("applies a Buster-gated card buff to a Buster face card, and not an Arts-gated one", () => {
+      const plain = damage(makeUnit(), CONTEXT);
+      expect(damage(gated(4002), CONTEXT)).toBeGreaterThan(plain);
+      expect(damage(gated(4001), CONTEXT)).toBe(plain);
+    });
+
+    it("gives an NP its own traits: card-type buffs apply, face-card-only buffs do not", () => {
+      const plain = damage(makeUnit(), npContext);
+      const explicit: HitResolutionContext = { ...npContext, cardTraits: [4002, 4007] };
+      expect(damage(gated(4002), explicit)).toBeGreaterThan(plain);
+      expect(damage(gated(4008), explicit)).toBe(plain);
+      expect(damage(gated(4002), npContext)).toBeGreaterThan(plain);
+      expect(damage(gated(4007), npContext)).toBeGreaterThan(plain);
+      expect(damage(gated(4008), npContext)).toBe(plain);
+    });
+  });
+
   it("suppresses only damage during optimizer counterfactual replay", () => {
     const result = resolveHit(makeUnit(), makeUnit(), 100_000, 100_000, CONSTANTS, { ...CONTEXT, suppressDamage: true });
     expect(result.damage).toBe(0);

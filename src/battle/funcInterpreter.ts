@@ -1,10 +1,12 @@
 import { Func, type Buff, type DataVal, type NoblePhantasm, type Skill } from "@atlasacademy/api-connector";
 import type { NpLevel } from "../account/types.js";
 import type { ActiveBuffInstance } from "../buffs/types.js";
+import { AFTER_ATTACK_TRIGGER_BUFF_TYPES, type FuncWithTriggerSkills } from "../data/triggerSkills.js";
 import type { OverchargeStage } from "../engine/overcharge.js";
 import type {
   BuffGrantEffect,
   BuffRemovalTargetType,
+  EnemyBuffGrantEffect,
   DelayNpTurnEffect,
   ForceInstantDeathEffect,
   GainHpEffect,
@@ -90,7 +92,9 @@ function rawOrUnlimited(value: number | undefined): number {
 }
 
 /** Builds the `ActiveBuffInstance` a `BuffGrantEffect` carries from a live `Buff.Buff` (`funcs[].buffs[]`) plus its already-level-resolved magnitude. */
-function buildActiveBuffInstance(buff: Buff.Buff, amount: number): ActiveBuffInstance {
+function buildActiveBuffInstance(buff: Buff.Buff, amount: number, func?: Func.Func, svals?: DataVal.DataVal): ActiveBuffInstance {
+  const boosted = buff.script?.UpBuffRateBuffIndiv;
+  const afterAttack = func === undefined || svals === undefined ? undefined : afterAttackTrigger(buff, func, svals);
   return {
     type: buff.type,
     amount,
@@ -98,7 +102,17 @@ function buildActiveBuffInstance(buff: Buff.Buff, amount: number): ActiveBuffIns
     ckOpIndv: buff.ckOpIndv,
     buffGroup: buff.buffGroup,
     vals: new Set(buff.vals.map((trait) => trait.id)),
+    ...(boosted === undefined || boosted.length === 0 ? {} : { upBuffRateTraits: new Set(boosted.map((trait) => trait.id)) }),
+    ...(afterAttack === undefined ? {} : { afterAttack }),
   };
+}
+
+/** Resolves an after-attack trigger buff's attached skill (`attachTriggerSkills`) at its `Value2` level. */
+function afterAttackTrigger(buff: Buff.Buff, func: Func.Func, svals: DataVal.DataVal): ActiveBuffInstance["afterAttack"] {
+  if (!AFTER_ATTACK_TRIGGER_BUFF_TYPES.has(buff.type) || svals.Value === undefined) return undefined;
+  const skill = (func as FuncWithTriggerSkills).triggerSkills?.[svals.Value];
+  if (skill === undefined) return undefined;
+  return { mainOnly: buff.type === "commandattackAfterFunctionMainOnly", effects: resolveSkillEffects(skill, svals.Value2 ?? 1).effects };
 }
 
 /** Resolves one already-level-selected `svals` entry's `funcType` into 0 or more `SkillEffect`s — 0 when the `funcType`/`funcTargetType` combination isn't modeled. */
@@ -107,13 +121,27 @@ function resolveFunc(func: Func.Func, svals: DataVal.DataVal): readonly SkillEff
     case Func.FuncType.ADD_STATE:
     case Func.FuncType.ADD_STATE_SHORT: {
       const target = allyTargetType(func.funcTargetType);
-      if (target === null || svals.Value === undefined) return [];
+      if (svals.Value === undefined) return [];
       const rawTurn = rawOrUnlimited(svals.Turn);
       const rawCount = rawOrUnlimited(svals.Count);
+      if (target === null) {
+        const enemyTarget = enemyTargetType(func.funcTargetType);
+        if (enemyTarget === null) return [];
+        return func.buffs.map(
+          (buff): EnemyBuffGrantEffect => ({
+            kind: "grantEnemyBuff",
+            buff: buildActiveBuffInstance(buff, svals.Value as number, func, svals),
+            rawTurn,
+            rawCount,
+            rawChance: svals.Rate ?? 1000,
+            targetType: enemyTarget,
+          }),
+        );
+      }
       return func.buffs.map(
         (buff): BuffGrantEffect => ({
           kind: "grantBuff",
-          buff: buildActiveBuffInstance(buff, svals.Value as number),
+          buff: buildActiveBuffInstance(buff, svals.Value as number, func, svals),
           rawTurn,
           rawCount,
           targetType: target,
@@ -217,6 +245,23 @@ function resolveFunc(func: Func.Func, svals: DataVal.DataVal): readonly SkillEff
 }
 
 /**
+ * Functions the project owner's in-game tests showed do nothing measurable (research/09 §7,
+ * research/08 §5): `hastenNpturn` and `delayNpturn` on a servant, and `lossNp` on an enemy.
+ * They are dropped rather than flagged, so they never block the rest of their skill or NP.
+ */
+function isConfirmedNoOp(func: Func.Func): boolean {
+  switch (func.funcType) {
+    case Func.FuncType.HASTEN_NPTURN:
+    case Func.FuncType.DELAY_NPTURN:
+      return allyTargetType(func.funcTargetType) !== null;
+    case Func.FuncType.LOSS_NP:
+      return enemyTargetType(func.funcTargetType) !== null;
+    default:
+      return false;
+  }
+}
+
+/**
  * Resolves every `Func` in `skill.functions` at `skillLevel` (1-indexed, `NiceSkill.svals`
  * convention, research/01 §6.3-6.4) into the `SkillEffect[]` a `useSkill`/
  * `useMysticCodeSkill` `Action` carries — see this module's own doc comment for full scope
@@ -226,6 +271,7 @@ export function resolveSkillEffects(skill: Pick<Skill.Skill, "functions">, skill
   const effects: SkillEffect[] = [];
   const unmodeled: Func.FuncType[] = [];
   for (const func of skill.functions) {
+    if (isConfirmedNoOp(func)) continue;
     const svals = func.svals[skillLevel - 1];
     if (svals === undefined) {
       unmodeled.push(func.funcType);
@@ -293,6 +339,7 @@ export function resolveNpEffects(np: Pick<NoblePhantasm.NoblePhantasm, "function
   const effects: SkillEffect[] = [];
   const unmodeled: Func.FuncType[] = [];
   for (const func of np.functions) {
+    if (isConfirmedNoOp(func)) continue;
     const svals = npFunctionSvalsAt(func, npLevel, stage);
     if (svals === undefined) {
       unmodeled.push(func.funcType);

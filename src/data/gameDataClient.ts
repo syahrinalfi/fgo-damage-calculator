@@ -16,6 +16,7 @@ import {
   type Servant as ServantModule,
 } from "@atlasacademy/api-connector";
 import type { SupportedRegion } from "./region.js";
+import { attachTriggerSkills } from "./triggerSkills.js";
 
 // EnemyMaster isn't re-exported from the package root and the package's `exports`
 // field blocks deep subpath imports, so its type is derived from the connector method.
@@ -40,8 +41,11 @@ export class GameDataClient {
     this.connector = new ApiConnector({ region });
   }
 
-  servant(id: number): Promise<NiceServant> {
-    return this.connector.servant(id, false);
+  /** The servant, with the skills its after-attack trigger buffs run attached (`attachTriggerSkills`). */
+  async servant(id: number): Promise<NiceServant> {
+    const servant = await this.connector.servant(id, false);
+    await attachTriggerSkills(servant, (skillId) => this.connector.skill(skillId));
+    return servant;
   }
 
   servantWithLore(id: number): Promise<NiceServantWithLore> {

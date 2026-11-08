@@ -51,6 +51,31 @@ export interface HitResolutionContext {
   ignoreDefense?: boolean;
   /** Optimizer-only counterfactual replay switch: preserve gauge/star/effect sequencing while forcing this hit's damage to zero. */
   suppressDamage?: boolean;
+  /**
+   * The attacking card's own traits (`NiceTd.individuality` for an NP, e.g. `cardBuster` +
+   * `cardNP`). Omitted for a normal card, whose traits come from `NiceCard.json`'s
+   * `individuality` for its type and position (e.g. `cardBuster` + `faceCard`).
+   */
+  cardTraits?: readonly number[];
+}
+
+/** `nice_trait.json`: 4007 `cardNP`, 4008 `faceCard`. */
+const NP_CARD_TRAIT = 4007;
+const FACE_CARD_TRAIT = 4008;
+
+/**
+ * The traits a buff's `ckSelfIndv` sees while this card attacks: the attacker's own traits
+ * plus the card's. Card-type buffs gate on the card's trait (Koyanskaya of Light's "NFF
+ * Special" `upCommandall` carries `ckSelfIndv: [4002 cardBuster]`), and fgo-docs
+ * `deeper/battle/buff.md`/`damage.md` count `upCommandall` into `cardMod` for a matching card.
+ * An NP without explicit `cardTraits` takes its type's `NiceCard.json` traits with `faceCard`
+ * swapped for `cardNP`.
+ */
+export function attackingCardTraits(constants: BattleConstants, context: Pick<HitResolutionContext, "card" | "isNP" | "cardTraits">): readonly number[] {
+  if (context.cardTraits !== undefined) return context.cardTraits;
+  const entry = constants.card[context.card.type]?.[context.card.position] ?? constants.card[context.card.type]?.[1];
+  const traits = (entry?.individuality ?? []).map((trait) => trait.id);
+  return context.isNP ? [...traits.filter((trait) => trait !== FACE_CARD_TRAIT), NP_CARD_TRAIT] : traits;
 }
 
 /**
@@ -85,13 +110,14 @@ export interface HitResolutionResult {
 }
 
 export function resolveHit(
-  attacker: BattleUnit,
+  unitAttacker: BattleUnit,
   defender: BattleUnit,
   defenderHp: number,
   defenderMaxHp: number,
   constants: BattleConstants,
   context: HitResolutionContext,
 ): HitResolutionResult {
+  const attacker: BattleUnit = { ...unitAttacker, traits: new Set([...unitAttacker.traits, ...attackingCardTraits(constants, context)]) };
   const traitContext = { holderTraits: attacker.traits, targetTraits: defender.traits };
   const defenderContext = { holderTraits: defender.traits, targetTraits: attacker.traits };
 

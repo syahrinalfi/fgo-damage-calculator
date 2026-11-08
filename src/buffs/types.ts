@@ -1,4 +1,5 @@
 import type { Buff, Trait as TraitModule } from "@atlasacademy/api-connector";
+import type { SkillEffect } from "../battle/skillEffect.js";
 
 type Trait = TraitModule.Trait;
 
@@ -45,6 +46,18 @@ export interface ActiveBuffInstance {
    * Guts) don't all need to start supplying it.
    */
   vals?: ReadonlySet<number>;
+  /**
+   * For a `buffRate` buff only: the classification traits (`script.UpBuffRateBuffIndiv`) of
+   * the buffs it strengthens. Oberon's "Ending of Dreams" grants `buffRate: 1000` over
+   * `3030 buffNpDamageUp`, Atlas: "Temporarily increase the effect of NP Strength Up".
+   */
+  upBuffRateTraits?: ReadonlySet<number>;
+  /**
+   * For an after-attack trigger buff (`commandattackAfterFunction`, `…MainOnly`): the triggered
+   * skill's effects, applied for the holder after each of its normal attacks that passes
+   * `ckSelfIndv` (with the card's traits). `mainOnly` excludes the Extra Attack.
+   */
+  afterAttack?: { readonly mainOnly: boolean; readonly effects: readonly SkillEffect[] };
 }
 
 /**

@@ -415,9 +415,28 @@ export interface DelayNpTurnEffect {
   readonly targetType: "enemyOne" | "enemyAll";
 }
 
+/**
+ * A buff or debuff placed on enemies by an `addState`/`addStateShort` function (e.g. Morgan's
+ * "Charisma of Yearning" DEF down, her NP's curse). It lands only if the fgo-docs status-effect
+ * check passes: with `chance = rawChance + caster's grantState` and
+ * `num2 = target's resistanceState + roll[0, 1000)`, the effect fails when `num2 > chance`
+ * (fgo-docs README "How MISS and GUARD are determined"). Buff types this engine does not
+ * evaluate (a curse's turn-end damage, for one) are carried but have no effect yet.
+ */
+export interface EnemyBuffGrantEffect {
+  readonly kind: "grantEnemyBuff";
+  readonly buff: ActiveBuffInstance;
+  readonly rawTurn: number;
+  readonly rawCount: number;
+  /** Raw `Rate` (per-mille status-effect chance); `1000` when the function carries none. */
+  readonly rawChance: number;
+  readonly targetType: "enemyOne" | "enemyAll";
+}
+
 /** One already-resolved skill/NP effect a `useSkill`/`useMysticCodeSkill` `Action` can carry (research/09 §7's still-limited scope). */
 export type SkillEffect =
   | BuffGrantEffect
+  | EnemyBuffGrantEffect
   | RemoveBuffEffect
   | GainNpEffect
   | GainHpEffect

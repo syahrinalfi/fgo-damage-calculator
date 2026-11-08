@@ -10,6 +10,7 @@ import type { TrackedBuff } from "./buffLifecycle.js";
 import type { BattleConstants } from "./gameConstants.js";
 import type {
   BuffGrantEffect,
+  EnemyBuffGrantEffect,
   DelayNpTurnEffect,
   ForceInstantDeathEffect,
   GainHpEffect,
@@ -94,6 +95,8 @@ const BUFF_CONSTANTS = {
   [BUFF_ACTION_KEYS.RESIST_INSTANT_DEATH]: percentAction("upResistInstantdeath", "__unused_downResistInstantdeath"),
   [BUFF_ACTION_KEYS.NONRESIST_INSTANT_DEATH]: percentAction("upNonresistInstantdeath", "__unused_downNonresistInstantdeath"),
   [BUFF_ACTION_KEYS.GRANT_INSTANT_DEATH]: percentAction("upGrantInstantdeath", "downGrantInstantdeath"),
+  [BUFF_ACTION_KEYS.GRANT_STATE]: percentAction("upGrantstate", "downGrantstate", 1000),
+  [BUFF_ACTION_KEYS.RESISTANCE_STATE]: percentAction("upTolerance", "downTolerance", 1000),
 } as unknown as Buff.BuffConstantMap;
 
 const CARD_CONSTANTS = {
@@ -1122,6 +1125,32 @@ describe("resolveAction — playExtraCard", () => {
   });
 });
 
+describe("resolveAction — after-attack trigger buffs", () => {
+  const busterTrait = { id: 4002, name: "cardBuster" } as ActiveBuffInstance["ckSelfIndv"][number];
+  const busterCardConstants: BattleConstants = {
+    ...CONSTANTS,
+    card: { ...CARD_CONSTANTS, "2": { 1: { ...CARD_CONSTANTS["2" as Card]![1]!, individuality: [busterTrait] } } } as unknown as CardDetail.CardConstantMap,
+  };
+  const trigger = (mainOnly: boolean, ckSelfIndv: ActiveBuffInstance["ckSelfIndv"]) =>
+    trackedBuff({ type: "commandattackAfterFunctionMainOnly" as Buff.BuffType, amount: 966533, ckSelfIndv, afterAttack: { mainOnly, effects: [{ kind: "gainNp", rawAmount: 1000, targetType: "self" }] } });
+  const chain: readonly AttackChainCard[] = [{ type: BUSTER, servantId: 1 }, { type: ARTS, servantId: 1 }, { type: QUICK, servantId: 1 }];
+  const holder = (buffs: readonly TrackedBuff[]) => state({ servants: [servant({ servantId: 1, activeBuffs: buffs }), servant({ servantId: 2 }), servant({ servantId: 3 })], handCards: handCardsFor([BUSTER, ARTS, QUICK, BUSTER, ARTS], 1), enemies: [enemy({ currentHp: 5_000_000, maxHp: 5_000_000 })] });
+  const gauge = (s: BattleState) => s.servants.find((x) => x.servantId === 1)?.currentNpGauge ?? 0;
+  const play = (index: number, type: Card, position: 1 | 2 | 3): Action => ({ type: "playCard", servantId: 1, handCardIndex: index, targetNpcId: 9001, context: { ...CARD_CONTEXT, card: { type, position } }, chainCards: chain, chainPosition: position });
+  const gained = (buffs: readonly TrackedBuff[], action: Action) => gauge(resolveAction(holder(buffs), action, busterCardConstants, () => 0.5)) - gauge(resolveAction(holder([]), action, busterCardConstants, () => 0.5));
+
+  it("runs the triggered skill for the holder after a normal attack whose card passes ckSelfIndv", () => {
+    expect(gained([trigger(true, [busterTrait])], play(0, BUSTER, 1))).toBe(1000);
+    expect(gained([trigger(true, [busterTrait])], play(1, ARTS, 2))).toBe(0);
+  });
+
+  it("skips the Extra Attack for a MainOnly trigger but not for a plain one", () => {
+    const extra: Action = { type: "playExtraCard", servantId: 1, targetNpcId: 9001, context: { ...CARD_CONTEXT, card: { type: EXTRA, position: 1 } }, chainCards: [{ type: BUSTER, servantId: 1, isNp: true }, { type: ARTS, servantId: 1 }, { type: QUICK, servantId: 1 }] };
+    expect(gained([trigger(true, [])], extra)).toBe(0);
+    expect(gained([trigger(false, [])], extra)).toBe(1000);
+  });
+});
+
 describe("resolveAction — multi-enemy automatic targeting", () => {
   const chain = [{ type: BUSTER, servantId: 1 }, { type: ARTS, servantId: 1 }, { type: QUICK, servantId: 2 }];
   const multiEnemyState = () =>
@@ -1506,6 +1535,54 @@ describe("resolveAction — useSkill", () => {
   });
 });
 
+describe("resolveAction — debuffs granted to enemies", () => {
+  const negative = { id: 3005, name: "buffNegativeEffect" } as ActiveBuffInstance["ckSelfIndv"][number];
+  const defDown = (overrides: Partial<EnemyBuffGrantEffect> = {}): EnemyBuffGrantEffect => ({
+    kind: "grantEnemyBuff",
+    buff: { type: "downDefence" as Buff.BuffType, amount: 300, ckSelfIndv: [], ckOpIndv: [], buffGroup: 0, vals: new Set([3005]) },
+    rawTurn: 3,
+    rawCount: -1,
+    rawChance: 1000,
+    targetType: "enemyAll",
+    ...overrides,
+  });
+  const twoEnemies = () => state({ servants: [servant({ servantId: 1, skillCooldowns: [0, 0, 0] }), servant({ servantId: 2 }), servant({ servantId: 3 })], enemies: [enemy({ npcId: 9001 }), enemy({ npcId: 9002 })] });
+  const useSkill = (effect: EnemyBuffGrantEffect, targetNpcId?: number): Action => ({ type: "useSkill", servantId: 1, skillSlot: 1, effects: [effect], cooldownTurns: 5, ...(targetNpcId === undefined ? {} : { targetNpcId }) });
+
+  it("lands a 100% debuff on every enemy when resistance plus the roll stays within the chance", () => {
+    const result = resolveAction(twoEnemies(), useSkill(defDown()), CONSTANTS, () => 0.999);
+    expect(result.enemies.map((e) => e.activeBuffs.map((b) => [b.type, b.amount, b.turnsRemaining]))).toEqual([[["downDefence", 300, 3]], [["downDefence", 300, 3]]]);
+  });
+
+  it("lands an enemyOne debuff only on targetNpcId", () => {
+    const result = resolveAction(twoEnemies(), useSkill(defDown({ targetType: "enemyOne" }), 9002), CONSTANTS, () => 0);
+    expect(result.enemies.map((e) => e.activeBuffs.length)).toEqual([0, 1]);
+  });
+
+  it("fails when the target's resistance plus the roll exceeds the chance (fgo-docs MISS/GUARD check)", () => {
+    const resistant = trackedBuff({ type: "upTolerance" as Buff.BuffType, amount: 200, ckOpIndv: [negative] });
+    const base = twoEnemies();
+    const withResist = { ...base, enemies: [enemy({ npcId: 9001, activeBuffs: [resistant] }), enemy({ npcId: 9002 })] };
+    const result = resolveAction(withResist, useSkill(defDown()), CONSTANTS, () => 0.85);
+    expect(result.enemies.map((e) => e.activeBuffs.filter((b) => b.type === "downDefence").length)).toEqual([0, 1]);
+  });
+
+  it("adds the caster's matching Debuff Chance Up to the chance", () => {
+    const chanceUp = trackedBuff({ type: "upGrantstate" as Buff.BuffType, amount: 200, ckSelfIndv: [negative], turnsRemaining: -1 });
+    const base = twoEnemies();
+    const caster = { ...base, servants: base.servants.map((s) => (s.servantId === 1 ? { ...s, activeBuffs: [chanceUp] } : s)) };
+    expect(resolveAction(base, useSkill(defDown({ rawChance: 600 })), CONSTANTS, () => 0.7).enemies[0]?.activeBuffs).toHaveLength(0);
+    expect(resolveAction(caster, useSkill(defDown({ rawChance: 600 })), CONSTANTS, () => 0.7).enemies[0]?.activeBuffs).toHaveLength(1);
+  });
+
+  it("feeds the landed DEF down into later damage against that enemy", () => {
+    const card: Action = { type: "playCard", servantId: 1, handCardIndex: 0, targetNpcId: 9001, context: CARD_CONTEXT, chainCards: [{ type: BUSTER, servantId: 1 }, { type: ARTS, servantId: 2 }, { type: QUICK, servantId: 3 }], chainPosition: 1 };
+    const plain = resolveAction(twoEnemies(), card, CONSTANTS, () => 0.5);
+    const debuffed = resolveAction(resolveAction(twoEnemies(), useSkill(defDown()), CONSTANTS, () => 0.5), card, CONSTANTS, () => 0.5);
+    expect(50000 - (debuffed.enemies[0]?.currentHp ?? 0)).toBeGreaterThan(50000 - (plain.enemies[0]?.currentHp ?? 0));
+  });
+});
+
 describe("resolveAction — useMysticCodeSkill", () => {
   it("grants a ptAll-targeted buff to every front-line servant and sets the MC's cooldown slot", () => {
     const action: Action = { type: "useMysticCodeSkill", slot: 3, effects: [buffGrantEffect({ targetType: "ptAll" })], cooldownTurns: 10 };
@@ -1569,6 +1646,14 @@ describe("resolveAction — orderChange", () => {
     expect(result.servants.find((s) => s.servantId === 4)?.isFrontLine).toBe(true);
     expect(result.handCards.map((hc) => hc.servantId)).toEqual([4, 4, 4, 4, 4]);
     expect(result.handCards.map((hc) => hc.card)).toEqual(FIVE_CARD_HAND.map((hc) => hc.card));
+  });
+
+  it("gives the outgoing servant's undealt card-bag cards to the incoming servant, keeping their types (project owner's gameplay knowledge)", () => {
+    const benched = servant({ servantId: 4, isFrontLine: false });
+    const bag = [...handCardsFor([BUSTER, QUICK], 1), ...handCardsFor([ARTS], 2)];
+    const action: Action = { type: "orderChange", outgoingServantId: 1, incomingServantId: 4 };
+    const result = resolveAction(state({ servants: [servant({ servantId: 1 }), servant({ servantId: 2 }), servant({ servantId: 3 }), benched], cardBag: bag }), action, CONSTANTS);
+    expect(result.cardBag.map((hc) => [hc.card, hc.servantId])).toEqual([[BUSTER, 4], [QUICK, 4], [ARTS, 2]]);
   });
 
   it("leaves other servants' hand-card slots and front-line status untouched", () => {

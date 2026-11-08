@@ -25,6 +25,7 @@ export interface ResolveSkillActivationOptionsConfig {
 }
 
 function needsUnresolvableEnemyTarget(effect: SkillEffect): boolean {
+  if (effect.kind === "grantEnemyBuff") return effect.targetType === "enemyOne";
   return effect.kind === "removeBuff" && (effect.targetType === "enemyOne" || effect.targetType === "enemyAll");
 }
 
